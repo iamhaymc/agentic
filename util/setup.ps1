@@ -85,10 +85,57 @@ function Install-Clang {
     }
 }
 
+function Update-NvmEnv {
+    # nvm-windows sets NVM_HOME/NVM_SYMLINK and puts %NVM_HOME%;%NVM_SYMLINK% on Path; load them into this process
+    foreach ($name in @("NVM_HOME", "NVM_SYMLINK")) {
+        $value = [Environment]::GetEnvironmentVariable($name, "User")
+        if (-not $value) { $value = [Environment]::GetEnvironmentVariable($name, "Machine") }
+        if ($value) { Set-Item "env:$name" $value }
+    }
+    Update-ProcessPath
+    if ($env:NVM_HOME)    { $env:Path = "$env:NVM_HOME;$env:Path" }
+    if ($env:NVM_SYMLINK) { $env:Path = "$env:NVM_SYMLINK;$env:Path" }
+}
+
+function Install-Node {
+    if (Test-CommandExists "nvm") {
+        Write-Host "nvm already installed: $(nvm version)"
+    }
+    else {
+        Write-Host "nvm not found; installing nvm-windows..."
+        if (Test-CommandExists "winget") {
+            winget install --id CoreyButler.NVMforWindows -e --accept-source-agreements --accept-package-agreements
+        }
+        elseif (Test-CommandExists "choco") {
+            choco install nvm -y
+        }
+        else {
+            throw "no winget or Chocolatey found; install nvm-windows manually (https://github.com/coreybutler/nvm-windows)."
+        }
+        Update-NvmEnv
+        if (-not (Test-CommandExists "nvm")) {
+            throw "nvm was installed but is not on PATH. Open a new terminal and run setup.ps1 again."
+        }
+    }
+
+    Write-Host "Installing Node.js LTS via nvm..."
+    nvm install lts
+    if ($LASTEXITCODE -ne 0) { throw "nvm install lts failed." }
+    # nvm use switches a symlink and may prompt for elevation (UAC)
+    nvm use lts
+    if ($LASTEXITCODE -ne 0) { throw "nvm use lts failed." }
+    Update-NvmEnv
+    if (-not (Test-CommandExists "node")) {
+        throw "Node.js was installed but is not on PATH. Open a new terminal and run setup.ps1 again."
+    }
+    Write-Host "Node.js ready: $(node --version)"
+}
+
 try {
     Install-Uv
     Install-Python
     Install-Clang
+    Install-Node
     Write-Host "Setup complete."
     Write-Host "Activate the environment with: .venv\Scripts\Activate.ps1"
 }

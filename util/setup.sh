@@ -78,9 +78,45 @@ install_clang() {
     fi
 }
 
+NVM_VERSION="v0.40.3"
+
+load_nvm() {
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    [ -s "$NVM_DIR/nvm.sh" ] || return 1
+    # nvm.sh is not safe under `set -eu`
+    set +eu
+    . "$NVM_DIR/nvm.sh"
+    set -eu
+}
+
+install_node() {
+    if load_nvm; then
+        echo "nvm already installed: $(nvm --version)"
+    else
+        echo "nvm not found; installing $NVM_VERSION..."
+        curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | bash
+        if ! load_nvm; then
+            echo "ERROR: nvm was installed but could not be loaded. Open a new terminal and run setup.sh again." >&2
+            exit 1
+        fi
+    fi
+
+    echo "Installing Node.js LTS via nvm..."
+    set +eu
+    nvm install --lts && nvm alias default 'lts/*' && nvm use default
+    local status=$?
+    set -eu
+    if [ "$status" -ne 0 ] || ! command_exists node; then
+        echo "ERROR: Node.js LTS install via nvm failed." >&2
+        exit 1
+    fi
+    echo "Node.js ready: $(node --version)"
+}
+
 install_uv
 install_python
 install_clang
+install_node
 
 echo "Setup complete."
 echo "Activate the environment with: source .venv/bin/activate"
