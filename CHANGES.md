@@ -180,6 +180,29 @@ its matching output are available. Everything published is passed through
 credentials the model was handed, and a transcript is worth keeping only if one
 tool that returns a megabyte cannot flood it.
 
+A silent model is an event too. Ollama sends a tool call whole once the model has
+finished writing it, so a long `write_text_file` was minutes in which the page
+showed nothing at all and a reader could not tell a model at work from a dead
+one. `model.wait` is published every `stream_heartbeat` seconds of that silence
+with the seconds waited and the stall budget. It is published from
+`next_event()` rather than from a timer of its own because that is the one place
+that already knows when the stream last spoke, it is suppressed while a tool call
+is open because that silence belongs to the tool and the tool reports itself
+(`tool.progress`), and it observes the stall guard without feeding it: a
+heartbeat that restarted the budget would make the guard unable to fire.
+
+The model can also ask. `ask_user` puts a question with optional choices to the
+person and waits; the engine only brokers it (`question.start`, `answer()`,
+`question.end`) and a front end shows and answers it, which keeps the core free
+of any terminal or browser. Whether the tool exists is a mode decision
+(`ask_enabled`, settled like `read_outside`): the repl and the web server have
+someone at the other end, an embedded engine and a one shot run do not, and a
+question nobody can answer would hold the run forever. Waiting on
+a person is not a stall, so an asking call reports itself alive (`ToolCall.asking`)
+and the run waits as long as the person does; cancelling the run is what ends an
+unanswered question, and that is published as `question.end` with `ok: false` so
+every client closes the card.
+
 ## Prompt
 
 The consumer owns the template; the harness only renders it. Jinja runs
@@ -289,10 +312,18 @@ The leader and the specialists are shaped differently, so they are bounded
 differently. A specialist completion is one request and a timeout around the
 whole call is right. The leader's stream is a long lived read whose total
 duration is legitimately unbounded — that is what an agentic loop is — so the
-same setting becomes a stall guard on the wait for the *next* event instead.
+leader has a stall guard on the wait for the *next* event instead, with a
+budget of its own (`stream_timeout`) because a silent stream is not always a dead
+one: a provider may hold a tool call back until the model has finished writing
+it.
 That guard has to know about tools: the SDK runs a tool call inside the stream,
 so the budget is extended by `shell_timeout` while a call is outstanding, or a
-slow shell command would be indistinguishable from a dead provider. And a stream
+slow shell command would be indistinguishable from a dead provider. A fixed
+extension is still a guess about how long a tool may take, so the budget runs
+from the latest sign of life instead: a running command heartbeats
+(`tool.progress`, every `shell_heartbeat` seconds) and each beat restarts the
+budget, which leaves `shell_timeout` as the one bound on a live command and the
+stall guard as the bound on a silent one. And a stream
 is only restarted while it has produced nothing: once a block or a tool call
 exists, a retry would replay work the consumer has already seen and re-run tools
 that already had effects, so the failure is reported instead. That rule, not the
@@ -354,6 +385,14 @@ before they become malformed data URLs, and shell commands run with an explicit
 timeout and are killed when they exceed it, because an unbounded subprocess is
 an unbounded hang of the whole event loop.
 
+`read_outside` relaxes the boundary for reads only. A terminal user is on their
+own machine and expects the agent to look at files they point it at, so the repl
+allows it by default; a web client is whoever reaches the port, so the web
+server does not. The default is a mode decision rather than a dataclass default,
+hence `None` plus `AgentConfig.with_defaults()`, which settles only what the
+config layers left unset. Writes stay confined in every mode, and the shell tool
+was never confined, so `shell_enabled: false` remains the only hard boundary.
+
 Every tool is wrapped by one shared guard that turns workspace and repository
 errors into text the model can read and act on. A tool that raises ends the run;
 a tool that returns `Error: …` lets the model correct itself. The guard preserves
@@ -414,6 +453,17 @@ The default renderer is only a subscriber. It prints a banner from
 colour when the stream is not a TTY. Consumers subclass it, replace it or drop it
 and subscribe their own; nothing in the loop knows it exists.
 
+Streamed text is written once per 50 ms frame rather than once per token. Ctrl-C
+in the repl inside a VS Code task kept the answer streaming for seconds before
+`(cancelled)` appeared, while the harness itself stopped within 2 ms in every
+setup that could be measured (plain console, ConPTY, `uv run`, a real `input()`
+reader, the real SDK stream). Windows 10's ConPTY forwards each write as its own
+terminal update — 202 tokens/s became 202 redraws/s — so the editor's terminal
+most likely fell behind and only saw the keypress once it caught up (VS Code
+itself could not be driven to confirm it). Framing cuts that to
+about 20 updates/s at the same text throughput; a non-TTY stream still writes at
+once, which keeps the tests synchronous.
+
 ## Commands
 
 Slash commands power everything the discussion itself does not: session
@@ -452,6 +502,14 @@ Two details are worth keeping:
 The banner is printed once instead of once per run (`ConsoleRenderer.banners`),
 which is the only change the repl needed in the console renderer.
 
+A question of the model is read on the same reader thread as every other line,
+at an `answer>` prompt, with the options numbered so a choice is one keystroke.
+A second reader would race the first for the terminal, so the thread stays
+single and the rule stays "one line per request, in order"; a question that a
+Ctrl-C closes gives its pending line to the next prompt instead of swallowing
+it. Questions are answered one at a time, because two prompts printed together
+cannot be told apart at a terminal.
+
 ## Web layer
 
 REST is read-only state (`/api/health`, `/api/config`, `/api/commands`,
@@ -469,6 +527,18 @@ Attachments are uploaded as data URLs on the prompt message, size-capped, stored
 under `attachments/` in the session workspace with sanitized names, and appended
 to the prompt as a file listing — so an attachment is just a workspace file the
 model can open with the tools it already has.
+
+A reload used to start a new session, so the conversation was gone even though
+the server still held it. The page now keeps the id of its session in
+`localStorage` and says `hello` with it; the server needed no change, since
+`sessions.ensure()` already returns a live session and opens a new one for an
+expired or unknown id. The decision of whether a session is still active stays
+with the one party that knows, and the client only notes when it was not.
+
+An answer travels as its own message, scoped to the session of the connection
+that sends it, because a question id is visible to every client on the channel
+and must not be answerable from another session. A connection that never said
+`hello` has no session and answers nothing.
 
 ## Web client
 
@@ -544,6 +614,20 @@ block on every delta is quadratic and, at the rate a provider emits tokens,
 spends more time rendering than painting. `append` marks the body dirty and the
 paint happens on the next animation frame, so the cost is one render per frame
 regardless of token rate and the text still appears as it arrives.
+
+**A question is the tool call it came from.** `ask_user` already opens a tool
+block, and a separate card under it would say the same thing twice, so
+`question.start` carries the id of that block and the client turns it into the
+card: the question, a pill per choice, and afterwards the pressed pill or the
+answer in words. The composer answers while a question is open rather than a
+second text box appearing inside the card, which keeps one place to type on a
+phone; the choices stay the one-tap path. The mark says whose turn it is: the
+ring stops and the halo ripples outward while the run waits on the reader.
+
+**Silence gets a clock.** The server reports a silent model every few seconds;
+the timer beside the mark starts from what it reports and ticks on its own in
+between, so it reads as a clock rather than jumping five seconds at a time, and
+any sign of the stream stops it.
 
 ## End to end capture
 
@@ -636,6 +720,17 @@ harness.
 28. Env files: `.env` loaded with `python-dotenv` into the environment before
     the config file (`find_env_file`, `read_env_file`, `load_env_file`,
     `Engine(env_file=...)`), existing variables winning.
+29. Liveness, resume and questions, in three scopes:
+    - [x] Minimum scope: `model.wait` from `next_event()` (`stream_heartbeat`),
+      the session id kept by the page and resumed through `hello`, and
+      `ask_user` with `question.start`/`question.end`, `Engine.answer()` and
+      the web `answer` message.
+    - [x] Complete scope: the timer and the mark states (`data-waiting`,
+      `data-asking`), the question card with choices and answers in words,
+      the repl's `answer>` prompt with numbered choices, session scoped
+      answers, cancellation that closes questions everywhere, and the tests.
+    - [ ] Extended scope: in [`TODO.md`](TODO.md) (pending questions in
+      `hello`, structured answers, `ask_timeout`, stdin for one shot runs).
 
 ## Fixes worth remembering
 
@@ -648,6 +743,9 @@ harness.
 - **Unbounded shells.** A command with no timeout hung the loop with no way back.
   Shell execution has an explicit timeout, kills the process on expiry and
   reports it as text.
+- **Shell timeouts that did not kill.** A leader running a nested agent (`python app\agentic.py --input …`) failed with `leader model timeout: the model sent nothing for 240s` although `shell_timeout` was 120s. On Windows the shell is `cmd.exe /c …`, `process.kill()` reached only `cmd.exe`, and the grandchild `python.exe` kept stdout/stderr open; on Python 3.12 `Process.wait()` waits for those pipes, so the tool hung until the child ended and the stall guard (`request_timeout` + `shell_timeout`) fired first, leaving the child orphaned. A 2s timeout on an 8s sleep returned after 8.1s. `Workspace.kill_tree()` now kills the whole tree (`taskkill /F /T`, or `os.killpg` on the new session the shell starts in), on cancellation as well as on timeout, and the wait for the pipes afterwards is bounded by `KILL_GRACE`; stdin is closed so a prompt cannot hang a command either. The same fix streams output and heartbeats as `tool.progress`, so a slow command is visibly alive in the console (dots) and the web UI (tailed output, seconds in the label, a pulse of the mark). The default `shell_timeout` went from 120s to 900s, since a timeout that now really kills would otherwise cut a nested agent run short.
+- **Stall guard shorter than a tool call.** A leader on Ollama asked for a 1,000 line story said `I'll write a 1000-line … story …` and then failed with `leader model timeout: the model sent nothing for 120s`. Ollama's OpenAI endpoint parses tool calls out of the model's output and sends each one whole once it is complete, so while the model writes the `content` argument of a `write_file` the stream carries no bytes at all: a direct probe of `satgeze/qwenpaw-9b-heretic-1m` (Ollama 0.34.0) was 17.2s of silence for a 3.4K char call, then one chunk with every argument; a story of 1,000 lines is ~15× that. `request_timeout` (120s) was both the stall guard and the read timeout of the shared `httpx` client, so either would have cut it. The stall guard is now its own setting, `stream_timeout` (default 600s, `RetryPolicy.stall`), and `ModelPool.client()` gives the transport a read timeout of the longer of the two while connect, write and pool stay at `request_timeout`; a specialist call is still bounded by `request_timeout` as a whole.
+- **Unbounded shell output.** A recursive listing (`dir /s /b` over a project with a `.venv`, ~350K chars) went whole into the leader's context and the next model turn stalled past the 120s guard, so the web UI sat frozen on the tool block. `Workspace.run_shell()` now clips output to `shell_output_limit` characters (default 32,000, `0` disables), keeping the head and tail around an `[... N chars omitted ...]` marker, and logs each clip to stderr.
 - **Path handling duplicated per tool.** Each tool resolved and validated its own
   paths, so escapes depended on which tool was called. `Workspace.resolve()` is
   now the only path gate.

@@ -7,6 +7,8 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 ---
 
+- [ ] Create tool in a single file python file for creating markdown files. It should be in apps/tools and should be able to be plugged into the agent/engine.
+
 - [ ] **Authentication and authorization on the web layer.** The server binds
       without any identity: whoever reaches the port gets a session with shell,
       file and git tools and the configured credentials. It needs a token or
@@ -39,6 +41,8 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       `app/agentic_ui.js` are still unasserted, which is most of the surface a user
       actually touches. Add server tests over a real websocket, and assertions
       (plus cancellation, errors and reconnection) to the browser pass.
+
+- [ ] **Questions, extended scope.** `ask_user` covers one question with optional choices, answered by the session that asked. Still open: replay a pending question in `hello` so a second tab (or a reconnect that does not cancel the run) shows the card, multi-select and structured answers (a number, a path, a yes/no), an optional `ask_timeout` after which the tool answers for the user, and a way for a one shot `--input` run to answer on stdin.
 
 - [ ] **Repl ergonomics.** The terminal reads plain lines: there is no history
       across restarts, no editing beyond what the platform's `input()` gives,

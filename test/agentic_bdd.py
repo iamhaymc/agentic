@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import io
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
+import time
 import types
 import unittest
 import unittest.mock
@@ -40,6 +43,36 @@ def setUpModule():
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def python_command(code: str) -> str:
+    """A shell command running `code` with this interpreter, on any platform."""
+    return f'"{sys.executable}" -c "{code}"'
+
+
+def sleeper_command(pid_file: Path, seconds: int = 20) -> str:
+    """A command whose interpreter writes its pid and then outlives any test."""
+    return python_command(
+        "import os, pathlib, time; "
+        f"pathlib.Path('{pid_file.as_posix()}').write_text(str(os.getpid())); "
+        f"time.sleep({seconds})"
+    )
+
+
+def process_alive(pid: int) -> bool:
+    if os.name == "nt":
+        listed = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        return f" {pid} " in listed
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 class ConfigTest(unittest.TestCase):
@@ -78,6 +111,16 @@ class ConfigTest(unittest.TestCase):
     def test_mask_secret(self):
         self.assertEqual(A.mask_secret("short"), "*****")
         self.assertEqual(A.mask_secret(""), "")
+
+    def test_defaults_fill_only_unset_fields(self):
+        self.assertIsNone(A.AgentConfig().read_outside)
+        self.assertTrue(A.AgentConfig().with_defaults(read_outside=True).read_outside)
+        config = A.AgentConfig(read_outside=False).with_defaults(read_outside=True)
+        self.assertFalse(config.read_outside)
+
+    def test_env_layer_sets_read_outside(self):
+        config = A.AgentConfig().with_env({"AGENTIC_READ_OUTSIDE": "false"})
+        self.assertIs(config.read_outside, False)
 
 
 class ModelSpecTest(unittest.TestCase):
@@ -231,10 +274,15 @@ class RetryPolicyTest(unittest.TestCase):
 
     def test_from_config_reads_the_settings(self):
         config = A.AgentConfig(
-            request_timeout=5.0, retry_attempts=4, retry_backoff=2.0, retry_jitter=2.0
+            request_timeout=5.0,
+            stream_timeout=50.0,
+            retry_attempts=4,
+            retry_backoff=2.0,
+            retry_jitter=2.0,
         )
         policy = A.RetryPolicy.from_config(config)
         self.assertEqual(policy.timeout, 5.0)
+        self.assertEqual(policy.stall, 50.0)
         self.assertEqual(policy.attempts, 4)
         self.assertEqual(policy.backoff, 2.0)
         self.assertEqual(policy.jitter, 1.0)
@@ -491,10 +539,20 @@ class ModelPoolResilienceTest(unittest.TestCase):
         self.assertEqual(pool.usage.requests, 1)
 
     def test_the_sdk_is_not_allowed_to_retry_behind_the_policy(self):
-        pool = A.ModelPool(A.RetryPolicy(timeout=42.0))
+        pool = A.ModelPool(A.RetryPolicy(timeout=42.0, stall=0.0))
         client = pool.client(A.ModelSpec("leader", "m", "http://url", "k"))
         self.assertEqual(client.max_retries, 0)
-        self.assertEqual(client.timeout, 42.0)
+        self.assertEqual(client.timeout.connect, 42.0)
+        self.assertEqual(client.timeout.read, 42.0)
+
+    def test_the_transport_outlasts_a_silent_stream(self):
+        # A provider that holds a tool call back until it is complete (Ollama)
+        # sends nothing while the model writes it; the socket must not give up
+        # before the stall guard does.
+        pool = A.ModelPool(A.RetryPolicy(timeout=42.0, stall=600.0))
+        client = pool.client(A.ModelSpec("leader", "m", "http://url", "k"))
+        self.assertEqual(client.timeout.connect, 42.0)
+        self.assertEqual(client.timeout.read, 600.0)
 
     def test_an_endpoint_without_a_key_gets_a_placeholder(self):
         environ = dict(os.environ)
@@ -513,7 +571,7 @@ class ModelPoolResilienceTest(unittest.TestCase):
             self.assertEqual(client.api_key, "from-env")
 
     def test_an_unbounded_policy_leaves_the_transport_alone(self):
-        pool = A.ModelPool(A.RetryPolicy(timeout=0))
+        pool = A.ModelPool(A.RetryPolicy(timeout=0, stall=0))
         client = pool.client(A.ModelSpec("leader", "m", "http://url", "k"))
         self.assertEqual(client.max_retries, 0)
         self.assertNotEqual(client.timeout, 0)
@@ -682,20 +740,221 @@ class StallGuardTest(unittest.TestCase):
         self.assertEqual(run(self.engine.next_event(events, 0.0)), "first")
 
     def test_a_running_tool_extends_the_budget(self):
-        policy = A.RetryPolicy(timeout=30.0)
+        policy = A.RetryPolicy(timeout=5.0, stall=30.0)
         config = A.AgentConfig(shell_timeout=120)
         self.assertEqual(self.engine.stall_timeout(policy, config, False), 30.0)
         self.assertEqual(self.engine.stall_timeout(policy, config, True), 150.0)
 
+    def test_the_budget_is_the_stream_timeout_not_the_request_timeout(self):
+        policy = A.RetryPolicy.from_config(
+            A.AgentConfig(request_timeout=120.0, stream_timeout=600.0)
+        )
+        self.assertEqual(self.engine.stall_timeout(policy, A.AgentConfig()), 600.0)
+
     def test_an_unbounded_policy_never_stalls(self):
-        policy = A.RetryPolicy(timeout=0.0)
+        policy = A.RetryPolicy(stall=0.0)
         self.assertEqual(self.engine.stall_timeout(policy, A.AgentConfig(), True), 0.0)
+
+    def test_a_sign_of_life_restarts_the_budget(self):
+        events = self.stream_of("late", delay=0.3).__aiter__()
+        self.assertEqual(run(self.engine.next_event(events, 0.1, time.time)), "late")
+
+    def test_a_stale_sign_of_life_does_not(self):
+        events = self.stream_of("late", delay=5.0).__aiter__()
+        with self.assertRaises(A.ModelError):
+            run(self.engine.next_event(events, 0.05, lambda: time.time() - 60))
 
     def test_an_abandoned_stream_is_cancelled(self):
         calls = []
         A.Engine.cancel_stream(types.SimpleNamespace(cancel=lambda: calls.append(1)))
         A.Engine.cancel_stream(types.SimpleNamespace())
         self.assertEqual(calls, [1])
+
+    def test_a_silent_model_reports_how_long_it_has_waited(self):
+        waits: list[float] = []
+
+        async def on_wait(elapsed):
+            waits.append(elapsed)
+
+        events = self.stream_of("late", delay=0.25).__aiter__()
+        event = run(self.engine.next_event(events, 0.0, heartbeat=0.05, on_wait=on_wait))
+        self.assertEqual(event, "late")
+        self.assertGreaterEqual(len(waits), 2)
+        self.assertEqual(waits, sorted(waits))
+        self.assertGreater(waits[0], 0.0)
+
+    def test_no_heartbeat_without_a_period(self):
+        waits: list[float] = []
+
+        async def on_wait(elapsed):
+            waits.append(elapsed)
+
+        events = self.stream_of("late", delay=0.1).__aiter__()
+        run(self.engine.next_event(events, 1.0, heartbeat=0.0, on_wait=on_wait))
+        self.assertEqual(waits, [])
+
+    def test_a_heartbeat_does_not_extend_the_budget(self):
+        async def on_wait(_elapsed):
+            return None
+
+        events = self.stream_of("late", delay=5.0).__aiter__()
+        with self.assertRaises(A.ModelError):
+            run(self.engine.next_event(events, 0.1, heartbeat=0.02, on_wait=on_wait))
+
+    def test_a_failing_wait_listener_never_breaks_the_stream(self):
+        async def on_wait(_elapsed):
+            raise RuntimeError("listener is broken")
+
+        events = self.stream_of("late", delay=0.1).__aiter__()
+        with contextlib.redirect_stderr(io.StringIO()):
+            event = run(self.engine.next_event(events, 1.0, heartbeat=0.02, on_wait=on_wait))
+        self.assertEqual(event, "late")
+
+
+class ToolProgressTest(unittest.TestCase):
+    """A running tool reports what it does, and that it is still doing it."""
+
+    def setUp(self):
+        self.engine = A.Engine(env=False)
+        self.addCleanup(self.engine.close)
+        self.result = A.RunResult(session_id="s1")
+        self.call = A.ToolCall(id="b1", name="run_shell_command", call_id="c1")
+        self.result.tools.append(self.call)
+        self.seen: list[A.Event] = []
+        self.engine.events.on(A.EventType.TOOL_PROGRESS, self.seen.append)
+
+    def test_progress_is_published_on_the_block_of_the_call(self):
+        run(self.engine.tool_reporter(self.result)("c1", "hello"))
+        event = self.seen[0]
+        self.assertEqual(event.session_id, "s1")
+        self.assertEqual(
+            (event.data["id"], event.data["name"], event.data["call_id"], event.data["text"]),
+            ("b1", "run_shell_command", "c1", "hello"),
+        )
+        self.assertIn("duration", event.data)
+
+    def test_progress_is_a_sign_of_life(self):
+        self.call.seen_at -= 100
+        before = self.engine.alive_at(self.result)
+        run(self.engine.tool_reporter(self.result)("c1", ""))
+        self.assertGreater(self.engine.alive_at(self.result), before)
+
+    def test_finished_calls_are_not_alive(self):
+        self.call.finish("done")
+        self.assertEqual(self.engine.alive_at(self.result), 0.0)
+
+    def test_progress_without_an_open_call_is_dropped(self):
+        self.call.finish("done")
+        run(self.engine.tool_reporter(self.result)("c9", "late"))
+        self.assertEqual(self.seen, [])
+
+    def test_the_workspace_beats_at_the_rate_of_the_config(self):
+        with tempfile.TemporaryDirectory() as root:
+            ws = self.engine.build_workspace(root, A.AgentConfig(shell_heartbeat=2.5))
+            self.assertEqual(ws.shell_heartbeat, 2.5)
+
+    def test_the_workspace_reads_outside_only_when_the_config_says(self):
+        with tempfile.TemporaryDirectory() as root:
+            ws = self.engine.build_workspace(root, A.AgentConfig())
+            self.assertFalse(ws.read_outside)
+            ws = self.engine.build_workspace(root, A.AgentConfig(read_outside=True))
+            self.assertTrue(ws.read_outside)
+
+
+class QuestionTest(unittest.TestCase):
+    """The model asks the person a question and waits for the answer."""
+
+    def setUp(self):
+        self.engine = A.Engine(env=False)
+        self.addCleanup(self.engine.close)
+        self.config = A.AgentConfig(ask_enabled=True)
+        self.result = A.RunResult(session_id="s1")
+        self.call = A.ToolCall(id="b1", name="ask_user", call_id="c1")
+        self.result.tools.append(self.call)
+        self.seen: list[A.Event] = []
+        self.engine.events.on(A.EventType.QUESTION_START, self.seen.append)
+        self.engine.events.on(A.EventType.QUESTION_END, self.seen.append)
+
+    async def opened(self, task):
+        """Wait until `task` has published its question, and return its id."""
+        while not self.engine.questions:
+            self.assertFalse(task.done())
+            await asyncio.sleep(0.005)
+        return next(iter(self.engine.questions))
+
+    def test_only_a_mode_that_can_answer_gets_an_asker(self):
+        self.assertIsNone(self.engine.build_asker(A.AgentConfig(), self.result))
+        self.assertIsNotNone(self.engine.build_asker(self.config, self.result))
+
+    def test_an_answer_resolves_the_question(self):
+        async def drive():
+            asker = self.engine.build_asker(self.config, self.result)
+            task = asyncio.create_task(asker("c1", "Which one?", ["red", "blue"]))
+            question = await self.opened(task)
+            self.assertTrue(self.call.asking)
+            self.assertTrue(self.engine.answer(question, "blue", session_id="s1"))
+            return question, await task
+
+        question, answer = run(drive())
+        self.assertEqual((question, answer), ("b1", "blue"))
+        self.assertEqual(self.engine.questions, {})
+        self.assertFalse(self.call.asking)
+        start, end = self.seen
+        self.assertEqual(start.type, "question.start")
+        self.assertEqual(
+            (start.data["id"], start.data["call_id"], start.data["question"], start.data["options"]),
+            ("b1", "c1", "Which one?", ["red", "blue"]),
+        )
+        self.assertEqual(end.type, "question.end")
+        self.assertEqual((end.data["answer"], end.data["ok"]), ("blue", True))
+
+    def test_a_question_waits_on_a_person_not_on_the_stall_guard(self):
+        self.call.seen_at -= 1000
+        self.call.asking = True
+        self.assertGreater(self.engine.alive_at(self.result), time.time() - 1)
+
+    def test_an_unknown_question_cannot_be_answered(self):
+        self.assertFalse(self.engine.answer("nope", "x"))
+
+    def test_a_question_belongs_to_its_session(self):
+        async def drive():
+            asker = self.engine.build_asker(self.config, self.result)
+            task = asyncio.create_task(asker("c1", "Which one?", []))
+            question = await self.opened(task)
+            refused = self.engine.answer(question, "mine", session_id="other")
+            accepted = self.engine.answer(question, "theirs", session_id="s1")
+            return refused, accepted, await task
+
+        self.assertEqual(run(drive()), (False, True, "theirs"))
+
+    def test_a_cancelled_question_is_closed(self):
+        async def drive():
+            asker = self.engine.build_asker(self.config, self.result)
+            task = asyncio.create_task(asker("c1", "Which one?", []))
+            await self.opened(task)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        run(drive())
+        self.assertEqual(self.engine.questions, {})
+        self.assertFalse(self.call.asking)
+        self.assertEqual((self.seen[-1].type, self.seen[-1].data["ok"]), ("question.end", False))
+
+    def test_a_question_without_a_call_gets_an_id_of_its_own(self):
+        self.result.tools.clear()
+
+        async def drive():
+            asker = self.engine.build_asker(self.config, self.result)
+            task = asyncio.create_task(asker(None, "Which one?", []))
+            question = await self.opened(task)
+            self.engine.answer(question, "ok")
+            await task
+            return question
+
+        question = run(drive())
+        self.assertTrue(question.startswith(f"s1-{self.result.run_id}-q"))
+
 
 class InputResolutionTest(unittest.TestCase):
     def test_raw_text_is_returned_as_is(self):
@@ -1082,6 +1341,27 @@ class WorkspaceTest(unittest.TestCase):
     def test_quotes_are_stripped(self):
         self.assertEqual(self.ws.resolve("'a.txt'"), self.ws.root / "a.txt")
 
+    def test_reads_may_leave_the_root_when_allowed(self):
+        base = Path(self.tmp.name)
+        (base / "root").mkdir()
+        (base / "outside.txt").write_text("out", encoding="utf-8")
+        ws = A.Workspace(base / "root", read_outside=True)
+        self.assertEqual(ws.read_text(str(base / "outside.txt")), "out")
+        self.assertEqual(ws.read_text("../outside.txt"), "out")
+        self.assertIn("outside.txt", ws.list_dir(".."))
+        self.assertTrue(ws.read_data_url("../outside.txt").startswith("data:"))
+
+    def test_writes_never_leave_the_root(self):
+        base = Path(self.tmp.name)
+        (base / "root").mkdir()
+        (base / "outside.txt").write_text("out", encoding="utf-8")
+        ws = A.Workspace(base / "root", read_outside=True)
+        with self.assertRaises(A.WorkspaceError):
+            ws.write_text("../outside.txt", "x")
+        with self.assertRaises(A.WorkspaceError):
+            ws.apply_patch("../outside.txt", "", "delete_file")
+        self.assertEqual((base / "outside.txt").read_text(encoding="utf-8"), "out")
+
     def test_read_write_and_list(self):
         self.ws.write_text("dir/file.txt", "hello")
         self.assertEqual(self.ws.read_text("dir/file.txt"), "hello")
@@ -1112,6 +1392,70 @@ class WorkspaceTest(unittest.TestCase):
     def test_shell_times_out(self):
         ws = A.Workspace(self.tmp.name, shell_timeout=1)
         self.assertIn("timed out", run(ws.run_shell("sleep 5")))
+
+    def test_shell_timeout_kills_the_whole_process_tree(self):
+        # The interpreter is a child of the shell and holds its pipes: killing
+        # only the shell used to leave the call waiting for the child to end.
+        pid_file = Path(self.tmp.name) / "pid"
+        ws = A.Workspace(self.tmp.name, shell_timeout=2)
+        start = time.monotonic()
+        self.assertIn("timed out", run(ws.run_shell(sleeper_command(pid_file))))
+        self.assertLess(time.monotonic() - start, 6)
+        self.assertFalse(process_alive(int(pid_file.read_text())))
+
+    def test_shell_cancellation_kills_the_command(self):
+        pid_file = Path(self.tmp.name) / "pid"
+
+        async def cancel_once_started():
+            task = asyncio.ensure_future(self.ws.run_shell(sleeper_command(pid_file)))
+            for _ in range(100):
+                if pid_file.exists() and pid_file.read_text():
+                    break
+                await asyncio.sleep(0.05)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        run(cancel_once_started())
+        self.assertFalse(process_alive(int(pid_file.read_text())))
+
+    def test_shell_streams_output_and_heartbeats_while_it_runs(self):
+        ws = A.Workspace(self.tmp.name, shell_heartbeat=0.1)
+        seen: list[str] = []
+
+        async def progress(text):
+            seen.append(text)
+
+        command = python_command(
+            "import time; print('hi', flush=True); time.sleep(0.5); print('bye')"
+        )
+        output = run(ws.run_shell(command, progress))
+        self.assertIn("hi", "".join(seen))
+        self.assertIn("", seen)
+        self.assertIn("hi", output)
+        self.assertIn("bye", output)
+
+    def test_a_failing_progress_callback_never_breaks_the_command(self):
+        async def progress(text):
+            raise RuntimeError("boom")
+
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            output = run(self.ws.run_shell(python_command("print('hi')"), progress))
+        self.assertIn("hi", output)
+        self.assertIn("boom", errors.getvalue())
+
+    def test_shell_output_is_clipped(self):
+        ws = A.Workspace(self.tmp.name, shell_output_limit=200)
+        output = run(ws.run_shell("python -c \"print('a' * 1000 + 'END')\""))
+        self.assertLess(len(output), 300)
+        self.assertIn("chars omitted", output)
+        self.assertTrue(output.startswith("a"))
+        self.assertTrue(output.endswith("END"))
+
+    def test_clip_keeps_short_text(self):
+        self.assertEqual(A.clip_output("short", 100), "short")
+        self.assertEqual(A.clip_output("x" * 500, 0), "x" * 500)
 
     def test_guess_mime(self):
         self.assertEqual(A.guess_mime("a.png"), "image/png")
@@ -1146,6 +1490,13 @@ class ToolRegistryTest(unittest.TestCase):
             self.invoke(tools["view_image"], '{"path": "a.png"}').startswith("data:image/png")
         )
 
+    def test_read_tools_mention_outside_paths_only_when_allowed(self):
+        self.assertNotIn("outside", self.tools()["read_text_file"].description)
+        self.ws.read_outside = True
+        for name in ("list_directory", "read_text_file", "view_image"):
+            self.assertIn("outside the workspace", self.tools()[name].description)
+        self.assertNotIn("outside", self.tools()["write_text_file"].description)
+
     def test_vision_model_replaces_the_raw_image_tool(self):
         seen: list[tuple[str, str]] = []
 
@@ -1160,6 +1511,45 @@ class ToolRegistryTest(unittest.TestCase):
         self.assertEqual(answer, "a cat")
         self.assertTrue(seen[0][0].startswith("data:image/png"))
         self.assertEqual(seen[0][1], "q")
+
+    def test_the_shell_reports_progress_under_its_call_id(self):
+        seen: list[tuple[str, str]] = []
+
+        async def progress(call_id, text):
+            seen.append((call_id, text))
+
+        built = A.ToolRegistry().build(self.ws, progress=progress)
+        shell = {tool.name: tool for tool in built}["run_shell_command"]
+        self.assertEqual(set(shell.params_json_schema["properties"]), {"command"})
+        answer = self.invoke(shell, json.dumps({"command": python_command("print('hi')")}))
+        self.assertIn("hi", answer)
+        self.assertIn("hi", "".join(text for call_id, text in seen if call_id == "1"))
+
+    def test_the_ask_tool_comes_only_with_an_asker(self):
+        self.assertNotIn("ask_user", self.tools())
+
+        async def ask(call_id, question, options):
+            return "fine"
+
+        built = A.ToolRegistry(shell=False).build(self.ws, ask=ask)
+        tool = {tool.name: tool for tool in built}["ask_user"]
+        self.assertEqual(set(tool.params_json_schema["properties"]), {"question", "options"})
+
+    def test_the_ask_tool_asks_under_its_call_id(self):
+        asked: list[tuple] = []
+        replies = iter(["blue", ""])
+
+        async def ask(call_id, question, options):
+            asked.append((call_id, question, options))
+            return next(replies)
+
+        built = A.ToolRegistry(shell=False).build(self.ws, ask=ask)
+        tool = {tool.name: tool for tool in built}["ask_user"]
+        payload = json.dumps({"question": "Which one?", "options": ["red", "blue"]})
+        self.assertEqual(self.invoke(tool, payload), "blue")
+        self.assertEqual(asked, [("1", "Which one?", ["red", "blue"])])
+        self.assertIn("did not answer", self.invoke(tool, json.dumps({"question": "And?"})))
+        self.assertEqual(asked[-1][2], [])
 
     def test_vision_errors_are_reported_to_the_leader(self):
         async def vision(data_url, question):
@@ -1603,6 +1993,16 @@ class EngineTest(unittest.TestCase):
         names = [tool.name for tool in engine.built["tools"]]
         self.assertIn("read_text_file", names)
 
+    def test_the_ask_tool_comes_only_with_a_mode_that_can_answer(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, True))
+        engine = self.FakeEngine(env=False, workspace=root)
+        self.addCleanup(engine.close)
+        run(engine.run("hello"))
+        self.assertNotIn("ask_user", [tool.name for tool in engine.built["tools"]])
+        run(engine.run("hello", ask_enabled=True))
+        self.assertIn("ask_user", [tool.name for tool in engine.built["tools"]])
+
     def test_tools_may_be_supplied_by_the_consumer(self):
         engine = self.FakeEngine(env=False)
         self.addCleanup(engine.close)
@@ -1637,18 +2037,21 @@ class StreamTest(unittest.TestCase):
     class FakeStream:
         """What `Runner.run_streamed` returns: events, then an optional stall."""
 
-        def __init__(self, events=(), final_output="", usage=None, stall=0.0):
+        def __init__(self, events=(), final_output="", usage=None, stall=0.0, pause=0.0):
             self.events = list(events)
             self.final_output = final_output
             self.context_wrapper = types.SimpleNamespace(usage=usage)
             self.raw_responses = []
             self.cancelled = False
             self.stall = stall
+            self.pause = pause
 
         def cancel(self):
             self.cancelled = True
 
         async def stream_events(self):
+            if self.pause:
+                await asyncio.sleep(self.pause)
             for event in self.events:
                 yield event
             if self.stall:
@@ -1729,7 +2132,7 @@ class StreamTest(unittest.TestCase):
 
     def test_a_stalled_stream_fails_the_attempt_and_is_cancelled(self):
         streamed = self.FakeStream(stall=5.0)
-        _engine, _result, stream = self.drive(streamed, request_timeout=0.01)
+        _engine, _result, stream = self.drive(streamed, stream_timeout=0.01)
         with self.assertRaises(A.ModelError) as caught:
             stream()
         self.assertEqual(caught.exception.kind, "timeout")
@@ -1741,10 +2144,23 @@ class StreamTest(unittest.TestCase):
             usage={"prompt_tokens": 8},
             stall=5.0,
         )
-        _engine, result, stream = self.drive(streamed, request_timeout=0.01)
+        _engine, result, stream = self.drive(streamed, stream_timeout=0.01)
         with self.assertRaises(A.ModelError):
             stream()
         self.assertEqual(result.usage.input_tokens, 8)
+
+    def test_a_silence_longer_than_a_request_is_not_a_stall(self):
+        # The model writing a long tool call through a provider that sends the
+        # call whole (Ollama) is silent for minutes; only `stream_timeout`
+        # bounds that, never the per-request timeout of the specialists.
+        streamed = self.FakeStream(
+            events=[self.delta("writing")], final_output="done", stall=0.2
+        )
+        _engine, result, stream = self.drive(
+            streamed, request_timeout=0.01, stream_timeout=5.0
+        )
+        stream()
+        self.assertEqual(result.output, "done")
 
     def test_a_run_survives_an_sdk_that_reports_no_usage(self):
         streamed = self.FakeStream(events=[self.delta("hi")])
@@ -1752,6 +2168,40 @@ class StreamTest(unittest.TestCase):
         stream()
         self.assertEqual(result.output, "hi")
         self.assertEqual(result.usage.requests, 0)
+
+    def test_a_silent_model_is_published_as_waiting(self):
+        streamed = self.FakeStream(events=[self.delta("hi")], pause=0.2)
+        engine, _result, stream = self.drive(
+            streamed, stream_heartbeat=0.05, stream_timeout=5.0
+        )
+        waits: list[A.Event] = []
+        engine.events.on(A.EventType.MODEL_WAIT, waits.append)
+        stream()
+        self.assertGreaterEqual(len(waits), 2)
+        self.assertEqual(waits[0].session_id, "s1")
+        self.assertEqual(waits[0].data["role"], A.LEADER_ROLE)
+        self.assertEqual(waits[0].data["timeout"], 5.0)
+        self.assertGreater(waits[-1].data["elapsed"], waits[0].data["elapsed"])
+
+    def test_an_open_tool_call_is_not_a_silent_model(self):
+        call = types.SimpleNamespace(
+            tool_name="run_shell_command",
+            raw_item=types.SimpleNamespace(call_id="c1", arguments="{}"),
+        )
+        streamed = self.FakeStream(events=[self.item("tool_called", call)], stall=0.2)
+        engine, _result, stream = self.drive(streamed, stream_heartbeat=0.05)
+        waits: list[A.Event] = []
+        engine.events.on(A.EventType.MODEL_WAIT, waits.append)
+        stream()
+        self.assertEqual(waits, [])
+
+    def test_the_wait_heartbeat_can_be_turned_off(self):
+        streamed = self.FakeStream(events=[self.delta("hi")], pause=0.15)
+        engine, _result, stream = self.drive(streamed, stream_heartbeat=0.0)
+        waits: list[A.Event] = []
+        engine.events.on(A.EventType.MODEL_WAIT, waits.append)
+        stream()
+        self.assertEqual(waits, [])
 
 
 class ToolCallTest(unittest.TestCase):
@@ -2031,21 +2481,70 @@ class AgentRunTest(unittest.TestCase):
 
 class ConsoleRendererTest(unittest.TestCase):
     class Buffer:
-        def __init__(self):
+        def __init__(self, tty=False):
             self.text = ""
+            self.chunks: list[str] = []
+            self.tty = tty
 
         def write(self, chunk):
             self.text += chunk
+            if chunk:
+                self.chunks.append(chunk)
 
         def flush(self):
             pass
 
         def isatty(self):
-            return False
+            return self.tty
 
     def setUp(self):
         self.buffer = self.Buffer()
         self.renderer = A.ConsoleRenderer(color=False, stream=self.buffer)
+
+    @staticmethod
+    def delta(kind, text):
+        return A.Event(type=A.EventType.BLOCK_DELTA, data={"kind": kind, "text": text})
+
+    def test_only_a_terminal_gathers_text_into_frames(self):
+        self.assertEqual(A.ConsoleRenderer(stream=self.Buffer()).frame, 0.0)
+        tty = A.ConsoleRenderer(stream=self.Buffer(tty=True))
+        self.assertEqual(tty.frame, A.ConsoleRenderer.FRAME)
+
+    def test_streamed_text_is_written_once_per_frame(self):
+        renderer = A.ConsoleRenderer(color=False, stream=self.buffer, frame=0.05)
+
+        async def stream():
+            for token in ("a", "b", "c"):
+                renderer.handle(self.delta("output", token))
+            self.assertEqual(self.buffer.text, "")
+            await asyncio.sleep(0.15)
+
+        run(stream())
+        self.assertEqual(self.buffer.chunks, ["abc"])
+
+    def test_frames_change_when_text_is_written_not_what(self):
+        def render(frame):
+            buffer = self.Buffer()
+            renderer = A.ConsoleRenderer(color=False, stream=buffer, frame=frame)
+
+            async def stream():
+                renderer.handle(self.delta("reasoning", "think"))
+                renderer.handle(self.delta("reasoning", "ing"))
+                renderer.handle(self.delta("output", "answer"))
+                renderer.emit("error", "\n(cancelled)\n")
+                renderer.handle(A.Event(type=A.EventType.AGENT_END, data={}))
+
+            run(stream())
+            return buffer
+
+        framed, direct = render(10), render(0)
+        self.assertEqual(framed.text, direct.text)
+        self.assertLess(len(framed.chunks), len(direct.chunks))
+
+    def test_without_a_loop_framed_text_is_written_at_once(self):
+        renderer = A.ConsoleRenderer(color=False, stream=self.buffer, frame=10)
+        renderer.handle(self.delta("output", "now"))
+        self.assertEqual(self.buffer.text, "now")
 
     def test_block_changes_insert_one_blank_line(self):
         self.renderer.emit("reasoning", "thinking")
@@ -2112,6 +2611,16 @@ class ConsoleRendererTest(unittest.TestCase):
         self.assertIn('-> read(path="a")', self.buffer.text)
         self.assertIn("<- read: failed in 2 ms", self.buffer.text)
         self.assertIn("Error: nope", self.buffer.text)
+
+    def test_a_running_tool_prints_a_dot_per_heartbeat(self):
+        bus = A.EventBus()
+        self.renderer.attach(bus)
+        run(bus.publish(A.EventType.TOOL_START, kind="tool", text="sh()"))
+        run(bus.publish(A.EventType.TOOL_PROGRESS, kind="tool", name="sh", text=""))
+        run(bus.publish(A.EventType.TOOL_PROGRESS, kind="tool", name="sh", text="output"))
+        run(bus.publish(A.EventType.TOOL_PROGRESS, kind="tool", name="sh", text=""))
+        run(bus.publish(A.EventType.TOOL_END, kind="tool", name="sh", duration=1.0))
+        self.assertEqual(self.buffer.text, "-> sh()\n..\n<- sh: ok in 1000 ms\n")
 
     def test_truncate(self):
         self.assertEqual(A.truncate("abcdef", 10), "abcdef")
@@ -2243,6 +2752,20 @@ class WebServerTest(unittest.TestCase):
         self.assertIsInstance(json.loads(self.server.rest("/api/commands")[1]), list)
         self.assertIsNone(self.server.rest("/api/unknown"))
 
+    def test_reads_stay_inside_the_workspace_by_default(self):
+        agent = A.Agent(console=False, store=A.MemoryStore(), config_file=False, env=False)
+        self.addCleanup(agent.close)
+        A.WebServer(agent)
+        self.assertIs(agent.config.read_outside, False)
+
+    def test_an_explicit_read_outside_wins_over_the_web_default(self):
+        agent = A.Agent(
+            console=False, store=A.MemoryStore(), config_file=False, env=False, read_outside=True
+        )
+        self.addCleanup(agent.close)
+        A.WebServer(agent)
+        self.assertIs(agent.config.read_outside, True)
+
     def test_page_assets_exist_and_are_linked(self):
         for name, _ in A.WebServer.ASSETS.values():
             self.assertTrue((A.ROOT / name).is_file(), name)
@@ -2293,6 +2816,54 @@ class WebServerTest(unittest.TestCase):
             [(t["role"], t["text"]) for t in hello["history"]],
             [("user", "hello"), ("assistant", "hi")],
         )
+
+    def connect(self, session_id=None):
+        connection = A.Connection(self.server.hub, HubTest.FakeSocket())
+        self.server.hub.connections[connection.id] = connection
+        if session_id:
+            self.server.bind(connection, session_id)
+        return connection
+
+    def test_hello_resumes_a_live_session_and_replaces_a_stale_one(self):
+        live = self.agent.sessions.create()
+        connection = self.connect()
+        run(self.server.on_hello(connection, {"session": live.id}))
+        self.assertEqual(connection.ws.sent[-1]["session"]["id"], live.id)
+        self.agent.sessions.close(live.id)
+        run(self.server.on_hello(connection, {"session": live.id}))
+        fresh = connection.ws.sent[-1]["session"]["id"]
+        self.assertNotEqual(fresh, live.id)
+        self.assertIsNotNone(self.agent.sessions.get(fresh))
+
+    def test_the_web_server_lets_the_model_ask(self):
+        agent = A.Agent(console=False, store=A.MemoryStore(), config_file=False, env=False)
+        self.addCleanup(agent.close)
+        self.assertIsNone(agent.config.ask_enabled)
+        A.WebServer(agent)
+        self.assertIs(agent.config.ask_enabled, True)
+
+    def test_an_answer_reaches_the_question_of_its_session(self):
+        session = self.agent.sessions.create()
+
+        async def drive():
+            result = A.RunResult(session_id=session.id)
+            asker = self.agent.build_asker(self.agent.config, result)
+            task = asyncio.create_task(asker(None, "Which one?", ["red", "blue"]))
+            while not self.agent.questions:
+                await asyncio.sleep(0.005)
+            question = next(iter(self.agent.questions))
+            stranger = self.connect(self.agent.sessions.create().id)
+            await self.server.on_answer(stranger, {"id": question, "text": "red"})
+            owner = self.connect(session.id)
+            await self.server.on_answer(owner, {"id": question, "text": "blue"})
+            return stranger, owner, await task
+
+        stranger, owner, answer = run(drive())
+        self.assertEqual(answer, "blue")
+        self.assertEqual(stranger.ws.sent[-1]["type"], "error")
+        # the owner hears the outcome on its channel, like every client of it
+        self.assertEqual([m["type"] for m in owner.ws.sent], ["question.end"])
+        self.assertEqual(owner.ws.sent[0]["answer"], "blue")
 
     def test_attachments_are_stored_inside_the_session(self):
         session = self.agent.sessions.create()
@@ -2691,6 +3262,15 @@ class ReplTest(unittest.TestCase):
         run(repl.start(opening="from the command line"))
         self.assertEqual(self.agent.asked, ["from the command line"])
 
+    def test_reads_outside_the_workspace_by_default(self):
+        self.repl([None])
+        self.assertIs(self.agent.config.read_outside, True)
+
+    def test_an_explicit_read_outside_wins_over_the_repl_default(self):
+        self.agent.config = self.agent.config.merge(read_outside=False)
+        self.repl([None])
+        self.assertIs(self.agent.config.read_outside, False)
+
     def test_a_slash_line_is_a_command(self):
         repl = self.repl(["/model tiny", None])
         run(repl.start())
@@ -2786,6 +3366,62 @@ class ReplTest(unittest.TestCase):
 
     def test_the_agent_builds_its_own_repl(self):
         self.assertIsInstance(self.agent.repl(), A.Repl)
+
+    def test_the_repl_lets_the_model_ask(self):
+        self.repl([None])
+        self.assertIs(self.agent.config.ask_enabled, True)
+
+    def asking(self, answers, *, ask_on=("go",)):
+        """Replace the run with one that asks a question for each input in `ask_on`."""
+        agent = self.agent
+
+        async def ask(template, *, session=None, **overrides):
+            text = str(overrides.get("input", ""))
+            agent.asked.append(text)
+            result = A.RunResult(session_id=session.id)
+            if text in ask_on:
+                asker = agent.build_asker(agent.config, result)
+                answers.append(await asker(None, "Which one?", ["red", "blue"]))
+            return result
+
+        agent.run = ask
+
+    def test_a_question_is_answered_by_number_or_in_words(self):
+        answers: list[str] = []
+        self.asking(answers, ask_on=("go", "again"))
+        repl = self.repl(["go", "2", "again", "green", None])
+        run(repl.start())
+        self.assertEqual(answers, ["blue", "green"])
+        output = self.out.getvalue()
+        self.assertEqual(output.count("Which one?"), 2)
+        self.assertIn("1. red", output)
+        self.assertIn("2. blue", output)
+
+    def test_an_interrupted_question_hands_the_terminal_back(self):
+        answers: list[str] = []
+        self.asking(answers)
+
+        async def drive():
+            loop = asyncio.get_running_loop()
+            feed = iter(["go", None])
+
+            def reader(prompt):
+                if prompt == A.Repl.ANSWER:
+                    loop.call_soon_threadsafe(repl.interrupt)
+                    time.sleep(0.2)  # the line arrives after the run is gone
+                    return "after"
+                return next(feed)
+
+            repl = self.agent.repl(reader=reader)
+            await repl.start()
+            return repl
+
+        repl = run(drive())
+        self.assertIn("(cancelled)", self.out.getvalue())
+        self.assertEqual(answers, [])
+        self.assertEqual(self.agent.asked, ["go", "after"])
+        self.assertEqual(repl.replies, {})
+        self.assertEqual(self.agent.questions, {})
 
 
 class CliTest(unittest.TestCase):

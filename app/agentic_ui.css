@@ -215,6 +215,57 @@ body {
   animation: throb 1.6s ease-in-out infinite;
 }
 
+/* heartbeat: a running tool reported in, or a silent model is still being
+   waited on, so the whole mark pops once */
+.app[data-beat="true"] .mark {
+  animation: beat 0.5s ease-out;
+}
+
+@keyframes beat {
+  35% {
+    transform: scale(1.16);
+  }
+}
+
+/* waiting: the model is writing something it will send whole, so the core
+   dims while the timer beside the mark counts the silence */
+.app[data-waiting="true"] .mark-core {
+  opacity: 0.55;
+}
+
+/* asking: the run waits on the reader, so the ring holds still and whole and
+   the halo ripples outward like a raised hand */
+.app[data-asking="true"] .mark-ring {
+  stroke-dasharray: none;
+  animation: none;
+}
+
+.app[data-asking="true"] .mark-core {
+  animation: none;
+}
+
+.app[data-asking="true"] .mark-halo {
+  animation: ping 1.8s ease-out infinite;
+}
+
+@keyframes ping {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.75);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+}
+
+.wait {
+  flex: none;
+  color: var(--muted);
+  font: 0.72rem var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -287,10 +338,16 @@ body {
     animation: none;
   }
 
+  .mark,
   .mark-halo,
   .mark-ring,
   .mark-core {
     animation: none !important;
+  }
+
+  /* without the ripple, a question still shows as a halo held still */
+  .app[data-asking="true"] .mark-halo {
+    opacity: 0.55;
   }
 }
 
@@ -425,6 +482,99 @@ body {
 .block[data-kind="tool"][data-status="failed"] .block-head .label,
 .block[data-kind="tool"][data-status="failed"] .block-head .kind {
   color: var(--error);
+}
+
+/* A question is the one block that waits on the reader, so it is the one
+   that carries the accent: a hairline edge and a colored icon. */
+.block[data-kind="question"] {
+  background: var(--bg-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.block[data-kind="question"] .block-toggle .kind {
+  color: var(--accent);
+}
+
+.block[data-kind="question"][data-answered="true"] {
+  border-color: var(--border);
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+/* A choice is a pill that is tall enough for a thumb and fills with the
+   accent once it is the answer. */
+.choice {
+  min-height: var(--control);
+  max-width: 100%;
+  padding: 0.3rem 0.85rem;
+  border: 1px solid var(--input-border);
+  border-radius: 999px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.choice:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--input-border));
+}
+
+.choice:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--focus) 70%, transparent);
+  outline-offset: 1px;
+}
+
+.choice[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.choice:disabled {
+  cursor: default;
+}
+
+.choice:disabled:not([aria-pressed="true"]) {
+  opacity: 0.45;
+}
+
+/* An answer in words, under the question it answers. */
+.reply {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+  font-size: 0.875rem;
+}
+
+.reply .icon {
+  flex: none;
+  width: 0.95rem;
+  height: 0.95rem;
+  color: var(--muted);
+}
+
+.reply[data-empty="true"] {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.block[data-collapsed="true"] .choices,
+.block[data-collapsed="true"] .reply {
+  display: none;
 }
 
 .block[data-kind="error"] {

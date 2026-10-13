@@ -3,7 +3,9 @@
  * Subsystems: Icons (inline SVG set), Markdown (safe rendering), Media (inline
  * preview), Clipboard (copy with an http fallback), Blocks (content
  * subscribers, updated concurrently and out of order), Theme (VS Code theme
- * subset), Commands (slash commands) and Socket (hub client).
+ * subset), Commands (slash commands), Questions (what the model asked),
+ * Wait (a silent model's timer), Saved (the last session) and Socket (hub
+ * client).
  */
 (() => {
   "use strict";
@@ -12,6 +14,7 @@
   const el = {
     app: $("app"),
     brand: $("brand"),
+    wait: $("wait"),
     status: $("status-text"),
     session: $("session"),
     discussion: $("discussion"),
@@ -48,6 +51,9 @@
       wrench:
         '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-8 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-8l-3.7 3.9z"/>',
       info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+      help:
+        '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/>' +
+        '<path d="M12 17h.01"/>',
       alert:
         '<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/>' +
         '<path d="M12 9v4"/><path d="M12 17h.01"/>',
@@ -68,6 +74,7 @@
     output: "bot",
     reasoning: "sparkles",
     tool: "wrench",
+    question: "help",
     log: "info",
     error: "alert",
   };
@@ -546,6 +553,18 @@
 
     set(text) {
       this.text = text || "";
+      this.tailing = false;
+      this.render();
+    }
+
+    /** Append live output, keeping only its tail: a command may print forever. */
+    tail(text, limit = 4000) {
+      if (!text) return;
+      if (!this.tailing) {
+        this.tailing = true;
+        text = `\n${text}`;
+      }
+      this.text = (this.text + text).slice(-limit);
       this.render();
     }
 
@@ -562,6 +581,55 @@
       // A tool call is a transcript of what ran, never markdown to interpret.
       if (this.kind === "tool") this.body.textContent = this.text;
       else this.body.innerHTML = Markdown.render(this.text);
+    }
+
+    /** Become a question card: the question, then one choice per option. The
+     *  card takes over the block of the `ask_user` call that asked it. */
+    ask(question, options, pick) {
+      if (this.kind !== "question") {
+        this.kind = "question";
+        this.node.dataset.kind = "question";
+        this.node.querySelector(".kind").outerHTML = Icons.markup(KIND_ICONS.question, "icon kind");
+      }
+      this.label("question");
+      this.set(question || "");
+      if (this.choices) this.choices.remove();
+      this.choices = document.createElement("div");
+      this.choices.className = "choices";
+      (options || []).forEach((option) => {
+        const choice = document.createElement("button");
+        choice.type = "button";
+        choice.className = "choice";
+        choice.textContent = choice.dataset.value = String(option);
+        choice.setAttribute("aria-pressed", "false");
+        choice.addEventListener("click", () => pick(String(option)));
+        this.choices.appendChild(choice);
+      });
+      this.choices.hidden = !this.choices.children.length;
+      this.node.appendChild(this.choices);
+    }
+
+    /** Close the card: press the choice that was picked, or show the words. */
+    answered(text, ok) {
+      this.node.dataset.answered = "true";
+      let picked = false;
+      [...(this.choices ? this.choices.children : [])].forEach((choice) => {
+        const hit = ok && choice.dataset.value === text;
+        choice.disabled = true;
+        choice.setAttribute("aria-pressed", String(hit));
+        picked = picked || hit;
+      });
+      if (!picked) {
+        const reply = document.createElement("div");
+        reply.className = "reply";
+        reply.dataset.empty = String(!(ok && text));
+        reply.innerHTML = Icons.markup("user");
+        const words = document.createElement("span");
+        words.textContent = ok && text ? text : "no answer";
+        reply.appendChild(words);
+        this.node.appendChild(reply);
+      }
+      this.end();
     }
 
     end() {
@@ -709,11 +777,113 @@
     },
   };
 
+  // ------------------------------------------------------------------ saved
+
+  /** The last session of this page, so a reload resumes it while it is still
+   *  live (the server opens a fresh one when it is not). Storage may be barred
+   *  — a private window, a sandboxed frame — and the page works without it. */
+  const Saved = {
+    KEY: "agentic.session",
+    get() {
+      try {
+        return localStorage.getItem(this.KEY) || null;
+      } catch {
+        return null;
+      }
+    },
+    set(id) {
+      try {
+        if (id) localStorage.setItem(this.KEY, id);
+        else localStorage.removeItem(this.KEY);
+      } catch {
+        // nothing to remember with; the next load starts a new session
+      }
+    },
+  };
+
+  // ------------------------------------------------------------------- wait
+
+  /** A silent model's timer beside the mark. The server reports the silence
+   *  every few seconds (`model.wait`); the timer ticks on its own in between
+   *  and stops at the first sign of the stream. */
+  const Wait = {
+    timer: 0,
+    since: 0,
+    start(elapsed, timeout) {
+      this.since = Date.now() - (Number(elapsed) || 0) * 1000;
+      this.timeout = Number(timeout) || 0;
+      el.app.dataset.waiting = "true";
+      el.wait.hidden = false;
+      this.tick();
+      if (!this.timer) this.timer = setInterval(() => this.tick(), 1000);
+      Socket.describe();
+    },
+    tick() {
+      const seconds = Math.max(0, Math.floor((Date.now() - this.since) / 1000));
+      el.wait.textContent = clock(seconds);
+      el.wait.title = this.timeout
+        ? `Model silent for ${clock(seconds)} of ${clock(Math.round(this.timeout))}`
+        : `Model silent for ${clock(seconds)}`;
+    },
+    stop() {
+      if (!this.timer && el.wait.hidden) return;
+      clearInterval(this.timer);
+      this.timer = 0;
+      el.wait.hidden = true;
+      el.app.dataset.waiting = "false";
+      Socket.describe();
+    },
+  };
+
+  /** Seconds as `42s`, or `m:ss` once there is a minute of them. */
+  const clock = (seconds) =>
+    seconds < 60
+      ? `${seconds}s`
+      : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+
+  // -------------------------------------------------------------- questions
+
+  /** What the model asked and is still waiting on. A choice on the card
+   *  answers its own question; the composer answers the oldest open one. */
+  const Questions = {
+    open: [],
+    ask(message) {
+      const id = message.id;
+      Blocks.ensure(id, "question", "assistant").ask(message.question, message.options, (text) =>
+        this.answer(id, text),
+      );
+      if (!this.open.includes(id)) this.open.push(id);
+      this.update();
+      Blocks.scroll();
+      // A pointer user is likely to type; on touch the keyboard would hide the choices.
+      if (window.matchMedia && matchMedia("(pointer: fine)").matches)
+        el.input.focus({ preventScroll: true });
+    },
+    answer(id, text) {
+      return Socket.send({ type: "answer", id, text });
+    },
+    close(message) {
+      const block = Blocks.map.get(message.id);
+      if (block) block.answered(String(message.answer || ""), message.ok !== false);
+      this.forget(message.id);
+    },
+    forget(id) {
+      this.open = id === undefined ? [] : this.open.filter((open) => open !== id);
+      this.update();
+    },
+    update() {
+      const asking = this.open.length > 0;
+      el.app.dataset.asking = String(asking);
+      el.input.placeholder = asking ? "Answer the agent…" : "Message the agent…";
+      Socket.controls();
+    },
+  };
+
   // ----------------------------------------------------------------- socket
 
   const Socket = {
     ws: null,
-    session: null,
+    session: Saved.get(),
     retry: 0,
     name: "agent",
     connect() {
@@ -726,6 +896,9 @@
         this.send({ type: "hello", session: this.session });
       });
       this.ws.addEventListener("close", () => {
+        // The server cancels the run of a closed socket, and its questions too.
+        Questions.forget();
+        Wait.stop();
         this.setState("offline");
         this.retry = Math.min(this.retry + 1, 6);
         setTimeout(() => this.connect(), 250 * 2 ** this.retry);
@@ -757,7 +930,14 @@
     },
     describe() {
       const state = el.app.dataset.state;
-      const working = el.app.dataset.busy === "true" ? ", working" : "";
+      const working =
+        el.app.dataset.asking === "true"
+          ? ", waiting for your answer"
+          : el.app.dataset.waiting === "true"
+            ? ", model writing"
+            : el.app.dataset.busy === "true"
+              ? ", working"
+              : "";
       const words = {
         online: "connected",
         offline: "disconnected",
@@ -777,21 +957,39 @@
     },
     busy(active) {
       el.app.dataset.busy = String(Boolean(active));
-      el.stop.hidden = !active;
-      el.send.hidden = active;
+      this.controls();
+    },
+    /** Stop while a run is in flight; send when idle, or when it asked. */
+    controls() {
+      const busy = el.app.dataset.busy === "true";
+      el.stop.hidden = !busy;
+      el.send.hidden = busy && el.app.dataset.asking !== "true";
       this.describe();
     },
+    /** Pop the mark once: a running tool just reported that it is alive. */
+    beat() {
+      el.app.dataset.beat = "false";
+      void el.brand.offsetWidth; // restart the animation on every beat
+      el.app.dataset.beat = "true";
+    },
     receive(message) {
+      // Anything the run does is a sign the model is no longer silent.
+      if (/^(block|tool|agent|question)\.|^(cancelled|error)$/.test(message.type)) Wait.stop();
       switch (message.type) {
-        case "hello":
+        case "hello": {
+          const asked = this.session;
           this.session = message.session && message.session.id;
+          Saved.set(this.session);
           el.session.textContent = this.session ? `#${this.session}` : "";
           this.name = (message.config && message.config.name) || "agent";
           this.describe();
           Commands.server = message.commands || [];
           Theme.apply(message.theme);
           this.replay(message.history);
+          if (asked && asked !== this.session)
+            Blocks.note("log", `Session \`#${asked}\` has ended; this is a new one.`);
           break;
+        }
         case "block.start":
           Blocks.ensure(message.id, message.kind, message.role).set(message.text || "");
           if (message.attachments && message.attachments.length) {
@@ -811,8 +1009,11 @@
         case "tool.start":
         case "tool.end": {
           const tool = Blocks.ensure(message.id, "tool");
-          tool.label(message.name || "tool");
-          tool.set(message.text || "");
+          // A question card keeps its own face; the call only opens and ends it.
+          if (tool.kind !== "question") {
+            tool.label(message.name || "tool");
+            tool.set(message.text || "");
+          }
           if (message.type === "tool.end") {
             tool.node.dataset.status = message.ok === false ? "failed" : "ok";
             tool.end();
@@ -820,8 +1021,30 @@
           Blocks.scroll();
           break;
         }
+        case "tool.progress": {
+          // Output to tail, or an empty heartbeat: either way the call is alive.
+          const tool = Blocks.ensure(message.id, "tool");
+          const seconds = Math.round(Number(message.duration) || 0);
+          tool.label(`${message.name || "tool"} · ${seconds}s`);
+          tool.tail(message.text || "");
+          this.beat();
+          Blocks.scroll();
+          break;
+        }
         case "block.end":
           Blocks.ensure(message.id, message.kind).end();
+          break;
+        case "model.wait":
+          // The model is writing something it sends whole (a tool call on
+          // Ollama): pulse the mark and count the silence.
+          Wait.start(message.elapsed, message.timeout);
+          this.beat();
+          break;
+        case "question.start":
+          Questions.ask(message);
+          break;
+        case "question.end":
+          Questions.close(message);
           break;
         case "model.retry":
           Blocks.note(
@@ -872,7 +1095,10 @@
       if (!result) return;
       if (result.session && result.session.id) {
         this.session = result.session.id;
+        Saved.set(this.session);
         el.session.textContent = `#${this.session}`;
+      } else if (result.session === null && result.ok) {
+        Saved.set(null); // ended: a reload has nothing to resume
       }
       if (result.commands) {
         Blocks.note(
@@ -963,9 +1189,12 @@
       hints.hide();
       return;
     }
+    // While the model waits on a question, what is typed is the answer.
     const message = Commands.parse(text)
       ? { type: "command", text }
-      : { type: "prompt", text, attachments: Attachments.take() };
+      : Questions.open.length
+        ? { type: "answer", id: Questions.open[0], text }
+        : { type: "prompt", text, attachments: Attachments.take() };
     if (Socket.send(message)) {
       el.input.value = "";
       resize();
@@ -1022,5 +1251,17 @@
 
   // The subsystems, for a test harness or a console: everything the page does
   // is reachable without a socket.
-  window.agentUI = { Icons, Markdown, Media, Clipboard, Theme, Blocks, Commands, Socket };
+  window.agentUI = {
+    Icons,
+    Markdown,
+    Media,
+    Clipboard,
+    Theme,
+    Blocks,
+    Commands,
+    Questions,
+    Wait,
+    Saved,
+    Socket,
+  };
 })();

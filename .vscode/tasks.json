@@ -41,6 +41,22 @@
         "clear": true
       },
       "problemMatcher": []
+    },
+    {
+      "label": "repl",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "python", "app/agentic.py", "--repl"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
     }
   ]
 }

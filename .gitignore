@@ -37,3 +37,4 @@ Thumbs.db
 *.log
 .hf-cache/
 **/*erotic*
+*.gguf

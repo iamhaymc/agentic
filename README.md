@@ -105,7 +105,7 @@ or injected below works in both.
 ## ▶️ Run (Tool)
 
 ```bash
-python app/agentic.py                     # no argument -> REPL
+python app/agentic.py                     # no argument -> REPL (or run VS Code task "repl")
 python app/agentic.py --input notes.md    # any arguments -> one-shot
 ```
 

@@ -192,7 +192,9 @@ genre: noir
 | `AGENTIC_NAME`, `AGENTIC_INSTRUCTIONS`                                        | Agent name and system instructions          |
 | `AGENTIC_INFERENCE_LLM`, `_URL`, `_KEY`                                       | Leader model, endpoint and credential       |
 | `AGENTIC_MAX_TURNS`                                                           | Maximum agentic turns per run               |
-| `AGENTIC_REQUEST_TIMEOUT`                                                     | Timeout per model call; leader stall guard  |
+| `AGENTIC_REQUEST_TIMEOUT`                                                     | Timeout per specialist call and connect     |
+| `AGENTIC_STREAM_TIMEOUT`                                                      | Leader stall guard; transport read timeout  |
+| `AGENTIC_STREAM_HEARTBEAT`                                                    | Seconds between `model.wait` (`0` off)      |
 | `AGENTIC_RETRY_ATTEMPTS`                                                      | Attempts per model call (`1` never retries) |
 | `AGENTIC_RETRY_BACKOFF`, `AGENTIC_RETRY_MAX_BACKOFF`                          | First wait between attempts, and its cap    |
 | `AGENTIC_RETRY_JITTER`                                                        | Fraction of a wait that is randomized       |
@@ -216,6 +218,8 @@ genre: noir
 | `AGENTIC_REPO_DEPTH`, `AGENTIC_REPO_CLONE`, `AGENTIC_REPO_TIMEOUT`            | Clone depth, auto clone, git timeout        |
 | `AGENTIC_DB_PATH`, `AGENTIC_CACHE_SIZE`                                       | SQLite file and LRU capacity                |
 | `AGENTIC_SHELL_TIMEOUT`, `AGENTIC_SHELL_ENABLED`                              | Shell tool limits                           |
+| `AGENTIC_SHELL_HEARTBEAT`                                                     | Seconds between shell heartbeats (`0` off)  |
+| `AGENTIC_READ_OUTSIDE`, `AGENTIC_ASK_ENABLED`                                 | Reads beyond the workspace; `ask_user` tool |
 | `AGENTIC_HOST`, `AGENTIC_PORT`, `AGENTIC_THEME`                               | Web bind address and UI theme file          |
 | `AGENTIC_QUIET`, `AGENTIC_COLOR`                                              | Console output                              |
 
@@ -238,8 +242,12 @@ Handlers may be sync or async; exceptions are printed to stderr and swallowed.
 | `block.delta`                  | `id`, `kind`, `text` (the delta)           |
 | `block.end`                    | `id`, `kind`, `text` (the full block)      |
 | `tool.start`                   | `id`, `kind`, `name`, `call_id`, `arguments`, `text` |
+| `tool.progress`                | `id`, `kind`, `name`, `call_id`, `text` (output, empty for a heartbeat), `duration` |
 | `tool.end`                     | the above plus `ok`, `result`, `duration`  |
 | `model.retry`                  | `role`, `error_kind`, `attempt`, `attempts`, `delay`, `error` |
+| `model.wait`                   | `role`, `elapsed` (seconds silent), `timeout` (the stall budget, `0` unbounded) |
+| `question.start`               | `id`, `kind`, `call_id`, `question`, `options` |
+| `question.end`                 | `id`, `kind`, `call_id`, `answer`, `ok` (false when cancelled) |
 | `session.open`, `session.close`| `kind`, `repo`                             |
 | `log`                          | `kind`, `message`                          |
 
@@ -384,10 +392,10 @@ one, which is re-raised untouched so a defect here is never dressed up as a
 provider fault.
 
 `RetryPolicy` is how a call is made: `attempts` in total, `timeout` per attempt,
-and a wait of `backoff * 2 ** (n - 1)` after failure *n*, capped at
+`stall` as the longest silence between two events of a stream, and a wait of `backoff * 2 ** (n - 1)` after failure *n*, capped at
 `max_backoff` and multiplied by a random factor in `[1 - jitter, 1]` so clients
 a provider failed together do not return together. `RetryPolicy.from_config()`
-reads `request_timeout` and the `retry_*` fields; `Engine.build_policy()` is the
+reads `request_timeout`, `stream_timeout` and the `retry_*` fields; `Engine.build_policy()` is the
 hook that returns it. `policy.call(operation, role=…, bounded=…, resumable=…,
 on_retry=…)` awaits the operation under all of it: cancellation is never
 retried, `resumable` lets the caller veto a retry, and `on_retry` publishes
@@ -398,17 +406,37 @@ Retrying belongs to the policy alone: `ModelPool.client()` builds its
 to the event bus, unjittered, uncounted and nested inside whatever the harness
 is already doing. The transport timeout it keeps (from the policy of the pool,
 which `Engine` builds from the config) is what stops a socket that went quiet
-mid-response.
+mid-response: an `httpx.Timeout` whose connect, write and pool bounds are
+`timeout` and whose read bound is the longer of `timeout` and `stall`, since the
+leader's stream shares the client of its endpoint and may be silent for longer
+than a request may take.
 
 The leader and the specialists are bounded differently, because they are shaped
 differently. A specialist completion is one request, so `ModelPool.complete()`
 wraps the whole call in the timeout. The leader's stream is a long lived read
-whose duration is legitimately unbounded, so `timeout` becomes a **stall
-guard** instead: `Engine.next_event()` bounds the wait for the *next* event, and
+whose duration is legitimately unbounded, so it is bound by `stall`
+(`stream_timeout`, default 600s) as a **stall guard** instead:
+`Engine.next_event()` bounds the wait for the *next* event, and
 `Engine.stall_timeout()` extends that budget by `shell_timeout` while a tool
 call is outstanding, since the SDK runs tools inside the same stream and a slow
-shell command must not look like a stalled provider. A stream that fails is
-retried only while `result.blocks` and `result.tools` are still empty: after
+shell command must not look like a stalled provider. The budget runs from the
+latest sign of life rather than from the start of the wait: every
+`tool.progress` report of an open call stamps `ToolCall.seen_at`
+(`Engine.alive_at()`), and `next_event(events, timeout, alive)` keeps waiting
+while that stamp is fresh, so a command that is still heartbeating is never
+mistaken for a dead provider and only a silent tool is bound by the budget. The
+guard is not `request_timeout` because a silent stream is not always a dead one:
+Ollama sends a tool call whole once the model has finished writing it, so a
+`write_file` of a long document is minutes without a byte (a 3.4K char call on a
+9B model was 17s of silence, a 1,000 line story is several minutes). That
+silence is published rather than hidden: while no tool call is open,
+`next_event(..., heartbeat=, on_wait=)` hands the seconds waited so far to
+`on_wait` every `stream_heartbeat` seconds (5s, `0` off), and
+`Engine.wait_reporter(result, budget)` publishes it as `model.wait` with the
+budget it runs against. The heartbeat observes the wait and never extends it,
+a failing observer is logged and ignored (`Engine.notify_wait`), and silence
+while a tool runs is left to the tool's own `tool.progress`. A stream
+that fails is retried only while `result.blocks` and `result.tools` are still empty: after
 that a second attempt would replay work the consumer has already seen, so the
 failure is reported instead. An abandoned stream is cancelled
 (`Engine.cancel_stream`) rather than left running.
@@ -452,14 +480,41 @@ configured — which is exactly what decides the image tool.
 
 `Workspace` is the sandbox. `resolve()` rejects empty paths, strips quotes,
 anchors relative paths at the root and refuses anything that resolves outside it
-(which also blocks symlink escapes). On top of it: `read_text` (2 MiB cap),
+(which also blocks symlink escapes). `resolve(raw, read=True)` skips that check
+when the workspace was built with `read_outside` (from the config field of the
+same name), so `read_text`, `list_dir` and `read_data_url` may leave the root
+while writes never do; the read tools then tell the model so in their
+descriptions. The field is tri-state: `None` is settled by the mode through
+`AgentConfig.with_defaults()` — `Repl` sets `True`, `WebServer` sets `False`, and
+anything else builds the workspace with `bool(None)`, i.e. confined. An explicit
+value always wins. On top of it: `read_text` (2 MiB cap),
 `write_text` (creates parents), `list_dir`, `read_data_url` (base64 with a
 guessed MIME type, empty files rejected), `apply_patch` (unified diff via
 `agents.apply_diff`, with `create_file` / `update_file` / `delete_file`) and
-`run_shell` (async subprocess, cwd at the root, killed on timeout, stdout +
-stderr + exit code returned as text).
+`run_shell` (async subprocess, cwd at the root, stdin closed, stdout + stderr +
+exit code returned as text, clipped by `clip_output()` to `shell_output_limit`
+characters with head and tail kept).
 
-`ToolRegistry.build(workspace, vision=…, checkout=…)` assembles the list:
+`run_shell(command, progress)` reads both pipes as the command writes them and
+hands every decoded chunk to the optional `progress` callback, plus an empty
+string every `shell_heartbeat` seconds while the command is still running; a
+callback that raises is logged and never breaks the command. On timeout or
+cancellation the whole process tree is killed by `kill_tree()` (`taskkill /F /T`
+on Windows; elsewhere `os.killpg` on the process group `start_new_session` gave
+the shell), not just the shell: a grandchild holding the pipes would otherwise
+outlive the
+shell and keep the call waiting until it ended on its own. The wait for the
+pipes after a kill is bounded by `Workspace.KILL_GRACE` (5 s), after which they
+are abandoned with a diagnostic on stderr.
+
+`ToolRegistry.build(workspace, vision=…, checkout=…, progress=…, ask=…)`
+assembles the list. `progress` is a `ToolReporter`, `(call_id, text) -> None`:
+the shell tool takes the SDK `ToolContext` to learn the id of its call and
+reports under it; `Engine.tool_reporter(result)` is the reporter of a run, which
+stamps the call alive and publishes `tool.progress` on its block. `ask` is an
+`Asker`, `(call_id, question, options) -> answer`: when it is given the leader
+gets `ask_user`, which takes its call id the same way, drops blank options and
+returns `(the user did not answer)` for an empty answer.
 
 | Tool                | Present when                | Effect                                    |
 | ------------------- | --------------------------- | ----------------------------------------- |
@@ -470,6 +525,7 @@ stderr + exit code returned as text).
 | `view_image`        | no vision model             | Return the image as a data URL            |
 | `describe_image`    | vision model configured     | Ask the specialist about the image        |
 | `run_shell_command` | `shell_enabled`             | Run a command in the workspace            |
+| `ask_user`          | `ask_enabled` (repl, web)   | Ask the user, wait for the answer         |
 | `git_status`        | the session has a checkout  | Branch and working tree                   |
 | `git_commit`        | the session has a checkout  | Stage everything and commit               |
 | `git_push`          | the session has a checkout  | Push the session branch                   |
@@ -494,6 +550,14 @@ or `AGENTIC_COLOR` says so. `write()`, `style()` and `banner()` are the override
 points; `banners=False` keeps the config banner from being printed on every run
 (which is what `Repl.greet()` and `WebServer.greet()` do after printing their own), and `Agent(console=False)` or
 `AGENTIC_QUIET=1` removes the renderer entirely.
+
+Streamed text (`block.delta`) is gathered into frames: `gather()` queues it and
+`flush()` prints it once per `frame` seconds (`ConsoleRenderer.FRAME`, 50 ms) via
+`loop.call_later`, or sooner when the kind changes or anything else is printed —
+every other event and every direct `emit()` flushes first, so order never
+changes, only timing. `frame=None` frames a TTY only (tests and pipes write at
+once), `frame=0` disables it, and without a running loop text is written at
+once.
 
 ## 15. Commands
 
@@ -563,6 +627,51 @@ ready made `text` line, `ToolCall.report()`, for a renderer that does not want t
 format the fields itself. Every call is kept on `RunResult.tools`, so a finished
 run can be audited without subscribing to anything.
 
+In between, a tool that reports progress publishes `tool.progress` on the same
+block id: `text` is output it produced (redacted and cut like a result) or empty
+for a heartbeat, and `duration` is the time the call has run so far. The console
+prints a dim `.` per heartbeat after the `->` line; the web UI tails the output
+in the tool block (last 4,000 characters), counts the seconds in its label and
+pops the hero mark once per report.
+
+### Questions
+
+The model asks the person behind a run through `ask_user`, and the core only
+brokers the question; a front end shows it and answers it:
+
+- [x] `Engine.build_asker(config, result)` is the `Asker` of a run, or `None`
+  unless `ask_enabled` — tri-state like `read_outside`, settled by the mode
+  (`Repl` and `WebServer` set `True`, an embedded engine or a one shot run stay
+  off, since a question nobody can answer would hang the run).
+- [x] A question takes the id of its tool call's block, so a client turns that
+  block into the card; a question without a known call gets
+  `{session}-{run}-q{random}`. It is published as `question.start`, kept in
+  `Engine.questions` (`id -> (session, future)`) and ends with `question.end`
+  carrying the answer and `ok` — `ok` is false when the run was cancelled under
+  it, which is published too.
+- [x] `Engine.answer(id, text, session_id=…)` resolves it and returns whether
+  there was such a question; with a `session_id` the question must belong to
+  that session.
+- [x] While it waits the call is marked `ToolCall.asking`, and `alive_at()`
+  reports such a call as alive now: the stall guard bounds silent models, not
+  people who are thinking. Stop (web) or Ctrl-C (repl) cancels the run and the
+  question with it.
+
+```mermaid
+sequenceDiagram
+  participant M as Model (SDK)
+  participant T as ask_user
+  participant E as Engine
+  participant F as Front end
+  M->>T: call(question, options)
+  T->>E: asker(call_id, question, options)
+  E-->>F: question.start {id, question, options}
+  F->>E: answer(id, text)
+  E-->>F: question.end {id, answer, ok}
+  E->>T: text
+  T->>M: tool result
+```
+
 `redact()` is applied to arguments and results before they leave the harness: a
 key that looks like a credential (`token`, `password`, `api_key`, … — the
 `SECRET_KEYS` list) becomes `[redacted]`, and any value longer than
@@ -605,6 +714,16 @@ await Repl(agent).start()
   and the branch when the session has a checkout.
 - `start(opening=...)` answers one prompt before reading, which is how
   `--repl --input ...` hands the command line prompt to an interactive session.
+- A question of the model (`question.start` of the current session) is
+  answered at the terminal: `asked()` starts `reply()` on a task of its own,
+  which prints the question in bold with numbered options, reads one line at
+  `Repl.ANSWER` (`answer> `) on the same reader thread and hands
+  `choice(line, options)` to `agent.answer()` — a number picks an option,
+  anything else is the answer in words. Questions are answered one at a time.
+  When a question closes without the repl (`question.end` of a cancelled run),
+  `answered()` cancels its reply, and the line still being typed goes to the
+  next prompt: every request for a line is answered by exactly one line, in
+  order.
 
 `reader` is the injection point (`reader(prompt) -> str | None`), which is what
 the tests drive it with, and `Agent.repl(**overrides)` is the factory to override
@@ -641,12 +760,17 @@ rather than closing the socket.
 | `prompt`     | client    | `text`, `attachments[{name, type, data}]`   |
 | `command`    | client    | `text`                                      |
 | `cancel`     | client    | —                                           |
+| `answer`     | client    | `id`, `text`                                |
 | `ping`/`pong`| both      | —                                           |
 | `block.start`| server    | `id`, `kind`, `role`, `text`, `attachments`, `complete` |
 | `block.delta`| server    | `id`, `kind`, `text`                        |
 | `block.end`  | server    | `id`, `kind`                                |
 | `tool.start` | server    | `id`, `kind`, `name`, `call_id`, `arguments`, `text` |
+| `tool.progress` | server | `id`, `kind`, `name`, `call_id`, `text`, `duration` |
 | `tool.end`   | server    | the above plus `ok`, `result`, `duration`   |
+| `model.wait` | server    | `role`, `elapsed`, `timeout`                |
+| `question.start` | server | `id`, `kind`, `call_id`, `question`, `options` |
+| `question.end` | server  | `id`, `kind`, `call_id`, `answer`, `ok`     |
 | `agent.end`  | server    | `error?`                                    |
 | `agent.error`| server    | `error`                                     |
 | `command`    | server    | `command`, `result`                         |
@@ -656,6 +780,15 @@ rather than closing the socket.
 Attachments are decoded from their data URLs, capped (8 MiB per prompt, 16 MiB
 per websocket message), written under `attachments/` in the session workspace
 with sanitized names and passed to the run as `extras["attachments"]`.
+
+`hello` resumes a session: `on_hello` calls `sessions.ensure(id)`, which hands
+back the session when it is still live and opens a new one when it has expired,
+ended or never existed, so the client may always send the last id it saw.
+`on_answer` hands an `answer` to `agent.answer()` scoped to the session of the
+connection (a connection without one answers nothing) and replies with an
+`error` only when there was no such question; the outcome reaches every client
+of the session as `question.end`. `WebServer` settles `ask_enabled` to `True`
+next to `read_outside=False`.
 
 `load_vscode_theme()` maps a subset of the VS Code theme spec onto the CSS
 custom properties the page uses, and the result is served at `/api/theme` and
@@ -675,7 +808,7 @@ differs.
 
 ## 19. Web client
 
-`app/agentic_ui.js` is eight small subsystems over one socket, exposed on
+`app/agentic_ui.js` is eleven small subsystems over one socket, exposed on
 `window.agentUI` so a console or a test harness can reach them without one:
 
 - **Icons** — a stroke icon set written inline with the code: no font, no
@@ -711,11 +844,31 @@ differs.
   Tab/Enter to select).
 - **Attachments** — files are read as data URLs, shown as removable chips and
   sent with the next prompt.
+- **Questions** — `question.start` turns the block of the `ask_user` call into a
+  card (`Block.ask`): the question as markdown, then one pill per option that
+  answers it. While a question is open the composer answers the oldest one
+  (`answer` instead of `prompt`, placeholder `Answer the agent…`, send shown
+  beside stop), and a pointer user gets the focus; on touch the keyboard is left
+  closed so the choices stay in view. `question.end` closes the card
+  (`Block.answered`): the picked pill fills with the accent and the rest dim, or
+  the answer in words appears under it, or `no answer` when the run was
+  cancelled. A later `tool.start`/`tool.end` of the same id only opens and ends
+  the card, never rewrites it.
+- **Wait** — `model.wait` shows a timer beside the mark (`42s`, then `m:ss`),
+  started from the reported `elapsed` and ticking locally each second, with the
+  budget in its tooltip; any `block.*`, `tool.*`, `agent.*`, `question.*`,
+  `cancelled` or `error` message stops it.
+- **Saved** — the session id of the last `hello` or session command is kept in
+  `localStorage` (`agentic.session`) and sent with the first `hello`, so a
+  reload resumes the conversation while the session is live; when the server
+  answers with another id, a note says the old session has ended. `/end`
+  forgets it. Storage that is barred (a private window) only costs the resume.
 - **Socket** — connects to `/ws`, says `hello` with the current session, routes
   server messages, and reconnects with exponential backoff (250 ms doubling to
   8 s) while the composer disables itself. The `history` of the `hello` reply is
   replayed into the discussion, replacing what is shown, so a reload or a
-  reconnect restores the conversation.
+  reconnect restores the conversation. A closed socket forgets open questions
+  and stops the timer, since the server cancels the run of a closed socket.
 
 `Theme.fromVsCode()` is the same table as `THEME_KEYS` on the server, for a
 theme the reader loads themselves with `/theme`, and `Theme.apply()` writes the
@@ -730,6 +883,13 @@ both, and every state is that same mark modulated:
 - **connected** — a whole ring and a solid core, in the accent colour.
 - **working** — the ring turns and a halo breathes around it while a run is in
   flight.
+- **tool alive** — the whole mark pops once (`data-beat`) for every
+  `tool.progress`, so a long command visibly keeps a pulse.
+- **model silent** — the mark pops for every `model.wait` and its core dims
+  (`data-waiting`), while the timer beside it counts the silence.
+- **asking** — the ring stops and closes and the halo ripples outward
+  (`data-asking`): the run waits on the reader. With reduced motion the halo is
+  held still instead.
 - **disconnected** — a dotted ring and a hollow core, in the error colour.
 
 The words are still there for a screen reader (`#status-text`, and the mark's
@@ -864,7 +1024,8 @@ agent.commands.register("mode", "Switch mode", my_handler)
 
 Common overrides: `resolve_config`, `build_prompt`, `decorate_prompt`,
 `build_model`, `build_vision`, `build_summarizer`, `build_tools`,
-`build_sdk_agent`, `build_input`, `build_policy`, `stall_timeout`, `remember`,
+`build_sdk_agent`, `build_input`, `build_policy`, `build_asker`,
+`stall_timeout`, `wait_reporter`, `remember`,
 `turn`, `stream`, `prepare_session`,
 `register_default_commands`, `ConversationMemory.trim`, `ConsoleRenderer.write` /
 `.style`, `Agent.repl` / `Repl.report` / `.banner_items` / `.reader`,
@@ -893,7 +1054,9 @@ python -m unittest test -v
 input, supplied or workspace built tools, trapped failures), config layering and redaction, model specs and the pool,
 the error taxonomy, the retry policy (backoff, jitter, bounded attempts,
 timeouts, cancellation), token and cost accounting, the stall guard around the
-leader's stream, input resolution, the event bus, prompt rendering, both stores
+leader's stream and the `model.wait` heartbeat of a silent one, questions
+(asking, answering, session scoping, cancellation, the `ask_user` tool and its
+mode gating), input resolution, the event bus, prompt rendering, both stores
 and the cache,
 session isolation and cleanup, session durability (rehydration,
 reconciliation, reaping and the sweeper), conversation memory (persistence,
@@ -902,8 +1065,10 @@ shell timeouts), tool assembly (vision on and off, guarded errors), repository
 URL normalization, git operations against local fixture repositories, pull
 request posting against a stubbed forge, command parsing, config file resolution
 (search order, JSON and YAML, nested groups, coercion, the layers around it), the
-repl (prompts, commands, sessions, interrupts, the banner) driven by an injected
-reader, the websocket protocol codec, and the scripted agent `test/agentic_e2e.py`
+repl (prompts, commands, sessions, interrupts, the banner, questions answered by
+number or in words and handed back on Ctrl-C) driven by an injected reader, the
+websocket protocol codec (session resume, answers scoped to their session), and
+the scripted agent `test/agentic_e2e.py`
 drives. No test needs a network or a model.
 
 `test/agentic_e2e.py` is the one that needs a browser: it is not part of the unit suite,

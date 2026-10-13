@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import codecs
 import contextlib
 import contextvars
 import functools
@@ -132,6 +133,14 @@ ROOT = Path(__file__).resolve().parent
 STEM = Path(__file__).stem
 
 Handler = Callable[["Event"], Any]
+#: Receives the output of a running command as it is produced; an empty string
+#: is a heartbeat, sent while the command is alive but quiet.
+Progress = Callable[[str], Awaitable[None]]
+#: A `Progress` for any tool call of a run, keyed by the id of the call.
+ToolReporter = Callable[[str | None, str], Awaitable[None]]
+#: Puts a question to the person behind a run: ``(call_id, question, options)``
+#: and returns their answer, empty when they gave none.
+Asker = Callable[[str | None, str, list[str]], Awaitable[str]]
 
 # ---------------------------------------------------------------------------
 # Config
@@ -448,11 +457,20 @@ class AgentConfig:
     max_turns: int = 100
     # Resilience of model calls. Every request to a provider is bounded by a
     # timeout and tried again on a transient failure (a timeout, a rate limit, a
-    # connection error or a 5xx) with exponential backoff and jitter. For the
-    # leader the timeout is a stall guard — the longest the stream may say
-    # nothing, extended by `shell_timeout` while a tool call is outstanding —
-    # and its stream is only restarted while it has produced nothing.
+    # connection error or a 5xx) with exponential backoff and jitter. The
+    # leader's stream is bound by `stream_timeout` instead, a stall guard — the
+    # longest the stream may say nothing, extended by `shell_timeout` while a
+    # tool call is outstanding and restarted by every heartbeat of that call —
+    # and is only restarted while it has produced nothing. It is longer than a
+    # request because some providers (Ollama) send a tool call whole once it is
+    # complete, so a model writing a long file is silent until it is done.
     request_timeout: float = 120.0
+    stream_timeout: float = 600.0
+    # While the leader's stream is silent and no tool call is open, a heartbeat
+    # (`model.wait`, with the seconds waited so far) is published every this
+    # many seconds, so a client can show a model that is still writing as alive.
+    # 0 disables it.
+    stream_heartbeat: float = 5.0
     retry_attempts: int = 3
     retry_backoff: float = 0.5
     retry_max_backoff: float = 30.0
@@ -522,8 +540,24 @@ class AgentConfig:
     db_path: Path | None = None
     cache_size: int = 256
     # Tools
-    shell_timeout: int = 120
+    shell_timeout: int = 900
+    # While a command runs, a heartbeat is reported every this many seconds
+    # (`tool.progress`); it keeps the stall guard of the leader from failing a
+    # slow but live command. 0 disables it.
+    shell_heartbeat: float = 5.0
+    # A command's output is clipped to this many characters (head and tail
+    # kept) before the model sees it; 0 disables the cap.
+    shell_output_limit: int = 32_000
     shell_enabled: bool = True
+    # Let the read tools (list, read, image) take paths outside the workspace;
+    # writes stay confined to it. ``None`` leaves it to the mode: the repl
+    # allows it, the web server and an embedded engine do not.
+    read_outside: bool | None = None
+    # Give the leader the `ask_user` tool, which puts a question to the person
+    # and waits for the answer. ``None`` leaves it to the mode: the repl and the
+    # web server have someone to answer, an embedded engine and a one shot run
+    # do not, and a question nobody can answer would hang the run.
+    ask_enabled: bool | None = None
     # Web
     host: str = "127.0.0.1"
     port: int = 8765
@@ -553,6 +587,15 @@ class AgentConfig:
             {k: v for k, v in overrides.items() if k not in known and v is not None}
         )
         return replace(self, extras=extras, **values)
+
+    def with_defaults(self, **defaults: Any) -> "AgentConfig":
+        """Return a copy with `defaults` applied to the fields still ``None``.
+
+        A mode (repl, web) uses it to settle what the layers left undecided
+        without overriding a value the user set.
+        """
+        unset = {k: v for k, v in defaults.items() if getattr(self, k, None) is None}
+        return self.merge(**unset)
 
     def with_env(self, environ: dict[str, str] | None = None) -> "AgentConfig":
         """Return a copy with ``AGENTIC_<FIELD>`` environment overrides applied."""
@@ -680,8 +723,12 @@ class EventType:
     BLOCK_DELTA = "block.delta"
     BLOCK_END = "block.end"
     TOOL_START = "tool.start"
+    TOOL_PROGRESS = "tool.progress"
     TOOL_END = "tool.end"
     MODEL_RETRY = "model.retry"
+    MODEL_WAIT = "model.wait"
+    QUESTION_START = "question.start"
+    QUESTION_END = "question.end"
     SESSION_OPEN = "session.open"
     SESSION_CLOSE = "session.close"
     LOG = "log"
@@ -1954,7 +2001,9 @@ class RetryPolicy:
     """How a model call is bounded in time and how often it is tried again.
 
     `attempts` counts attempts in total (``1`` never retries) and `timeout`
-    bounds a single attempt (``0`` leaves it unbounded). The wait after failure
+    bounds a single attempt (``0`` leaves it unbounded); `stall` bounds the
+    silence between two events of a stream instead (``0`` never stalls), which
+    the transport is given as its read timeout. The wait after failure
     *n* is ``backoff * 2 ** (n - 1)`` seconds, capped at `max_backoff` and
     multiplied by a random factor in ``[1 - jitter, 1]``, so that the clients a
     provider failed together do not all come back at the same moment.
@@ -1962,6 +2011,7 @@ class RetryPolicy:
 
     attempts: int = 3
     timeout: float = 120.0
+    stall: float = 600.0
     backoff: float = 0.5
     max_backoff: float = 30.0
     jitter: float = 0.5
@@ -1969,10 +2019,11 @@ class RetryPolicy:
 
     @classmethod
     def from_config(cls, config: "AgentConfig") -> "RetryPolicy":
-        """The policy a configuration describes (`request_timeout`, `retry_*`)."""
+        """The policy a configuration describes (`*_timeout`, `retry_*`)."""
         return cls(
             attempts=max(1, int(config.retry_attempts)),
             timeout=max(0.0, float(config.request_timeout)),
+            stall=max(0.0, float(config.stream_timeout)),
             backoff=max(0.0, float(config.retry_backoff)),
             max_backoff=max(0.0, float(config.retry_max_backoff)),
             jitter=min(max(float(config.retry_jitter), 0.0), 1.0),
@@ -2072,15 +2123,20 @@ class ModelPool:
         the event bus, unjittered, uncounted and nested inside whatever the
         harness is already doing, so retrying belongs to the `RetryPolicy` and
         to it alone. The transport timeout of the pool's policy is kept, since
-        it is what stops a socket that has gone quiet mid-response.
+        it is what stops a socket that has gone quiet mid-response; its read
+        timeout is the longer of `timeout` and `stall`, because the leader's
+        stream shares the client and may be legitimately silent for longer
+        than a request may take (a specialist call stays bound by `timeout`).
         """
         client = self._clients.get(spec.endpoint)
         if client is None:
+            import httpx
             from openai import AsyncOpenAI
 
             options: dict[str, Any] = {"max_retries": 0}
-            if self.policy.timeout:
-                options["timeout"] = self.policy.timeout
+            read = max(self.policy.timeout, self.policy.stall)
+            if read:
+                options["timeout"] = httpx.Timeout(self.policy.timeout or read, read=read)
             # An empty key means "no key here": pass nothing so the SDK falls
             # back to its own environment lookups (OPENAI_API_KEY, ...). When
             # that lookup would find nothing either, hand the SDK a placeholder
@@ -2202,6 +2258,21 @@ IMAGE_MIME = {
 MAX_READ_BYTES = 2 * 1024 * 1024
 
 
+def clip_output(text: str, limit: int) -> str:
+    """Clip text to about `limit` characters, keeping its head and tail.
+
+    A command's useful lines are usually its first (what ran) and its last
+    (the error, the summary, the exit code); the middle is what gets dropped.
+    A `limit` of 0 or less keeps the text whole.
+    """
+    if limit <= 0 or len(text) <= limit:
+        return text
+    head = limit // 2
+    tail = limit - head
+    omitted = len(text) - head - tail
+    return f"{text[:head]}\n[... {omitted} chars omitted ...]\n{text[-tail:]}"
+
+
 def guess_mime(path: Path | str) -> str:
     """Guess a MIME type from a file extension."""
     suffix = Path(path).suffix.lower()
@@ -2217,12 +2288,33 @@ class WorkspaceError(ValueError):
 class Workspace:
     """Filesystem and shell primitives scoped to a single directory."""
 
-    def __init__(self, root: Path | str, *, shell_timeout: int = 120) -> None:
+    #: Seconds a killed command may take to release its pipes before they are
+    #: abandoned, so a process that survives the kill cannot hang the caller.
+    KILL_GRACE = 5.0
+    #: Bytes read from a pipe of a running command at a time.
+    READ_CHUNK = 4096
+
+    def __init__(
+        self,
+        root: Path | str,
+        *,
+        shell_timeout: int = 900,
+        shell_output_limit: int = 32_000,
+        shell_heartbeat: float = 5.0,
+        read_outside: bool = False,
+    ) -> None:
         self.root = Path(root).expanduser().resolve()
         self.shell_timeout = shell_timeout
+        self.shell_output_limit = shell_output_limit
+        self.shell_heartbeat = shell_heartbeat
+        #: Reads may resolve outside the root; writes never do.
+        self.read_outside = read_outside
 
-    def resolve(self, raw: str) -> Path:
-        """Resolve a model supplied path inside the workspace root."""
+    def resolve(self, raw: str, *, read: bool = False) -> Path:
+        """Resolve a model supplied path inside the workspace root.
+
+        A `read` may leave the root when the workspace allows `read_outside`.
+        """
         cleaned = (raw or "").strip().strip("\"'")
         if not cleaned:
             raise WorkspaceError("path must not be empty")
@@ -2234,6 +2326,8 @@ class Workspace:
             resolved = path.resolve()
         except OSError as exc:  # pragma: no cover - platform specific
             raise WorkspaceError(str(exc)) from exc
+        if read and self.read_outside:
+            return resolved
         if resolved != self.root and not resolved.is_relative_to(self.root):
             raise WorkspaceError(f"path escapes the workspace root: {raw}")
         return resolved
@@ -2246,7 +2340,7 @@ class Workspace:
     # -- sync primitives ----------------------------------------------------
 
     def read_text(self, raw: str) -> str:
-        path = self.resolve(raw)
+        path = self.resolve(raw, read=True)
         if not path.is_file():
             raise WorkspaceError(f"file not found: {self.relative(path)}")
         if path.stat().st_size > MAX_READ_BYTES:
@@ -2260,13 +2354,13 @@ class Workspace:
         return self.relative(path)
 
     def list_dir(self, raw: str = ".") -> list[str]:
-        path = self.resolve(raw)
+        path = self.resolve(raw, read=True)
         if not path.is_dir():
             raise WorkspaceError(f"directory not found: {self.relative(path)}")
         return sorted(e.name + ("/" if e.is_dir() else "") for e in path.iterdir())
 
     def read_data_url(self, raw: str) -> str:
-        path = self.resolve(raw)
+        path = self.resolve(raw, read=True)
         if not path.is_file():
             raise WorkspaceError(f"file not found: {self.relative(path)}")
         data = path.read_bytes()
@@ -2297,36 +2391,123 @@ class Workspace:
 
     # -- async primitives ---------------------------------------------------
 
-    async def run_shell(self, command: str) -> str:
-        """Run a shell command in the workspace without blocking the loop."""
+    async def run_shell(self, command: str, progress: Progress | None = None) -> str:
+        """Run a shell command in the workspace without blocking the loop.
+
+        Output is read as it is produced and handed to `progress`, which also
+        gets an empty string every `shell_heartbeat` seconds while the command
+        runs, so a caller can tell a slow command from a dead one. A command that
+        times out or is cancelled is killed with every process it started: a
+        child holding the pipes would otherwise outlive the shell and keep the
+        call waiting for it.
+        """
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         try:
             process = await asyncio.create_subprocess_shell(
                 command,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.root,
                 env=env,
+                # its own process group, so a kill reaches its children (POSIX)
+                start_new_session=True,
             )
         except OSError as exc:
             return f"(command failed: {exc})"
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=self.shell_timeout
+        stdout: list[str] = []
+        stderr: list[str] = []
+
+        async def drain() -> None:
+            await asyncio.gather(
+                self.pump(process.stdout, stdout, progress),
+                self.pump(process.stderr, stderr, progress),
             )
-        except asyncio.TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                process.kill()
             await process.wait()
+
+        task = asyncio.ensure_future(drain())
+        try:
+            async with asyncio.timeout(self.shell_timeout):
+                while not task.done():
+                    await asyncio.wait({task}, timeout=self.shell_heartbeat or None)
+                    if not task.done():
+                        await self.notify(progress, "")
+            task.result()
+        except TimeoutError:
             return f"(command timed out after {self.shell_timeout}s)"
-        output = stdout.decode("utf-8", errors="replace")
-        error = stderr.decode("utf-8", errors="replace")
+        finally:
+            if not task.done():
+                await self.kill_tree(process)
+                # The pipes close once the last process holding them is gone;
+                # the wait is bounded so a survivor cannot hang the caller.
+                done, _ = await asyncio.wait({task}, timeout=self.KILL_GRACE)
+                if not done:
+                    task.cancel()
+                    print(
+                        f"[shell] pid {process.pid} kept its pipes open "
+                        f"{self.KILL_GRACE:g}s after the kill; abandoned",
+                        file=sys.stderr,
+                    )
+        output = "".join(stdout)
+        error = "".join(stderr)
         if error:
             output += ("\n" if output else "") + error
         if process.returncode:
             output += f"\n[exit code {process.returncode}]"
-        return output.strip() or "(no output)"
+        output = output.strip() or "(no output)"
+        clipped = clip_output(output, self.shell_output_limit)
+        if clipped is not output:
+            print(
+                f"[shell] output clipped: {len(output)} -> {len(clipped)} chars",
+                file=sys.stderr,
+            )
+        return clipped
+
+    async def pump(
+        self, stream: asyncio.StreamReader | None, sink: list[str], progress: Progress | None
+    ) -> None:
+        """Copy a pipe into `sink` until it closes, reporting each chunk."""
+        if stream is None:
+            return
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        while chunk := await stream.read(self.READ_CHUNK):
+            text = decoder.decode(chunk)
+            if text:
+                sink.append(text)
+                await self.notify(progress, text)
+        if tail := decoder.decode(b"", final=True):
+            sink.append(tail)
+            await self.notify(progress, tail)
+
+    @staticmethod
+    async def notify(progress: Progress | None, text: str) -> None:
+        """Hand `text` to `progress`; a failing observer never breaks the command."""
+        if progress is None:
+            return
+        try:
+            await progress(text)
+        except Exception as exc:
+            print(f"[shell] progress callback failed: {exc!r}", file=sys.stderr)
+
+    async def kill_tree(self, process: asyncio.subprocess.Process) -> None:
+        """Kill a shell and every process it started."""
+        try:
+            if os.name == "nt":
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill", "/F", "/T", "/PID", str(process.pid),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(killer.wait(), self.KILL_GRACE)
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # already gone
+        except (OSError, TimeoutError) as exc:
+            print(f"[shell] process tree kill failed: {exc!r}", file=sys.stderr)
+        with contextlib.suppress(OSError):  # the shell itself, if the tree kill missed it
+            process.kill()
 
 
 class ToolRegistry:
@@ -2354,6 +2535,8 @@ class ToolRegistry:
         *,
         vision: Callable[[str, str], Awaitable[str]] | None = None,
         checkout: "Checkout | None" = None,
+        progress: ToolReporter | None = None,
+        ask: Asker | None = None,
     ) -> list[Any]:
         """Build the tools for `workspace`.
 
@@ -2361,11 +2544,18 @@ class ToolRegistry:
         it is given, images are inspected by the vision model and only its text
         answer reaches the leader, so the leader needs no vision of its own.
         `checkout` is the session's git checkout; when it is given the leader
-        also gets the tools that publish its work.
+        also gets the tools that publish its work. `progress` receives the
+        ``(call_id, text)`` a long running tool reports while it works. `ask`
+        puts a question to the person behind the run; when it is given the
+        leader gets `ask_user`.
         """
-        tools = list(self._build_defaults(workspace, vision)) if self._defaults else []
+        tools = (
+            list(self._build_defaults(workspace, vision, progress)) if self._defaults else []
+        )
         if checkout is not None:
             tools.extend(self._build_repo_tools(checkout))
+        if ask is not None:
+            tools.append(self._build_ask_tool(ask))
         tools.extend(factory(workspace) for factory in self._factories.values())
         return tools
 
@@ -2450,6 +2640,30 @@ class ToolRegistry:
 
         return [git_status, git_commit, git_push, open_pull_request, publish_work]
 
+    def _build_ask_tool(self, ask: Asker) -> Any:
+        """The tool that lets the leader ask the person behind the run."""
+        from agents import function_tool
+        from agents.tool_context import ToolContext
+
+        @self.guard
+        async def ask_user(ctx: Any, question: str, options: list[str] | None = None) -> str:
+            choices = [str(option).strip() for option in options or [] if str(option).strip()]
+            answer = (await ask(ctx.tool_call_id, question.strip(), choices)).strip()
+            return answer or "(the user did not answer)"
+
+        # As for the shell: the class marks `ctx` as context, out of the schema.
+        ask_user.__annotations__["ctx"] = ToolContext
+        return function_tool(
+            ask_user,
+            name_override="ask_user",
+            description_override=(
+                "Ask the user a question and wait for the answer. Use it when the "
+                "request is ambiguous or a decision is theirs to make, not for "
+                "anything you can find out yourself. 'options' are suggested "
+                "answers shown as choices; the user may still answer in words."
+            ),
+        )
+
     # NOTE: the hosted tools of openai-agents (ApplyPatchTool, ShellTool, ...)
     # require the OpenAI Responses API. Chat Completions backends such as
     # OpenRouter only support plain function tools, so we implement our own.
@@ -2457,16 +2671,19 @@ class ToolRegistry:
         self,
         ws: Workspace,
         vision: Callable[[str, str], Awaitable[str]] | None = None,
+        progress: ToolReporter | None = None,
     ) -> Iterable[Any]:
         from agents import function_tool
+        from agents.tool_context import ToolContext
 
         guard = self.guard
+        reach = " Paths outside the workspace may be read too." if ws.read_outside else ""
 
         @function_tool(
             name_override="list_directory",
             description_override=(
                 "List files and subdirectories of a workspace directory. Use "
-                "relative paths such as '.' or 'notes'. One entry per line."
+                "relative paths such as '.' or 'notes'. One entry per line." + reach
             ),
         )
         @guard
@@ -2478,6 +2695,7 @@ class ToolRegistry:
             name_override="read_text_file",
             description_override=(
                 "Read a UTF-8 text file from the workspace and return its contents."
+                + reach
             ),
         )
         @guard
@@ -2500,7 +2718,7 @@ class ToolRegistry:
             name_override="view_image",
             description_override=(
                 "Read an image from the workspace and return it as a base64 data "
-                "URL so it can be inspected."
+                "URL so it can be inspected." + reach
             ),
         )
         @guard
@@ -2512,7 +2730,7 @@ class ToolRegistry:
             description_override=(
                 "Look at a workspace image with a vision model and return what it "
                 "sees as text. Pass 'question' to ask about something specific, "
-                "for example 'what text appears in this screenshot?'."
+                "for example 'what text appears in this screenshot?'." + reach
             ),
         )
         @guard
@@ -2546,18 +2764,25 @@ class ToolRegistry:
 
         if self._shell:
 
-            @function_tool(
-                name_override="run_shell_command",
-                description_override=(
-                    "Run a shell command with the workspace as the working "
-                    "directory and return stdout, stderr and the exit code."
-                ),
-            )
             @guard
-            async def run_shell_command(command: str) -> str:
-                return await ws.run_shell(command)
+            async def run_shell_command(ctx: Any, command: str) -> str:
+                report = functools.partial(progress, ctx.tool_call_id) if progress else None
+                return await ws.run_shell(command, report)
 
-            tools.append(run_shell_command)
+            # Postponed annotations would name the context type as a string the
+            # SDK cannot resolve here; the class itself marks `ctx` as context,
+            # which keeps it out of the schema and carries the id of the call.
+            run_shell_command.__annotations__["ctx"] = ToolContext
+            tools.append(
+                function_tool(
+                    run_shell_command,
+                    name_override="run_shell_command",
+                    description_override=(
+                        "Run a shell command with the workspace as the working "
+                        "directory and return stdout, stderr and the exit code."
+                    ),
+                )
+            )
 
         return tools
 
@@ -2578,8 +2803,11 @@ class ConsoleRenderer:
         "tool": "\x1b[2m",
         "error": "\x1b[31m",
         "title": "\x1b[1;36m",
+        "question": "\x1b[1m",
     }
     RESET = "\x1b[0m"
+    #: Seconds streamed text is gathered for before a terminal is written to.
+    FRAME = 0.05
 
     def __init__(
         self,
@@ -2587,16 +2815,24 @@ class ConsoleRenderer:
         color: bool | None = None,
         stream: Any = None,
         banners: bool = True,
+        frame: float | None = None,
     ) -> None:
         self.stream = stream or sys.stdout
+        tty = bool(getattr(self.stream, "isatty", lambda: False)())
         if color is None:
-            color = bool(getattr(self.stream, "isatty", lambda: False)()) and (
-                os.environ.get("NO_COLOR") is None
-            )
+            color = tty and os.environ.get("NO_COLOR") is None
         self.color = color
         #: Print the config banner when a run starts. A repl prints its own once
         #: and turns this off, so a banner is not repeated on every prompt.
         self.banners = banners
+        #: Streamed text is written at most once per frame instead of once per
+        #: token: a terminal that redraws on every token (VS Code over ConPTY)
+        #: falls behind a fast model, and a Ctrl-C typed meanwhile waits for it
+        #: to catch up. ``None`` frames a terminal only; ``0`` writes at once.
+        self.frame = (self.FRAME if tty else 0.0) if frame is None else frame
+        self._frame_kind: str | None = None
+        self._frame_text: list[str] = []
+        self._frame_timer: asyncio.TimerHandle | None = None
         self._prev_kind: str | None = None
         self._trailing_newlines = 0
 
@@ -2617,16 +2853,22 @@ class ConsoleRenderer:
 
     def handle(self, event: Event) -> None:
         kind = event.data.get("kind", "output")
+        if event.type == EventType.BLOCK_DELTA:
+            self.gather(kind, event.data.get("text", ""))
+            return
+        self.flush()
         if event.type == EventType.AGENT_START:
             config = event.data.get("config")
             if self.banners and isinstance(config, AgentConfig):
                 self.banner(config.name, config.banner_items())
-        elif event.type == EventType.BLOCK_DELTA:
-            self.emit(kind, event.data.get("text", ""))
         elif event.type == EventType.TOOL_START:
             self.emit("tool", f"-> {event.data.get('text', 'tool')}\n")
+        elif event.type == EventType.TOOL_PROGRESS:
+            if not event.data.get("text"):
+                self.emit("tool", ".")  # a heartbeat: the call is still alive
         elif event.type == EventType.TOOL_END:
-            self.emit("tool", self.tool_outcome(event.data))
+            beats = self._prev_kind == "tool" and not self._trailing_newlines
+            self.emit("tool", ("\n" if beats else "") + self.tool_outcome(event.data))
         elif event.type == EventType.MODEL_RETRY:
             self.emit("error", self.retry_notice(event.data))
         elif event.type == EventType.AGENT_ERROR:
@@ -2656,10 +2898,41 @@ class ConsoleRenderer:
         body = str(data.get("result") or "")
         return f"{line}\n{body}\n" if body else f"{line}\n"
 
+    def gather(self, kind: str, text: str) -> None:
+        """Queue streamed text for the current frame, or print it without one."""
+        if not text:
+            return
+        loop = None
+        if self.frame > 0:
+            with contextlib.suppress(RuntimeError):
+                loop = asyncio.get_running_loop()
+        if loop is None:
+            self.emit(kind, text)
+            return
+        if self._frame_kind not in (None, kind):
+            self.flush()
+        self._frame_kind = kind
+        self._frame_text.append(text)
+        if self._frame_timer is None:
+            self._frame_timer = loop.call_later(self.frame, self.flush)
+
+    def flush(self) -> None:
+        """Print the text gathered for the current frame."""
+        if self._frame_timer is not None:
+            self._frame_timer.cancel()
+            self._frame_timer = None
+        if not self._frame_text:
+            return
+        kind, text = self._frame_kind or "output", "".join(self._frame_text)
+        self._frame_kind = None
+        self._frame_text.clear()
+        self.emit(kind, text)
+
     def emit(self, kind: str, text: str) -> None:
         """Print streamed text, keeping one blank line between blocks."""
         if not text:
             return
+        self.flush()  # anything printed directly comes after the gathered text
         if self._prev_kind is not None and kind != self._prev_kind:
             needed = 2 - min(self._trailing_newlines, 2)
             if needed > 0:
@@ -2836,9 +3109,9 @@ class ToolCall:
     """One tool invocation of a run: what was called, with what, and how it went.
 
     The record is what makes a run auditable: it is published as `tool.start`
-    when the model asks for the call and as `tool.end` when the result comes
-    back, and it is kept on the `RunResult` so a caller can inspect the whole
-    sequence afterwards.
+    when the model asks for the call, as `tool.progress` while it reports what
+    it is doing, and as `tool.end` when the result comes back, and it is kept on
+    the `RunResult` so a caller can inspect the whole sequence afterwards.
     """
 
     id: str
@@ -2848,7 +3121,11 @@ class ToolCall:
     result: str = ""
     ok: bool = True
     started_at: float = field(default_factory=time.time)
+    seen_at: float = field(default_factory=time.time)
     ended_at: float | None = None
+    #: The call waits on a person (`ask_user`), so it is alive for as long as
+    #: it takes them to answer; the stall guard is for silent models only.
+    asking: bool = False
 
     @property
     def done(self) -> bool:
@@ -2858,6 +3135,11 @@ class ToolCall:
     def duration(self) -> float:
         """Seconds the call took, so far or in total."""
         return (self.ended_at or time.time()) - self.started_at
+
+    def touch(self) -> "ToolCall":
+        """Record a sign of life: the call is still running."""
+        self.seen_at = time.time()
+        return self
 
     def finish(self, result: str, ok: bool = True) -> "ToolCall":
         self.result = result
@@ -3007,6 +3289,9 @@ class Engine:
             self.renderer = ConsoleRenderer(color=self.config.color)
         if self.renderer is not None:
             self.renderer.attach(self.events)
+        #: Questions the model asked that wait for an answer, by question id:
+        #: the session they belong to and the future the answer resolves.
+        self.questions: dict[str, tuple[str | None, asyncio.Future[str]]] = {}
 
     # -- configuration ------------------------------------------------------
 
@@ -3117,10 +3402,14 @@ class Engine:
         *,
         usage: "Usage | None" = None,
         session_id: str | None = None,
+        progress: ToolReporter | None = None,
+        ask: Asker | None = None,
     ) -> list[Any]:
         resolved = config or self.config
         vision = self.build_vision(resolved, usage=usage, session_id=session_id)
-        return self.tools.build(workspace, vision=vision, checkout=checkout)
+        return self.tools.build(
+            workspace, vision=vision, checkout=checkout, progress=progress, ask=ask
+        )
 
     def build_sdk_agent(self, config: AgentConfig, tools: list[Any]) -> Any:
         from agents import Agent as SdkAgent
@@ -3139,7 +3428,13 @@ class Engine:
         target = workspace if workspace is not None else self.workspace
         if target is None or isinstance(target, Workspace):
             return target
-        return Workspace(target, shell_timeout=config.shell_timeout)
+        return Workspace(
+            target,
+            shell_timeout=config.shell_timeout,
+            shell_output_limit=config.shell_output_limit,
+            shell_heartbeat=config.shell_heartbeat,
+            read_outside=bool(config.read_outside),
+        )
 
     # -- run ----------------------------------------------------------------
 
@@ -3249,6 +3544,8 @@ class Engine:
                     checkout,
                     usage=result.usage,
                     session_id=result.session_id,
+                    progress=self.tool_reporter(result),
+                    ask=self.build_asker(config, result),
                 )
                 if sandbox
                 else []
@@ -3365,9 +3662,15 @@ class Engine:
         try:
             while True:
                 waiting = any(not call.done for call in result.tools)
+                budget = self.stall_timeout(policy, config, waiting)
                 try:
+                    # Silence while a tool runs is the tool's; it reports itself.
                     event = await self.next_event(
-                        events, self.stall_timeout(policy, config, waiting)
+                        events,
+                        budget,
+                        lambda: self.alive_at(result),
+                        heartbeat=0.0 if waiting else config.stream_heartbeat,
+                        on_wait=self.wait_reporter(result, budget),
                     )
                 except StopAsyncIteration:
                     break
@@ -3418,25 +3721,211 @@ class Engine:
         The SDK runs tool calls inside the stream, so while one is still
         outstanding the budget is extended by the time a tool is allowed to
         take; otherwise a slow shell command would be indistinguishable from a
-        stalled provider.
+        stalled provider. A tool that reports progress restarts the budget with
+        every report (see `next_event`), so only a silent one is bound by it.
         """
-        if not policy.timeout:
+        if not policy.stall:
             return 0.0
-        return policy.timeout + config.shell_timeout if waiting else policy.timeout
+        return policy.stall + config.shell_timeout if waiting else policy.stall
 
-    async def next_event(self, events: Any, timeout: float = 0.0) -> Any:
-        """The next event of an SDK stream, bounded by a stall `timeout`."""
-        if not timeout:
+    async def next_event(
+        self,
+        events: Any,
+        timeout: float = 0.0,
+        alive: Callable[[], float] | None = None,
+        *,
+        heartbeat: float = 0.0,
+        on_wait: Callable[[float], Awaitable[None]] | None = None,
+    ) -> Any:
+        """The next event of an SDK stream, bounded by a stall `timeout`.
+
+        The budget runs from the latest sign of life: the start of the wait, or
+        the newer time `alive` reports (the last heartbeat of a running tool),
+        so a busy tool keeps the stream open while a silent one does not.
+        While nothing arrives, `on_wait` is handed the seconds waited so far
+        every `heartbeat` seconds; it observes the wait and never extends it.
+        """
+        beating = heartbeat > 0 and on_wait is not None
+        if not timeout and not beating:
             return await events.__anext__()
+        start = time.time()
+        beat_at = start + heartbeat
+        pending = asyncio.ensure_future(events.__anext__())
         try:
-            async with asyncio.timeout(timeout):
-                return await events.__anext__()
-        except TimeoutError as exc:
-            raise ModelError(
-                f"the model sent nothing for {timeout:g}s",
-                ErrorKind.TIMEOUT,
+            while True:
+                now = time.time()
+                wait: float | None = None
+                if timeout:
+                    last = max(start, alive() if alive else start)
+                    wait = last + timeout - now
+                    if wait <= 0:
+                        raise ModelError(
+                            f"the model sent nothing for {timeout:g}s",
+                            ErrorKind.TIMEOUT,
+                            role=LEADER_ROLE,
+                        )
+                if beating:
+                    due = max(beat_at - now, 0.0)
+                    wait = due if wait is None else min(wait, due)
+                done, _ = await asyncio.wait({pending}, timeout=wait)
+                if done:
+                    return pending.result()
+                if beating and time.time() >= beat_at:
+                    beat_at = time.time() + heartbeat
+                    await self.notify_wait(on_wait, time.time() - start)
+        finally:
+            if not pending.done():
+                pending.cancel()
+
+    @staticmethod
+    async def notify_wait(
+        on_wait: Callable[[float], Awaitable[None]] | None, elapsed: float
+    ) -> None:
+        """Hand `elapsed` to `on_wait`; a failing observer never breaks the stream."""
+        if on_wait is None:
+            return
+        try:
+            await on_wait(elapsed)
+        except Exception as exc:
+            print(f"[stream] wait callback failed: {exc!r}", file=sys.stderr)
+
+    def wait_reporter(
+        self, result: RunResult, timeout: float = 0.0
+    ) -> Callable[[float], Awaitable[None]]:
+        """The `next_event` callback that publishes `model.wait` for a run.
+
+        `elapsed` is the silence so far and `timeout` the stall budget it runs
+        against (``0`` when unbounded), so a client can show both.
+        """
+
+        async def report(elapsed: float) -> None:
+            await self.events.publish(
+                EventType.MODEL_WAIT,
+                session_id=result.session_id,
                 role=LEADER_ROLE,
-            ) from exc
+                elapsed=round(elapsed, 3),
+                timeout=timeout,
+            )
+
+        return report
+
+    @staticmethod
+    def alive_at(result: RunResult) -> float:
+        """When a tool call of `result` that is still open last showed life.
+
+        A call that waits on a person is alive now, whatever it last reported.
+        """
+        now = time.time()
+        return max(
+            (now if call.asking else call.seen_at for call in result.tools if not call.done),
+            default=0.0,
+        )
+
+    def tool_reporter(self, result: RunResult) -> ToolReporter:
+        """The `(call_id, text)` callback the tools of a run report progress to.
+
+        Each report marks the call alive for the stall guard and is published as
+        `tool.progress` on the block of the call; `text` is output the tool
+        produced, or empty for a heartbeat. A report for no open call is dropped.
+        """
+
+        async def report(call_id: str | None, text: str) -> None:
+            call = self.pending_tool(result, call_id)
+            if call is None or call.done:
+                return
+            call.touch()
+            await self.events.publish(
+                EventType.TOOL_PROGRESS,
+                session_id=result.session_id,
+                id=call.id,
+                kind="tool",
+                name=call.name,
+                call_id=call.call_id,
+                text=redact(text, self.TOOL_VALUE_LIMIT),
+                duration=call.duration,
+            )
+
+        return report
+
+    # -- questions ----------------------------------------------------------
+
+    def build_asker(self, config: AgentConfig, result: RunResult) -> Asker | None:
+        """The `ask_user` delegate of a run, or ``None`` when nobody can answer.
+
+        A question is published as `question.start` on the block of its tool
+        call and waits until a front end hands the answer to `answer`; it ends
+        with `question.end`, also when the run is cancelled under it. The call
+        is marked as waiting on a person meanwhile, so the stall guard never
+        fails a run because its user is thinking.
+        """
+        if not config.ask_enabled:
+            return None
+
+        async def ask(call_id: str | None, question: str, options: list[str]) -> str:
+            call = next(
+                (c for c in result.tools if call_id is not None and c.call_id == str(call_id)),
+                None,
+            )
+            if call is None and call_id is None:
+                call = self.pending_tool(result, None)
+            # The card takes over the block of its call; without one it gets a
+            # block of its own, never an id an earlier question already used.
+            question_id = (
+                call.id if call is not None
+                else f"{result.session_id}-{result.run_id}-q{uuid.uuid4().hex[:6]}"
+            )
+            future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+            self.questions[question_id] = (result.session_id, future)
+            if call is not None:
+                call.asking = True
+            fields = {
+                "id": question_id,
+                "kind": "question",
+                "call_id": call.call_id if call is not None else call_id,
+            }
+            answer, ok = "", False
+            try:
+                await self.events.publish(
+                    EventType.QUESTION_START,
+                    session_id=result.session_id,
+                    question=question,
+                    options=list(options),
+                    **fields,
+                )
+                answer = await future
+                ok = True
+                return answer
+            finally:
+                self.questions.pop(question_id, None)
+                if call is not None:
+                    call.asking = False
+                    call.touch()
+                await self.events.publish(
+                    EventType.QUESTION_END,
+                    session_id=result.session_id,
+                    answer=answer,
+                    ok=ok,
+                    **fields,
+                )
+
+        return ask
+
+    def answer(self, question_id: str, text: str, *, session_id: str | None = None) -> bool:
+        """Answer an open question. False when there is none by that id.
+
+        With `session_id` the question must belong to that session, so a
+        client can only answer what its own session was asked.
+        """
+        entry = self.questions.get(str(question_id))
+        if entry is None:
+            return False
+        owner, future = entry
+        if session_id is not None and owner != session_id:
+            return False
+        if future.done():
+            return False
+        future.set_result(str(text))
+        return True
 
     @staticmethod
     def cancel_stream(streamed: Any) -> None:
@@ -4008,6 +4497,8 @@ class Repl:
     #: Commands the repl answers itself instead of passing to the agent.
     EXITS = ("exit", "quit")
     PROMPT = "> "
+    #: The prompt a question of the model is answered at.
+    ANSWER = "answer> "
 
     def __init__(
         self,
@@ -4019,6 +4510,9 @@ class Repl:
         reader: Callable[[str], str] | None = None,
     ) -> None:
         self.agent = agent
+        # a terminal user is on their own machine: reads may leave the workspace;
+        # and they are at the keyboard, so the model may ask them questions
+        agent.config = agent.config.with_defaults(read_outside=True, ask_enabled=True)
         self.template = (
             template or getattr(agent, "template", None) or PASSTHROUGH_TEMPLATE
         )
@@ -4029,6 +4523,9 @@ class Repl:
         self.session: Session | None = None
         self.task: "asyncio.Task[Any] | None" = None
         self.running = False
+        #: The task reading the answer to each open question, by question id.
+        self.replies: dict[str, "asyncio.Task[None]"] = {}
+        self._replying = asyncio.Lock()  # one question at the terminal at a time
         self._asks: "queue.Queue[str | None]" = queue.Queue()
         self._lines: "asyncio.Queue[str | None] | None" = None
         self._thread: threading.Thread | None = None
@@ -4046,6 +4543,10 @@ class Repl:
         self.agent.sessions.start_sweeper()
         self.greet()
         disarm = self.arm_interrupt()
+        unsubscribe = [
+            self.agent.events.on(EventType.QUESTION_START, self.asked),
+            self.agent.events.on(EventType.QUESTION_END, self.answered),
+        ]
         self.running = True
         try:
             if opening.strip():
@@ -4059,6 +4560,10 @@ class Repl:
                     await self.dispatch(line.strip())
         finally:
             self.running = False
+            for off in unsubscribe:
+                off()
+            for reply in list(self.replies.values()):
+                reply.cancel()
             disarm()
             self.stop_reader()
         return 0
@@ -4121,6 +4626,59 @@ class Repl:
         elif session is None and result.get("ok"):
             self.session = None  # ended; the next prompt opens a fresh one
 
+    # -- questions ----------------------------------------------------------
+
+    def asked(self, event: Event) -> None:
+        """`question.start`: read the answer at the terminal, off the bus.
+
+        Only questions of the session the repl is in are answered here, and the
+        reading happens on a task of its own, so the run that asked keeps the
+        loop while the person types.
+        """
+        if self.session is None or event.session_id != self.session.id:
+            return
+        question_id = str(event.data.get("id", ""))
+        if question_id and question_id not in self.replies:
+            self.replies[question_id] = asyncio.get_running_loop().create_task(
+                self.reply(question_id, event.data)
+            )
+
+    def answered(self, event: Event) -> None:
+        """`question.end`: stop reading for a question that closed without us.
+
+        A cancelled run takes its question with it; the line the person is
+        still typing then goes to the next prompt instead.
+        """
+        reply = self.replies.pop(str(event.data.get("id", "")), None)
+        if reply is not None and not reply.done() and reply is not asyncio.current_task():
+            reply.cancel()
+
+    async def reply(self, question_id: str, data: dict[str, Any]) -> None:
+        """Print a question, read the answer and hand it to the agent."""
+        try:
+            async with self._replying:
+                options = [str(option) for option in data.get("options") or []]
+                lines = [str(data.get("question") or "").strip() or "?"]
+                lines += [f"  {n}. {option}" for n, option in enumerate(options, 1)]
+                self.emit("question", "\n".join(lines) + "\n")
+                line = await self.read(self.ANSWER)
+                self.agent.answer(question_id, self.choice(line, options))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # a broken terminal must not hang the run
+            self.emit("error", f"question failed: {exc}\n")
+            self.agent.answer(question_id, "")
+        finally:
+            self.replies.pop(question_id, None)
+
+    @staticmethod
+    def choice(line: str | None, options: list[str]) -> str:
+        """The answer a line stands for: an option by its number, else the line."""
+        text = (line or "").strip()
+        if text.isdigit() and 1 <= int(text) <= len(options):
+            return options[int(text) - 1]
+        return text
+
     # -- input --------------------------------------------------------------
 
     def read_line(self, prompt: str) -> str | None:
@@ -4130,12 +4688,16 @@ class Repl:
         except EOFError:
             return None
 
-    async def read(self) -> str | None:
-        """Ask the reader thread for the next line, without blocking the loop."""
+    async def read(self, prompt: str | None = None) -> str | None:
+        """Ask the reader thread for the next line, without blocking the loop.
+
+        Every request is answered by exactly one line, in order, so a reader
+        that gives up (a question that closed) leaves its line to the next one.
+        """
         if self._lines is None:
             self._lines = asyncio.Queue()
             self.start_reader(asyncio.get_running_loop())
-        self._asks.put(self.prompt)
+        self._asks.put(self.prompt if prompt is None else prompt)
         return await self._lines.get()
 
     def start_reader(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -4538,6 +5100,9 @@ class WebServer:
         hub: Hub | None = None,
     ) -> None:
         self.agent = agent
+        # a web client may be anyone who reaches the port: reads stay confined;
+        # the page answers the questions of the model on the discussion itself
+        agent.config = agent.config.with_defaults(read_outside=False, ask_enabled=True)
         self.host = host or agent.config.host
         self.port = port or agent.config.port
         self.template = template or getattr(agent, "template", None) or PASSTHROUGH_TEMPLATE
@@ -4577,6 +5142,7 @@ class WebServer:
         self.hub.on("prompt", self.on_prompt)
         self.hub.on("command", self.on_command)
         self.hub.on("cancel", self.on_cancel)
+        self.hub.on("answer", self.on_answer)
         self.hub.on("ping", lambda conn, _msg: conn.send("pong"))
 
     async def on_hello(self, connection: Connection, message: dict[str, Any]) -> None:
@@ -4636,6 +5202,19 @@ class WebServer:
     async def on_cancel(self, connection: Connection, _message: dict[str, Any]) -> None:
         cancelled = await connection.cancel_task()
         await connection.send("cancelled", ok=cancelled)
+
+    async def on_answer(self, connection: Connection, message: dict[str, Any]) -> None:
+        """Answer a question the model asked the session of this connection.
+
+        The outcome reaches every client of the session as `question.end`, so
+        nothing is sent back here unless the answer found no question.
+        """
+        question = str(message.get("id", ""))
+        text = str(message.get("text", "")).strip()
+        # "" owns nothing: a connection without a session answers nothing
+        owner = connection.session_id or ""
+        if not self.agent.answer(question, text, session_id=owner):
+            await connection.fail("No open question to answer")
 
     # -- helpers ------------------------------------------------------------
 
