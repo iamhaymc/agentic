@@ -1851,6 +1851,24 @@ class ToolCallTest(unittest.TestCase):
         self.assertEqual(result.text_of("tool"), result.tools[0].report())
         self.assertEqual(result.output, "done")
 
+    def test_runs_of_one_session_never_reuse_a_block_id(self):
+        from agents import RunItemStreamEvent
+
+        class Streamed:
+            final_output = "done"
+
+            async def stream_events(inner):
+                yield RunItemStreamEvent(name="tool_called", item=self.call_item())
+
+        seen = []
+        self.engine.events.on(A.EventType.TOOL_START, lambda e: seen.append(e.data["id"]))
+        for _ in range(2):
+            result = A.RunResult(session_id="s1")
+            with unittest.mock.patch("agents.Runner.run_streamed", return_value=Streamed()):
+                run(self.engine.stream(None, "hi", self.engine.config, result))
+        self.assertEqual(len(seen), 2)
+        self.assertNotEqual(seen[0], seen[1])
+
 
 class AgentRunTest(unittest.TestCase):
     """Exercises the run pipeline with the SDK call stubbed out."""
@@ -2232,6 +2250,19 @@ class WebServerTest(unittest.TestCase):
         for path in ("/ui.css", "/ui.js"):
             self.assertIn(path, page)
             self.assertIn(path, A.WebServer.ASSETS)
+
+    def test_the_banner_is_printed_once_not_per_message(self):
+        out = io.StringIO()
+        self.agent.renderer = A.ConsoleRenderer(color=False, stream=out)
+        self.agent.renderer.attach(self.agent.events)
+        self.server.greet()
+        run(
+            self.agent.events.emit(
+                A.Event(type=A.EventType.AGENT_START, data={"config": self.agent.config})
+            )
+        )
+        self.assertEqual(out.getvalue().count(self.agent.config.name), 1)
+        self.assertFalse(self.agent.renderer.banners)
 
     def test_event_payloads_drop_non_serializable_values(self):
         event = A.Event(

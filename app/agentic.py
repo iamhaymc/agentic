@@ -2913,6 +2913,9 @@ class RunResult:
     blocks: list[Block] = field(default_factory=list)
     tools: list[ToolCall] = field(default_factory=list)
     session_id: str | None = None
+    #: Unique per run, so block ids stay unique across the runs of a session; a
+    #: client keys its blocks by id and would otherwise rewrite an older turn.
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     prompt: str = ""
     error: str | None = None
     #: One of `ErrorKind` when the run failed, so a caller can tell a rate limit
@@ -3286,7 +3289,9 @@ class Engine:
 
         def new_block(kind: str) -> Block:
             block = Block(
-                id=f"{session_id}-{len(result.blocks)}", kind=kind, session_id=session_id
+                id=f"{session_id}-{result.run_id}-{len(result.blocks)}",
+                kind=kind,
+                session_id=session_id,
             )
             blocks[block.id] = block
             result.blocks.append(block)
@@ -4740,20 +4745,27 @@ class WebServer:
         response.headers["Content-Type"] = content_type
         return response
 
+    def greet(self) -> None:
+        """Print the banner the server opens with."""
+        renderer = self.agent.renderer
+        if renderer is None:
+            return
+        renderer.banner(
+            f"{self.agent.config.name} (web)",
+            [
+                ("URL", f"http://{self.host}:{self.port}"),
+                ("Model", self.agent.config.inference_llm),
+                ("Vision Model", self.agent.config.inference_vlm or "(leader)"),
+                ("Theme", str(self.agent.config.theme or "(default)")),
+            ],
+        )
+        renderer.banners = False  # one banner per server, not one per message
+
     async def serve(self) -> None:
         """Serve until cancelled."""
         from websockets.asyncio.server import serve as ws_serve
 
-        if self.agent.renderer is not None:
-            self.agent.renderer.banner(
-                f"{self.agent.config.name} (web)",
-                [
-                    ("URL", f"http://{self.host}:{self.port}"),
-                    ("Model", self.agent.config.inference_llm),
-                    ("Vision Model", self.agent.config.inference_vlm or "(leader)"),
-                    ("Theme", str(self.agent.config.theme or "(default)")),
-                ],
-            )
+        self.greet()
         async with ws_serve(
             self.hub.serve_connection,
             self.host,

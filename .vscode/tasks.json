@@ -25,6 +25,22 @@
         "clear": true
       },
       "problemMatcher": []
+    },
+    {
+      "label": "serve",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "python", "app/agentic.py", "--serve"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
     }
   ]
 }

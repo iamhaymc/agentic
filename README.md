@@ -114,7 +114,7 @@ python app/agentic.py --input notes.md    # any arguments -> one-shot
 ## ▶️ Run (Page)
 
 ```bash
-python app/agentic.py --serve
+python app/agentic.py --serve # or run VS Code task "serve"
 ```
 
 > Default URL: `http://127.0.0.1:8765/`

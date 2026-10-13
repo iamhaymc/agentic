@@ -707,3 +707,9 @@ harness.
   `/agent_ui.js`, so every asset was a 404. Asset file names are now built from
   the module stem, the page links only the served `/ui.*` paths, and a unit
   test asserts both.
+- **Turns rewrote earlier turns.** Block ids were `{session}-{n}` with `n`
+  counted per `RunResult`, so every run of a session restarted at `-0`. The
+  client keys blocks by id, so a second prompt's reasoning and output were
+  written into the first turn's blocks above the new prompt, which looked like
+  output arriving before input. `RunResult.run_id` now joins the id
+  (`{session}-{run}-{n}`), and a unit test asserts two runs never share one.

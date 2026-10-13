@@ -492,7 +492,7 @@ its outcome as `<- name: ok in 12 ms` followed by the result, and disables colou
 when the stream is not a TTY
 or `AGENTIC_COLOR` says so. `write()`, `style()` and `banner()` are the override
 points; `banners=False` keeps the config banner from being printed on every run
-(which is what `Repl` does after printing its own), and `Agent(console=False)` or
+(which is what `Repl.greet()` and `WebServer.greet()` do after printing their own), and `Agent(console=False)` or
 `AGENTIC_QUIET=1` removes the renderer entirely.
 
 ## 15. Commands
@@ -532,7 +532,10 @@ client.
 `result`, `ok`, `duration`, with `signature()`, `report()` and `to_dict()`) and
 `RunResult` collects the blocks, the tool calls, the rendered prompt, the final
 output, the error and its `error_kind`, plus the `usage` of every model call the
-run made, with `ok`, `transient`, `fail(error, kind)` and `text_of(kind)`.
+run made, with `ok`, `transient`, `fail(error, kind)` and `text_of(kind)`. Its
+`run_id` is unique per run and is part of every block id
+(`{session}-{run}-{n}`), so the runs of one session never collide in a client
+that keys blocks by id.
 
 `Engine.run()` is the loop on its own, `Agent.run()` is the loop inside a
 session; both wrap the body in `running()`, the async context manager that
