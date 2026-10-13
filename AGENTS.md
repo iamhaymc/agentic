@@ -62,11 +62,25 @@
 
 ## Documentation Style
 
-- Dense and detailed.
-- Use lists over tables
+- Dense and detailed, but scannable: fragments over sentences, drop articles and filler
+- Lead with identity: logo + title, one-line italic tagline, then links to sibling docs
+- Doc links: `[NAME](NAME.md) — Short label`, NAME uppercase, label in Title case
+- Order sections by user journey: install → configure → use → run → test
+- Headings: `## ▶️ Verb (Qualifier)`, short and parallel
+  - e.g. `Package (Dev)` / `Package (Use)`, `Run (Tool)` / `Run (Page)`
+- Introduce each block with one short line ending in a colon, then the list or code
+- One idea per bullet, one line per bullet; no hard wraps mid-sentence
+- Callouts as blockquotes with an icon: `> ❗ Audience / caveat`, `> Key fact: value`
+- Show the rule first in **bold** (e.g. layer order with `→`), then bullets for details
+- Show one path per task; cut alternatives, pinning variants and incidental notes
+- Code fences always tagged (`bash`, `python`, `yaml`), minimal and runnable
+  - no blank lines inside short snippets, 2-space indent
+  - inline `#` comments for the alternative (e.g. `# or run VS Code task "serve"`)
+- Examples show one focused config group, not every option
+- Use lists over tables (HTML tables only for layout, like a logo header)
 - Use mermaid charts over ASCII charts
-- Try to avoid line breaks mid sentence
-- Use check list boxes (open: `- [ ]`, closed: `- [x]`)
+- Use checkboxes for tasks (`- [ ]` open, `- [x]` closed)
+- Push depth to `DESIGN.md`; the README is a quickstart
 
 ## Environment Tools
 
