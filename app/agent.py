@@ -30,7 +30,7 @@ In the simplest case a consumer owns a prompt template and does no more than::
 An application that already has its own sessions, history and storage embeds
 the loop on its own instead, with none of the batteries above::
 
-    engine = agent.Engine(api_key=..., model=..., env=False)
+    engine = agent.Engine(inference_key=..., inference_llm=..., env=False)
     result = await engine.run(my_messages, tools=my_tools)
 
 The module also works as a data driven application. With no arguments it opens
@@ -43,7 +43,8 @@ web layer::
 
 Configuration is read from ``agent.json``, ``agent.yaml`` or ``settings.yml`` — the
 current directory first, then next to this file — before the ``AGENT_*``
-environment; see `find_config_file` and `main`.
+environment, which a ``.env`` file found the same way adds to; see
+`find_config_file`, `find_env_file` and `main`.
 """
 
 from __future__ import annotations
@@ -77,6 +78,7 @@ from typing import (
     Awaitable,
     Callable,
     Iterable,
+    MutableMapping,
     Protocol,
     runtime_checkable,
 )
@@ -119,8 +121,11 @@ __all__ = [
     "WebServer",
     "Workspace",
     "find_config_file",
+    "find_env_file",
+    "load_env_file",
     "main",
     "read_config_file",
+    "read_env_file",
 ]
 
 ROOT = Path(__file__).resolve().parent
@@ -132,14 +137,14 @@ Handler = Callable[["Event"], Any]
 # Config
 #
 # Values are resolved in layers: dataclass defaults, then a JSON or YAML config
-# file, then the environment (``AGENT_*``), then whatever the consumer or the
-# CLI passes in.
+# file, then the environment (``AGENT_*``, plus a ``.env`` file loaded into it
+# first), then whatever the consumer or the CLI passes in.
 # ---------------------------------------------------------------------------
 
 ENV_PREFIX = "AGENT_"
 
-DEFAULT_API_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "deepseek/deepseek-v4-flash-0731"
+DEFAULT_INFERENCE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_INFERENCE_LLM = "deepseek/deepseek-v4-flash-0731"
 DEFAULT_INSTRUCTIONS = "You are a helpful, autonomous assistant."
 DEFAULT_VISION_INSTRUCTIONS = (
     "You describe images precisely and factually for another agent that cannot "
@@ -159,13 +164,16 @@ LEADER_ROLE = "leader"
 VISION_ROLE = "vision"
 SUMMARY_ROLE = "summary"
 
-SECRET_KEYS = ("api_key", "key", "token", "secret", "password")
+#: Config field naming each role's model, where it is not ``<role>_model``.
+ROLE_MODEL_FIELDS = {VISION_ROLE: "inference_vlm"}
+
+SECRET_FIELDS = ("api_key", "key", "token", "secret", "password")
 
 
 def is_secret_key(name: str) -> bool:
     """True when a config field name denotes a credential (``*_api_key``, ...)."""
     lowered = name.lower()
-    return any(lowered == key or lowered.endswith(f"_{key}") for key in SECRET_KEYS)
+    return any(lowered == key or lowered.endswith(f"_{key}") for key in SECRET_FIELDS)
 
 
 def mask_secret(value: str) -> str:
@@ -262,8 +270,8 @@ def read_config_file(path: Path | str) -> dict[str, Any]:
     """Read a JSON or YAML config file into a mapping.
 
     Parsed with `omegaconf` when it is installed, which also resolves
-    interpolations such as ``api_key: ${oc.env:AGENT_API_KEY}`` and
-    ``model: ${defaults.model}``. Without it JSON still works and YAML falls
+    interpolations such as ``inference_key: ${oc.env:AGENT_INFERENCE_KEY}`` and
+    ``inference_llm: ${defaults.llm}``. Without it JSON still works and YAML falls
     back to `pyyaml`.
     """
     file = Path(path).expanduser()
@@ -308,7 +316,7 @@ def _resolve_interpolations(data: Any) -> Any:
 def flatten_config(data: dict[str, Any], known: Iterable[str]) -> dict[str, Any]:
     """Flatten the nested groups a config file may use onto field names.
 
-    ``vision: {model: v}`` becomes ``vision_model``, but only when every key of
+    ``inference: {url: u}`` becomes ``inference_url``, but only when every key of
     the group names a real field; anything else is left alone and ends up in
     `AgentConfig.extras`. A nested ``extras`` mapping is folded in as is.
     """
@@ -328,6 +336,82 @@ def flatten_config(data: dict[str, Any], known: Iterable[str]) -> dict[str, Any]
             continue
         out[key] = value
     return out
+
+
+# Env files. A ``.env`` file, looked for in the same directories as the config
+# file, is loaded into the process environment before the config file is read,
+# so both ``${oc.env:VAR}`` interpolations and the ``AGENT_*`` layer see it.
+# The file wins over variables already set, so editing it always takes effect.
+
+ENV_FILE = ".env"
+
+
+def env_candidates(directories: Iterable[Path | str] | None = None) -> list[Path]:
+    """Every ``.env`` path that is looked at, in order of precedence."""
+    return [directory / ENV_FILE for directory in config_directories(directories)]
+
+
+def find_env_file(directories: Iterable[Path | str] | None = None) -> Path | None:
+    """The first ``.env`` file that exists, or ``None`` when there is none."""
+    for path in env_candidates(directories):
+        if path.is_file():
+            return path
+    return None
+
+
+def read_env_file(path: Path | str) -> dict[str, str]:
+    """Read a ``.env`` file into a mapping without touching the environment.
+
+    Parsed with `python-dotenv`, so quoting, ``export`` prefixes, comments and
+    ``${VAR}`` expansion behave as usual. A key without a value is dropped.
+    """
+    try:
+        from dotenv import dotenv_values
+    except ImportError as exc:  # pragma: no cover - depends on the install
+        raise RuntimeError(
+            "reading a .env file needs the 'python-dotenv' package"
+        ) from exc
+    values = dotenv_values(Path(path).expanduser(), encoding="utf-8")
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def load_env_file(
+    path: Path | str,
+    environ: MutableMapping[str, str] | None = None,
+    *,
+    override: bool = False,
+) -> dict[str, str]:
+    """Apply a ``.env`` file to `environ` (``os.environ`` by default).
+
+    Variables already set are kept unless `override` is true. Returns the
+    variables that were applied.
+    """
+    environ = os.environ if environ is None else environ
+    applied = {
+        key: value
+        for key, value in read_env_file(path).items()
+        if override or key not in environ
+    }
+    environ.update(applied)
+    return applied
+
+
+def _locate_file(
+    value: bool | str | Path | None, find: Callable[[], Path | None], label: str
+) -> Path | None:
+    """Resolve a file argument: ``True`` searches, ``False`` / ``None`` skips.
+
+    A path is taken as given, and one that does not exist is an error, because
+    the caller asked for that file by name.
+    """
+    if value is None or value is False:
+        return None
+    if value is True:
+        return find()
+    file = Path(value).expanduser()
+    if not file.is_file():
+        raise FileNotFoundError(f"no such {label}: {file}")
+    return file
 
 
 @dataclass(frozen=True)
@@ -358,9 +442,9 @@ class AgentConfig:
 
     name: str = "agent"
     instructions: str = DEFAULT_INSTRUCTIONS
-    model: str = DEFAULT_MODEL
-    api_url: str = DEFAULT_API_URL
-    api_key: str = ""
+    inference_url: str = DEFAULT_INFERENCE_URL
+    inference_key: str = ""
+    inference_llm: str = DEFAULT_INFERENCE_LLM
     max_turns: int = 100
     # Resilience of model calls. Every request to a provider is bounded by a
     # timeout and tried again on a transient failure (a timeout, a rate limit, a
@@ -377,11 +461,11 @@ class AgentConfig:
     # provider bills. Left at zero, `agent.end` reports tokens without a price.
     cost_input: float = 0.0
     cost_output: float = 0.0
-    # Vision specialist. When `vision_model` is set the leader model never sees
+    # Vision specialist. When `inference_vlm` is set the leader model never sees
     # image data: image tools delegate to this model and return its answer as
     # text, so a leader without vision can still work with images. The endpoint
     # and credential fall back to the leader's when left empty.
-    vision_model: str = ""
+    inference_vlm: str = ""
     vision_api_url: str = ""
     vision_api_key: str = ""
     vision_instructions: str = DEFAULT_VISION_INSTRUCTIONS
@@ -522,15 +606,17 @@ class AgentConfig:
         they declare their own, so a second model usually costs one setting.
         """
         if role == LEADER_ROLE:
-            return ModelSpec(LEADER_ROLE, self.model, self.api_url, self.api_key)
-        name = getattr(self, f"{role}_model", "") or ""
+            return ModelSpec(
+                LEADER_ROLE, self.inference_llm, self.inference_url, self.inference_key
+            )
+        name = getattr(self, ROLE_MODEL_FIELDS.get(role, f"{role}_model"), "") or ""
         if not name:
             return None
         return ModelSpec(
             role,
             name,
-            getattr(self, f"{role}_api_url", "") or self.api_url,
-            getattr(self, f"{role}_api_key", "") or self.api_key,
+            getattr(self, f"{role}_api_url", "") or self.inference_url,
+            getattr(self, f"{role}_api_key", "") or self.inference_key,
         )
 
     def to_dict(self, *, redact: bool = True) -> dict[str, Any]:
@@ -549,9 +635,9 @@ class AgentConfig:
         """Key/value rows describing the config, used by `ConsoleRenderer`."""
         items = [
             ("Name", self.name),
-            ("Model", self.model),
-            ("API URL", self.api_url),
-            ("API Key", mask_secret(self.api_key) or "(unset)"),
+            ("Model", self.inference_llm),
+            ("API URL", self.inference_url),
+            ("API Key", mask_secret(self.inference_key) or "(unset)"),
         ]
         vision = self.model_spec(VISION_ROLE)
         if vision is not None:
@@ -562,10 +648,11 @@ class AgentConfig:
         return items
 
 
-def resolve_input(raw: str) -> str:
+def resolve_input(raw: str | os.PathLike[str]) -> str:
     """Return input text, reading it from a file when `raw` is a file path."""
     if not raw:
         return ""
+    raw = os.fspath(raw)
     candidate = raw.strip()
     if len(candidate) < 4096 and "\n" not in candidate:
         path = Path(candidate).expanduser()
@@ -2863,7 +2950,7 @@ class Engine:
     infrastructure can drive inference and tool calls without inheriting any of
     it::
 
-        engine = Engine(api_key=..., model=..., env=False)
+        engine = Engine(inference_key=..., inference_llm=..., env=False)
         result = await engine.run(my_messages, tools=my_tools)
 
     `run` takes the model input verbatim (a prompt string or chat messages the
@@ -2891,11 +2978,17 @@ class Engine:
         console: bool = False,
         env: bool = True,
         config_file: bool | str | Path | None = True,
+        env_file: bool | str | Path | None = True,
         **overrides: Any,
     ) -> None:
         base = config or AgentConfig()
         #: The config file this instance was resolved from, when there was one.
         self.config_file = self.locate_config(config_file)
+        #: The ``.env`` file loaded into the environment, when there was one.
+        #: It is part of the environment layer, so ``env=False`` skips it too.
+        self.env_file = self.locate_env(env_file) if env else None
+        if self.env_file is not None:
+            load_env_file(self.env_file, override=True)
         if self.config_file is not None:
             base = base.with_file(self.config_file)
         self.config = (base.with_env() if env else base).merge(**overrides)
@@ -2922,14 +3015,12 @@ class Engine:
         file layer entirely, and a path is taken as given — a path that does not
         exist is an error, because the caller asked for that file by name.
         """
-        if config_file is None or config_file is False:
-            return None
-        if config_file is True:
-            return find_config_file()
-        file = Path(config_file).expanduser()
-        if not file.is_file():
-            raise FileNotFoundError(f"no such config file: {file}")
-        return file
+        return _locate_file(config_file, find_config_file, "config file")
+
+    @staticmethod
+    def locate_env(env_file: bool | str | Path | None = True) -> Path | None:
+        """Resolve the ``env_file`` argument the way `locate_config` does."""
+        return _locate_file(env_file, find_env_file, "env file")
 
     def resolve_config(self, config: AgentConfig | None = None, **overrides: Any) -> AgentConfig:
         """Resolve the config used for a run.
@@ -3455,6 +3546,7 @@ class Agent(Engine):
         commands: CommandRegistry | None = None,
         console: bool = True,
         config_file: bool | str | Path | None = True,
+        env_file: bool | str | Path | None = True,
         **overrides: Any,
     ) -> None:
         super().__init__(
@@ -3466,6 +3558,7 @@ class Agent(Engine):
             models=models,
             console=console,
             config_file=config_file,
+            env_file=env_file,
             **overrides,
         )
         self.store = store or SqliteStore(self.config.db_path)
@@ -3704,14 +3797,14 @@ class Agent(Engine):
 
         def model_command(args: str, **_: Any) -> dict[str, Any]:
             if args:
-                self.config = self.config.merge(model=args.strip())
-            return {"ok": True, "message": f"Model: {self.config.model}"}
+                self.config = self.config.merge(inference_llm=args.strip())
+            return {"ok": True, "message": f"Model: {self.config.inference_llm}"}
 
         def vision_command(args: str, **_: Any) -> dict[str, Any]:
             if args:
                 value = args.strip()
                 self.config = self.config.merge(
-                    vision_model="" if value in ("none", "off") else value
+                    inference_vlm="" if value in ("none", "off") else value
                 )
             spec = self.config.model_spec(VISION_ROLE)
             name = spec.name if spec is not None else "(leader)"
@@ -4134,6 +4227,9 @@ class Repl:
         file = getattr(self.agent, "config_file", None)
         if file is not None:
             items.append(("Config", str(file)))
+        file = getattr(self.agent, "env_file", None)
+        if file is not None:
+            items.append(("Env", str(file)))
         if self.session is not None:
             items.append(("Session", self.session.id))
             checkout = self.agent.checkout(self.session)
@@ -4653,8 +4749,8 @@ class WebServer:
                 f"{self.agent.config.name} (web)",
                 [
                     ("URL", f"http://{self.host}:{self.port}"),
-                    ("Model", self.agent.config.model),
-                    ("Vision Model", self.agent.config.vision_model or "(leader)"),
+                    ("Model", self.agent.config.inference_llm),
+                    ("Vision Model", self.agent.config.inference_vlm or "(leader)"),
                     ("Theme", str(self.agent.config.theme or "(default)")),
                 ],
             )

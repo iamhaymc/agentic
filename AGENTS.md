@@ -81,121 +81,44 @@
 
 #### Documentation files
 
-- _AGENTS.md_ Agent instructions
-- _CHANGES.md_ Closed tasks list sorted by version
-- _DESIGN.md_ Complete overview and reference
-- _EXAMPLE.ipynb_ Minimal demonstration
-- _INITIAL.md_ Initial description
-- _LICENSE.md_ Content license
-- _OPTIONS.md_ Configuration properties
-- _README.md_ Summary and quickstart
-- _TODO.md_ Open tasks list sorted by impact
+- _`AGENTS.md`_ Agent instructions
+- _`LICENSE.md`_ Content license
+- _`README.md`_ Summary and quickstart
+- _`OPTIONS.md`_ Configuration properties
+- _`DESIGN.md`_ Complete overview and reference
+- _`EXAMPLE.ipynb`_ Minimal demonstration
+- _`CHANGES.md`_ Closed tasks list sorted by version
+- _`TODO.md`_ Open tasks list sorted by impact
 
 #### Project CI/CD files
 
-- _settings.yml_
+- _setup.ps1_
+  - Environment setup (Windows)
+- _setup.sh_
+  - Environment setup (Mac/Linux)
+- _config.yml_
   - Default configuration
-- _init.ps1_
-  - dev environment setup (Windows)
-- _init.sh_
-  - dev environment setup (Mac/Linux)
-- _make.py_
-  - CI/CD: install, build, test, run, eval, deploy
 
-#### Native project files
+#### Project Python files
 
-- _app/core.c_
-  - C11 API library (no header)
-- _app/vulk.c_
-  - C11 Vulkan backend (no header)
-- _app/main.py_
-  - C11 CLI/TUI
-- _test/test.c_
-  - C11 unit tests (no header)
-- _test/e2e.c_
-  - C11 e2e tests and UI captures (images in `assets/`)
-- _test/eval.c_:
-  - Python benchmark tests
-
-#### Python project files
-
-- _app/core.py_
-  - Python API library
-- _app/main.py_
+- _app/\*main.py_
   - Python CLI/TUI
-- _test/test.py_:
+- _app/\*core.py_
+  - Python API library
+- _test/\*test_bdd.py_ or _app/\*test_bdd.py_:
   - Python unit tests
-- _test/e2e.py_:
-  - Python e2e tests and UI captures (images in `assets/`)
-- _test/eval.py_:
+- _test/\*test_e2e.py_ or _app/\*test_e2e.py_:
+  - Python UI captures (images in `assets/`)
+- _test/\*eval.py_:
   - Python benchmark tests
 - _pyproject.toml_
   - package metadata and dependencies
 
-#### Web UI project files
+#### Project Web UI files
 
-- _app/ui.html_
+- _app/\*ui.html_
   - Web UI markup
-- _app/ui.css_
+- _app/\*ui.css_
   - Web UI styles
-- _app/ui.js_:
+- _app/\*ui.js_:
   - Web UI logic
-
-## VS Code Settings
-
-```json
-"chat.useAgentSkills": true,
-"chat.useAgentsMdFile": true,
-"chat.useNestedAgentsMdFiles": false,
-"chat.useClaudeMdFile": false,
-"chat.useClaudeHooks": false,
-"chat.useHooks": false,
-"chat.agentHost.byokModels.enabled": true,
-"git.confirmSync": false,
-"git.enableSmartCommit": true,
-"[python]": {
-"editor.tabSize": 4,
-"editor.defaultFormatter": "ms-python.black-formatter"
-},
-"black-formatter.args": [
-"--line-length",
-"200"
-],
-"python.testing.unittestEnabled": false,
-"python.testing.pytestEnabled": true,
-"python.testing.pytestArgs": [
-"tests"
-],
-  "[yaml]": {
-    "editor.defaultFormatter": "redhat.vscode-yaml",
-    "editor.autoIndent": "keep",
-    "diffEditor.ignoreTrimWhitespace": false,
-    "editor.defaultColorDecorators": "auto",
-    "editor.quickSuggestions": {
-      "strings": true,
-      "other": true,
-      "comments": false
-    }
-  },
-  "yaml.validate": true,
-  "yaml.customTags": [
-    "!And",
-    "!Base64",
-    "!Cidr",
-    "!Condition",
-    "!Equals",
-    "!FindInMap",
-    "!GetAtt",
-    "!If",
-    "!ImportValue",
-    "!Include",
-    "!Join",
-    "!Not",
-    "!Or",
-    "!Ref",
-    "!Select",
-    "!Split",
-    "!Sub",
-    "!Transform"
-  ],
-```

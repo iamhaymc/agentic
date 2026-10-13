@@ -1,4 +1,4 @@
-# agent — Changes
+# ⏬ Agentic — Changes
 
 The record of what has been built and why it is built that way: the constraints
 the harness was designed against, the reasoning behind each subsystem, and the
@@ -129,6 +129,28 @@ export things. A file layer fixes that without becoming a framework.
   stray `agent.yaml` in the working directory of its host, in the same spirit as
   `env=False`; a named file that does not exist raises, because the caller asked
   for that file by name.
+
+### Env files
+
+Credentials belong in neither the config file nor the repository, and exporting
+them by hand before every run is the wrapper script the file layer set out to
+remove. A `.env` file closes that gap.
+
+- **Loaded into the environment, not into the config.** `.env` feeds
+  `os.environ` before the config file is read, so it serves both
+  `${oc.env:VAR}` interpolations (`INFERENCE_URL`, ...) and the `AGENT_*` layer
+  without a second resolution path.
+- **Fills gaps, never overrides.** A variable already set in the shell or the
+  deployment wins, so CI and production need not care whether a stray `.env`
+  is lying around.
+- **Same search path, same switch.** `.env` is looked for where the config file
+  is (cwd, then the module directory), and `env_file=` takes the same `True` /
+  `False` / path values as `config_file=`. It is part of the environment layer,
+  so `env=False` skips it as well and an embedded host's process environment is
+  left untouched.
+- **python-dotenv, imported lazily.** The parser handles quoting, `export` and
+  `${VAR}` expansion; a vendored `agent.py` without it only fails when a `.env`
+  is actually there to read.
 
 ## Events
 
@@ -606,6 +628,9 @@ harness.
 27. End to end capture: `e2e.py`, a scripted agent behind the real server,
     a Playwright pass over desktop and phone viewports, and the screenshots in
     `assets/` that `DESIGN.md` shows.
+28. Env files: `.env` loaded with `python-dotenv` into the environment before
+    the config file (`find_env_file`, `read_env_file`, `load_env_file`,
+    `Engine(env_file=...)`), existing variables winning.
 
 ## Fixes worth remembering
 
@@ -650,3 +675,25 @@ harness.
   outranks the browser rule behind the `hidden` attribute, so hiding send and
   showing stop did neither: both sat in the composer through every run. A single
   `[hidden] { display: none !important }` rule restores the attribute.
+- **`Path` inputs crashed the run.** `resolve_input()` called `.strip()` on its
+  argument, so `agent.run(..., input=Path("notes.md"))` raised `AttributeError`
+  despite paths being the documented way to pass input. It now accepts any
+  `os.PathLike` and normalizes it with `os.fspath()` first.
+- **`from agent import Agent` did not resolve.** The wheel listed `agent.py` at
+  the repo root while it lives in `app/`, so the editable install exposed the
+  root and neither the import nor the `agentic` script worked outside `app/`.
+  Hatch now maps `app/` to the package root with `sources = ["app"]`.
+- **`.env` settings silently ignored.** The docs named the inference settings
+  `inference_url` / `_key` / `_llm` / `_vlm` while the code read `api_url`,
+  `api_key`, `model` and `vision_model`, so `AGENT_INFERENCE_*` in a `.env`
+  matched no field and every run fell back to the OpenRouter default. The fields
+  are now the documented `inference_*` names (vision resolves through
+  `ROLE_MODEL_FIELDS`), and the engine loads `.env` with `override=True` so a
+  stale shell variable can no longer hide an edit to the file.
+- **Two `SECRET_KEYS`.** The config's credential list and the event redaction
+  list shared one name, so the second silently replaced the first and
+  `is_secret_key()` lost its bare `key` entry — `inference_key` would have been
+  serialized unmasked. The config list is now `SECRET_FIELDS`.
+- **Unit tests read the developer's `.env`.** Default discovery found the real
+  file in the working directory and loaded it into the test process. The test
+  module now makes the default search find nothing; explicit lookups still run.

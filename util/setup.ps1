@@ -1,7 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Push-Location $ScriptDir
+$ProjectDir = Split-Path -Parent $ScriptDir
+Push-Location $ProjectDir
 
 function Test-CommandExists {
     param([string]$Name)
@@ -49,7 +50,7 @@ function Install-Python {
         Write-Host "Python 3.12 not found; installing it via uv..."
         uv python install 3.12
     }
-    $venvPython = Join-Path $ScriptDir ".venv\Scripts\python.exe"
+    $venvPython = Join-Path $ProjectDir ".venv\Scripts\python.exe"
     if (-not (Test-Path $venvPython)) {
         Write-Host "Creating virtual environment in .venv..."
         uv venv --python 3.12 .venv
@@ -61,7 +62,7 @@ function Install-Python {
     }
 }
 
-function Install-CCompiler {
+function Install-Clang {
     $compiler = @("cc", "clang", "gcc") | Where-Object { Test-CommandExists $_ } | Select-Object -First 1
     if ($compiler) {
         Write-Host "C compiler already installed."

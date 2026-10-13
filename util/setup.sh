@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_DIR"
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
@@ -32,7 +33,7 @@ install_python() {
         uv python install 3.12
     fi
 
-    local venv_python="$SCRIPT_DIR/.venv/bin/python"
+    local venv_python="$PROJECT_DIR/.venv/bin/python"
     if [ ! -x "$venv_python" ]; then
         echo "Creating virtual environment in .venv..."
         uv venv --python 3.12 .venv

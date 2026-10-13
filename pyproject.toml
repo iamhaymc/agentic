@@ -1,10 +1,11 @@
 [project]
-name = "agent"
+name = "agentic"
 version = "0.1.0"
 description = "Yet another agent harness"
 requires-python = ">=3.12"
 dependencies = [
     "jinja2",
+    "python-dotenv",
     "omegaconf",
     "websockets",
     "openai",
@@ -13,14 +14,15 @@ dependencies = [
     "transformers @ git+https://github.com/huggingface/transformers",
     "accelerate",
     "lighteval",
-    "pillow"
+    "pillow",
+    "ipykernel"
 ]
 
 [project.optional-dependencies]
 e2e = ["playwright"]
 
 [project.scripts]
-agent = "agent:main"
+agentic = "agent:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -30,4 +32,5 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-include = ["main.py", "ui.html", "ui.css", "ui.js"]
+only-include = ["app/agent.py", "app/agent_ui.html", "app/agent_ui.css", "app/agent_ui.js"]
+sources = ["app"]

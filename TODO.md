@@ -1,4 +1,4 @@
-# TODO
+# ⏬ Agentic — TODO
 
 Everything still open, in one flat list, most important first.
 Nothing delivered is recorded here:

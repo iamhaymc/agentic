@@ -1,6 +1,6 @@
 {
   "chat.newSession.defaultMode": "agent",
-  "chat.defaultModel": "huihui_ai/Qwen3.8-abliterated:27b (ollama-models)",
+  // "chat.defaultModel": "huihui_ai/Qwen3.8-abliterated:27b (ollama-models)",
   "chat.agentHost.copilot.reasoningEffortOverride": "high",
   "github.copilot.chat.reasoningEffortOverride": "high",
   "chat.agent.maxRequests": 1000,
@@ -34,6 +34,15 @@
   "python.testing.pytestArgs": [
     "tests"
   ],
+  "[javascript]": {
+    "editor.defaultFormatter": "vscode.typescript-language-features"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "vscode.typescript-language-features"
+  },
+  "[html]": {
+    "editor.defaultFormatter": "vscode.html-language-features"
+  },
   "[yaml]": {
     "editor.defaultFormatter": "redhat.vscode-yaml",
     "editor.autoIndent": "keep",
@@ -79,4 +88,10 @@
   "editor.detectIndentation": true,
   "editor.insertSpaces": true,
   "editor.tabSize": 2,
+  "files.exclude": {
+    "**/.venv": true,
+    "**/__pycache__": true,
+    "**/node_modules": true,
+    "**/package-lock.json": true
+  }
 }

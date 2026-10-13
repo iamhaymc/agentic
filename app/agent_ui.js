@@ -275,7 +275,7 @@
             .join("");
           out.push(
             `<div class="table-wrap"><table><thead><tr>${header}</tr></thead>` +
-              `<tbody>${body}</tbody></table></div>`,
+            `<tbody>${body}</tbody></table></div>`,
           );
           continue;
         }
@@ -827,8 +827,8 @@
           Blocks.note(
             "error",
             `${message.role || "leader"} model ${message.error_kind || "error"}: ` +
-              `retry ${(Number(message.attempt) || 1) + 1}/${Number(message.attempts) || 1} ` +
-              `in ${(Number(message.delay) || 0).toFixed(1)}s`,
+            `retry ${(Number(message.attempt) || 1) + 1}/${Number(message.attempts) || 1} ` +
+            `in ${(Number(message.delay) || 0).toFixed(1)}s`,
           );
           break;
         case "agent.end":

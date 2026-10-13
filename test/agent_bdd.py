@@ -23,6 +23,20 @@ from pathlib import Path
 
 import app.agent as A
 
+_find_env_file = A.find_env_file
+
+
+def setUpModule():
+    # Keep the developer's own .env out of the tests: a search without explicit
+    # directories finds nothing, while explicit lookups still work.
+    patcher = unittest.mock.patch.object(
+        A,
+        "find_env_file",
+        lambda directories=None: None if directories is None else _find_env_file(directories),
+    )
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
 
 def run(coro):
     return asyncio.run(coro)
@@ -30,8 +44,8 @@ def run(coro):
 
 class ConfigTest(unittest.TestCase):
     def test_merge_keeps_known_fields_and_collects_extras(self):
-        config = A.AgentConfig().merge(model="m", genre="noir", ignored=None)
-        self.assertEqual(config.model, "m")
+        config = A.AgentConfig().merge(inference_llm="m", genre="noir", ignored=None)
+        self.assertEqual(config.inference_llm, "m")
         self.assertEqual(config.extras["genre"], "noir")
         self.assertNotIn("ignored", config.extras)
 
@@ -42,20 +56,20 @@ class ConfigTest(unittest.TestCase):
             _ = config.missing
 
     def test_env_layer_coerces_types(self):
-        env = {"AGENT_PORT": "9100", "AGENT_QUIET": "true", "AGENT_MODEL": "env-model"}
+        env = {"AGENT_PORT": "9100", "AGENT_QUIET": "true", "AGENT_INFERENCE_LLM": "env-model"}
         config = A.AgentConfig().with_env(env)
         self.assertEqual(config.port, 9100)
         self.assertTrue(config.quiet)
-        self.assertEqual(config.model, "env-model")
+        self.assertEqual(config.inference_llm, "env-model")
 
     def test_env_layer_coerces_paths(self):
         config = A.AgentConfig().with_env({"AGENT_THEME": "/tmp/theme.json"})
         self.assertEqual(config.theme, Path("/tmp/theme.json"))
 
     def test_to_dict_redacts_secrets(self):
-        config = A.AgentConfig(api_key="sk-abcdefghijklmnop")
-        self.assertEqual(config.to_dict()["api_key"], "sk-abcde...mnop")
-        self.assertEqual(config.to_dict(redact=False)["api_key"], "sk-abcdefghijklmnop")
+        config = A.AgentConfig(inference_key="sk-abcdefghijklmnop")
+        self.assertEqual(config.to_dict()["inference_key"], "sk-abcde...mnop")
+        self.assertEqual(config.to_dict(redact=False)["inference_key"], "sk-abcdefghijklmnop")
 
     def test_to_dict_redacts_role_secrets(self):
         config = A.AgentConfig(vision_api_key="sk-abcdefghijklmnop")
@@ -68,7 +82,7 @@ class ConfigTest(unittest.TestCase):
 
 class ModelSpecTest(unittest.TestCase):
     def test_leader_spec_uses_the_primary_settings(self):
-        config = A.AgentConfig(model="m", api_url="http://url", api_key="k")
+        config = A.AgentConfig(inference_llm="m", inference_url="http://url", inference_key="k")
         spec = config.model_spec()
         self.assertEqual((spec.role, spec.name, spec.api_url, spec.api_key),
                          ("leader", "m", "http://url", "k"))
@@ -77,19 +91,19 @@ class ModelSpecTest(unittest.TestCase):
         self.assertIsNone(A.AgentConfig().model_spec(A.VISION_ROLE))
 
     def test_vision_inherits_the_leader_endpoint(self):
-        config = A.AgentConfig(api_url="http://url", api_key="k", vision_model="v")
+        config = A.AgentConfig(inference_url="http://url", inference_key="k", inference_vlm="v")
         spec = config.model_spec(A.VISION_ROLE)
         self.assertEqual((spec.name, spec.api_url, spec.api_key), ("v", "http://url", "k"))
 
     def test_vision_may_use_its_own_endpoint(self):
         config = A.AgentConfig(
-            vision_model="v", vision_api_url="http://other", vision_api_key="k2"
+            inference_vlm="v", vision_api_url="http://other", vision_api_key="k2"
         )
         spec = config.model_spec(A.VISION_ROLE)
         self.assertEqual((spec.api_url, spec.api_key), ("http://other", "k2"))
 
     def test_vision_model_appears_in_the_banner(self):
-        keys = [k for k, _ in A.AgentConfig(vision_model="v").banner_items()]
+        keys = [k for k, _ in A.AgentConfig(inference_vlm="v").banner_items()]
         self.assertIn("Vision Model", keys)
         self.assertNotIn("Vision Model", [k for k, _ in A.AgentConfig().banner_items()])
 
@@ -693,6 +707,13 @@ class InputResolutionTest(unittest.TestCase):
             path = Path(tmp) / "prompt.md"
             path.write_text("from file", encoding="utf-8")
             self.assertEqual(A.resolve_input(str(path)), "from file")
+
+    def test_path_object_is_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "prompt.md"
+            path.write_text("from path", encoding="utf-8")
+            self.assertEqual(A.resolve_input(path), "from path")
+            self.assertEqual(A.resolve_input(Path(tmp) / "missing.md"), str(Path(tmp) / "missing.md"))
 
     def test_agent_assigns_resolved_text_to_config_input(self):
         agent = A.Agent(console=False, store=A.MemoryStore())
@@ -1487,14 +1508,14 @@ class AgentCommandTest(unittest.TestCase):
 
     def test_model_command_updates_config(self):
         run(self.agent.commands.invoke("/model my-model"))
-        self.assertEqual(self.agent.config.model, "my-model")
+        self.assertEqual(self.agent.config.inference_llm, "my-model")
 
     def test_vision_command_sets_and_clears_the_vision_model(self):
         self.assertIn("(leader)", run(self.agent.commands.invoke("/vision"))["message"])
         run(self.agent.commands.invoke("/vision my-eyes"))
-        self.assertEqual(self.agent.config.vision_model, "my-eyes")
+        self.assertEqual(self.agent.config.inference_vlm, "my-eyes")
         run(self.agent.commands.invoke("/vision none"))
-        self.assertEqual(self.agent.config.vision_model, "")
+        self.assertEqual(self.agent.config.inference_vlm, "")
 
     def test_build_vision_delegates_to_the_pool(self):
         calls: list[tuple] = []
@@ -1505,7 +1526,7 @@ class AgentCommandTest(unittest.TestCase):
                 return "described"
 
         agent = A.Agent(
-            console=False, store=A.MemoryStore(), models=Pool(), vision_model="v"
+            console=False, store=A.MemoryStore(), models=Pool(), inference_vlm="v"
         )
         self.addCleanup(agent.close)
         self.assertIsNone(agent.build_vision(A.AgentConfig()))
@@ -1545,10 +1566,10 @@ class EngineTest(unittest.TestCase):
     def test_env_layer_can_be_skipped(self):
         import os
 
-        os.environ["AGENT_MODEL"] = "env-model"
-        self.addCleanup(os.environ.pop, "AGENT_MODEL", None)
-        self.assertEqual(A.Engine(env=False).config.model, A.DEFAULT_MODEL)
-        self.assertEqual(A.Engine().config.model, "env-model")
+        os.environ["AGENT_INFERENCE_LLM"] = "env-model"
+        self.addCleanup(os.environ.pop, "AGENT_INFERENCE_LLM", None)
+        self.assertEqual(A.Engine(env=False).config.inference_llm, A.DEFAULT_INFERENCE_LLM)
+        self.assertEqual(A.Engine().config.inference_llm, "env-model")
 
     def test_run_takes_the_model_input_verbatim(self):
         engine = self.FakeEngine(env=False)
@@ -1984,7 +2005,7 @@ class AgentRunTest(unittest.TestCase):
     def test_a_summarizer_is_only_built_when_asked_for(self):
         self.assertIsNone(self.agent.memory.summarizer)
         agent = self.FakeAgent(
-            console=False, store=A.MemoryStore(), memory_summary=True, model="m"
+            console=False, store=A.MemoryStore(), memory_summary=True, inference_llm="m"
         )
         self.addCleanup(agent.close)
         self.assertIsNotNone(agent.memory.summarizer)
@@ -2200,7 +2221,7 @@ class WebServerTest(unittest.TestCase):
         status, body = self.server.rest("/api/health")
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)["ok"])
-        self.assertIn("model", json.loads(self.server.rest("/api/config")[1]))
+        self.assertIn("inference_llm", json.loads(self.server.rest("/api/config")[1]))
         self.assertIsInstance(json.loads(self.server.rest("/api/commands")[1]), list)
         self.assertIsNone(self.server.rest("/api/unknown"))
 
@@ -2362,11 +2383,11 @@ class ConfigFileTest(unittest.TestCase):
         near, far = self.tmp / "near", self.tmp / "far"
         near.mkdir()
         far.mkdir()
-        (far / "agent.yaml").write_text("model: far\n", encoding="utf-8")
+        (far / "agent.yaml").write_text("inference_llm: far\n", encoding="utf-8")
         self.assertEqual(
             A.find_config_file(directories=[near, far]), far / "agent.yaml"
         )
-        (near / "agent.yaml").write_text("model: near\n", encoding="utf-8")
+        (near / "agent.yaml").write_text("inference_llm: near\n", encoding="utf-8")
         self.assertEqual(
             A.find_config_file(directories=[near, far]), near / "agent.yaml"
         )
@@ -2376,7 +2397,7 @@ class ConfigFileTest(unittest.TestCase):
 
     def test_json_and_yaml_read_the_same_way(self):
         js = self.write("agent.json", '{"model": "j", "port": 9001}')
-        ya = self.write("agent.yaml", "model: y\nport: 9002")
+        ya = self.write("agent.yaml", "inference_llm: y\nport: 9002")
         self.assertEqual(A.read_config_file(js)["model"], "j")
         self.assertEqual(A.read_config_file(ya)["port"], 9002)
 
@@ -2384,7 +2405,7 @@ class ConfigFileTest(unittest.TestCase):
         path = self.write(
             "agent.yaml",
             """
-            model: file-model
+            inference_llm: file-model
             port: 9100
             quiet: true
             theme: /tmp/theme.json
@@ -2393,7 +2414,7 @@ class ConfigFileTest(unittest.TestCase):
             """,
         )
         config = A.AgentConfig().with_file(path)
-        self.assertEqual(config.model, "file-model")
+        self.assertEqual(config.inference_llm, "file-model")
         self.assertEqual(config.port, 9100)
         self.assertIs(config.quiet, True)
         self.assertEqual(config.theme, Path("/tmp/theme.json"))
@@ -2404,15 +2425,16 @@ class ConfigFileTest(unittest.TestCase):
         path = self.write(
             "agent.yaml",
             """
+            inference:
+              vlm: eyes
             vision:
-              model: eyes
               max_tokens: 33
             memory:
               enabled: false
             """,
         )
         config = A.AgentConfig().with_file(path)
-        self.assertEqual(config.vision_model, "eyes")
+        self.assertEqual(config.inference_vlm, "eyes")
         self.assertEqual(config.vision_max_tokens, 33)
         self.assertFalse(config.memory_enabled)
 
@@ -2433,8 +2455,8 @@ class ConfigFileTest(unittest.TestCase):
         self.assertEqual(config.mood, "calm")
 
     def test_null_leaves_the_default_in_place(self):
-        path = self.write("agent.yaml", "model: null")
-        self.assertEqual(A.AgentConfig().with_file(path).model, A.DEFAULT_MODEL)
+        path = self.write("agent.yaml", "inference_llm: null")
+        self.assertEqual(A.AgentConfig().with_file(path).inference_llm, A.DEFAULT_INFERENCE_LLM)
 
     def test_an_empty_file_is_harmless(self):
         self.assertEqual(A.read_config_file(self.write("agent.yaml", "")), {})
@@ -2446,32 +2468,32 @@ class ConfigFileTest(unittest.TestCase):
 
     def test_without_a_path_nothing_found_means_no_change(self):
         with unittest.mock.patch.object(A, "find_config_file", return_value=None):
-            self.assertEqual(A.AgentConfig(model="m").with_file().model, "m")
+            self.assertEqual(A.AgentConfig(inference_llm="m").with_file().inference_llm, "m")
 
     def test_the_engine_layers_file_then_environment_then_arguments(self):
-        path = self.write("agent.yaml", "model: from-file\nport: 9100")
+        path = self.write("agent.yaml", "inference_llm: from-file\nport: 9100")
         engine = A.Engine(config_file=path, env=False)
         self.assertEqual(engine.config_file, path)
-        self.assertEqual(engine.config.model, "from-file")
+        self.assertEqual(engine.config.inference_llm, "from-file")
         self.assertEqual(engine.config.port, 9100)
         with unittest.mock.patch.dict(
-            "os.environ", {"AGENT_MODEL": "from-env"}, clear=False
+            "os.environ", {"AGENT_INFERENCE_LLM": "from-env"}, clear=False
         ):
             engine = A.Engine(config_file=path)
-            self.assertEqual(engine.config.model, "from-env")
+            self.assertEqual(engine.config.inference_llm, "from-env")
             self.assertEqual(engine.config.port, 9100)
-            engine = A.Engine(config_file=path, model="from-argument")
-            self.assertEqual(engine.config.model, "from-argument")
+            engine = A.Engine(config_file=path, inference_llm="from-argument")
+            self.assertEqual(engine.config.inference_llm, "from-argument")
 
     def test_a_file_in_the_working_directory_is_found_on_its_own(self):
-        self.write("agent.yaml", "model: from-the-cwd")
+        self.write("agent.yaml", "inference_llm: from-the-cwd")
         cwd = os.getcwd()
         self.addCleanup(os.chdir, cwd)
         os.chdir(self.tmp)
-        self.assertEqual(A.Engine(env=False).config.model, "from-the-cwd")
+        self.assertEqual(A.Engine(env=False).config.inference_llm, "from-the-cwd")
         self.assertIsNone(A.Engine(config_file=False, env=False).config_file)
         self.assertEqual(
-            A.Engine(config_file=False, env=False).config.model, A.DEFAULT_MODEL
+            A.Engine(config_file=False, env=False).config.inference_llm, A.DEFAULT_INFERENCE_LLM
         )
 
     def test_a_named_file_that_does_not_exist_is_an_error(self):
@@ -2484,6 +2506,100 @@ class ConfigFileTest(unittest.TestCase):
         self.addCleanup(agent.close)
         self.assertEqual(agent.config.name, "scribe")
         self.assertEqual(agent.memory.max_turns, 5)
+
+
+class EnvFileTest(unittest.TestCase):
+    """The ``.env`` layer: loaded into the environment before the config file."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        patcher = unittest.mock.patch.dict("os.environ")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for key in [k for k in os.environ if k.startswith(A.ENV_PREFIX)]:
+            del os.environ[key]
+
+    def write(self, name: str, text: str) -> Path:
+        path = self.tmp / name
+        path.write_text(textwrap.dedent(text).strip() + "\n", encoding="utf-8")
+        return path
+
+    def test_the_cwd_wins_over_the_module_directory(self):
+        near, far = self.tmp / "near", self.tmp / "far"
+        near.mkdir()
+        far.mkdir()
+        self.assertEqual(A.env_candidates([near, far]), [near / ".env", far / ".env"])
+        self.assertIsNone(A.find_env_file([near, far]))
+        (far / ".env").write_text("A=far\n", encoding="utf-8")
+        self.assertEqual(A.find_env_file([near, far]), far / ".env")
+        (near / ".env").write_text("A=near\n", encoding="utf-8")
+        self.assertEqual(A.find_env_file([near, far]), near / ".env")
+
+    def test_reading_leaves_the_environment_alone(self):
+        path = self.write(
+            ".env",
+            """
+            # comment
+            DOTENV_PLAIN=one
+            DOTENV_QUOTED="two words"
+            export DOTENV_EXPORTED=three
+            DOTENV_BARE
+            """,
+        )
+        self.assertEqual(
+            A.read_env_file(path),
+            {
+                "DOTENV_PLAIN": "one",
+                "DOTENV_QUOTED": "two words",
+                "DOTENV_EXPORTED": "three",
+            },
+        )
+        self.assertNotIn("DOTENV_PLAIN", os.environ)
+
+    def test_loading_keeps_existing_variables_unless_overridden(self):
+        path = self.write(".env", "KEEP=file\nNEW=file")
+        environ = {"KEEP": "shell"}
+        self.assertEqual(A.load_env_file(path, environ), {"NEW": "file"})
+        self.assertEqual(environ, {"KEEP": "shell", "NEW": "file"})
+        A.load_env_file(path, environ, override=True)
+        self.assertEqual(environ["KEEP"], "file")
+
+    def test_the_engine_loads_it_before_the_config_file(self):
+        env = self.write(".env", "AGENT_PORT=9200\nDOTENV_MODEL=from-dotenv")
+        config = self.write("agent.yaml", "inference_llm: ${oc.env:DOTENV_MODEL}")
+        engine = A.Engine(env_file=env, config_file=config)
+        self.assertEqual(engine.env_file, env)
+        self.assertEqual(engine.config.inference_llm, "from-dotenv")
+        self.assertEqual(engine.config.port, 9200)
+
+    def test_the_file_wins_over_the_real_environment(self):
+        env = self.write(".env", "AGENT_INFERENCE_LLM=from-dotenv")
+        os.environ["AGENT_INFERENCE_LLM"] = "from-shell"
+        self.addCleanup(os.environ.pop, "AGENT_INFERENCE_LLM", None)
+        engine = A.Engine(env_file=env, config_file=False)
+        self.assertEqual(engine.config.inference_llm, "from-dotenv")
+
+    def test_off_is_a_value_and_env_false_skips_it_too(self):
+        env = self.write(".env", "AGENT_INFERENCE_LLM=from-dotenv")
+        self.assertIsNone(A.Engine(env_file=False, config_file=False).env_file)
+        engine = A.Engine(env_file=env, env=False, config_file=False)
+        self.assertIsNone(engine.env_file)
+        self.assertNotIn("AGENT_INFERENCE_LLM", os.environ)
+        self.assertEqual(engine.config.inference_llm, A.DEFAULT_INFERENCE_LLM)
+
+    def test_a_named_file_that_does_not_exist_is_an_error(self):
+        with self.assertRaises(FileNotFoundError):
+            A.Engine(env_file=self.tmp / "nowhere.env", config_file=False)
+
+    def test_an_agent_reads_the_same_layer(self):
+        env = self.write(".env", "AGENT_NAME=scribe")
+        agent = A.Agent(
+            console=False, store=A.MemoryStore(), env_file=env, config_file=False
+        )
+        self.addCleanup(agent.close)
+        self.assertEqual(agent.env_file, env)
+        self.assertEqual(agent.config.name, "scribe")
 
 
 class ReplTest(unittest.TestCase):
@@ -2540,7 +2656,7 @@ class ReplTest(unittest.TestCase):
         repl = self.repl(["/model tiny", None])
         run(repl.start())
         self.assertEqual(self.agent.asked, [])
-        self.assertEqual(self.agent.config.model, "tiny")
+        self.assertEqual(self.agent.config.inference_llm, "tiny")
         self.assertIn("Model: tiny", self.out.getvalue())
 
     def test_help_lists_the_repl_commands_too(self):

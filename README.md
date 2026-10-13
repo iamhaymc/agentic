@@ -1,57 +1,96 @@
-# HAYI
+<table>
+<tbody>
+<tr>
+<td><img src="./data/_brand/logo_3.svg" width="64px"/></td>
+<td><h1 style="color:#234;">AGENTIC</h1></td>
+</tr>
+</tbody>
+</table>
 
-An application agnostic agent harness. One class, `Agent`, is the whole API: it
-resolves its own configuration — defaults, a JSON or YAML file, the environment,
-then arguments — renders a prompt template the consumer owns, runs the agentic
-loop inside an isolated session workspace — optionally a git checkout it can
-commit, push and open a pull request from — and streams the result as blocks to
-the terminal, to the web UI, or to any subscriber you attach.
-Every tool call is streamed with it: its name, its redacted arguments, its
-outcome and how long it took. A session remembers its conversation, so the next
-run continues it and a client that reconnects gets the discussion back. Model
-calls are bounded: a timeout per attempt, retries with jittered backoff on the
-failures worth retrying, a named reason on the result when one fails, and the
-tokens and cost of the run reported when it ends.
+_Yet another agent harness_
+
+- [EXAMPLE](EXAMPLE.ipynb) — Notebook of examples
+- [DESIGN](DESIGN.md) — Complete overview and reference
+- [CHANGES](CHANGES.md) — Closed development tasks (with rationale)
+- [TODO](TODO.md) — Open development tasks (sorted by impact)
+
+## ▶️ Package (Dev)
+
+Clone repository and setup environment:
+
+```bash
+git clone https://github.com/iamhaymc/hayhay
+cd ./hayhay
+./setup # or run VS Code task "init"
+```
+
+## ▶️ Package (Use)
+
+Add repository as project dependency:
+
+```bash
+uv add "agent @ git+https://github.com/iamhaymc/hayhay"
+```
+
+## ▶️ Configure
+
+Settings are resolved in layers:
+**defaults → config file → env vars → constructor / program args**
+
+A config file is `agent.json`, `agent.yaml` or `settings.yml`
+
+- looked for in current directory then next to `main.py` as a fallback.
+- Point at another one with `--config path` or `Agent(config_file="path")`
+- Switch the layer off entirely with `Agent(config_file=False)`.
+
+A `.env` file is loaded into the environment before the config file is read
+
+- looked for in the same directories as the config file.
+- the file wins over variables already set in the shell, so editing it always takes effect.
+- Point at another one with `Agent(env_file="path")`, skip it with `Agent(env_file=False)`.
+
+```yaml
+inference: # a group flattens onto inference_*
+  url: ${oc.env:AGENT_INFERENCE_URL}
+  key: ${oc.env:AGENT_INFERENCE_KEY}
+  llm: some/general-model
+  vlm: some/vision-model
+```
+
+## ▶️ Use (Agent)
+
+> ❗ For applications that want to embed an agentic engine.
 
 ```python
 import asyncio
 from agent import Agent
-
-TEMPLATE = """
+PROMPT = """
 Summarise the following notes as bullet points.
-
 {{ config.input }}
 """
-
-asyncio.run(Agent().run(TEMPLATE, input="notes.md"))
+RESULT = asyncio.run(Agent().run(PROMPT, input="notes.md"))
 ```
 
 `input` is a file path or raw text. When it is a path the file is read and the
 text is assigned to `config.input`, which is what the template injects.
 
-## Embedding
+## ▶️ Use (Inference)
 
-Applications that already own their sessions, history and storage can use the
-loop on its own. `Engine` is the inference and tool call loop with none of the
-batteries: no store, no sessions, no conversation memory, no git checkouts, no
-console and no web layer. It takes the model input verbatim, so the caller keeps
-whatever history it likes, and returns the same `RunResult`.
+> ❗ For applications that want to embed an inference engine.
+
+`Engine` is the inference and tool call loop without: store, sessions, memory, checkouts, console, web layer.
 
 ```python
 from agent import Engine
-
-engine = Engine(model="some/model", api_key=..., env=False)
-
+engine = Engine(inference_llm="some/model", inference_key=..., env=False)
 result = await engine.run(
-    [
-        {"role": "user", "content": "What did I ask before?"},
-    ],
-    tools=my_tools,             # or workspace="/some/dir" for the built-in ones
+  [{"role": "user", "content": "What did I ask before?"}],
+  tools=my_tools, # or workspace="/some/dir" for the built-in ones
 )
 print(result.output, result.ok)
 ```
 
-- `env=False` keeps the `AGENT_*` environment out of an embedded process.
+- `env=False` keeps the `AGENT_*` environment (and `.env`) out of an embedded process.
 - `tools=` replaces the tool list; `workspace=` (per run, or on the constructor)
   builds the sandboxed file and shell tools instead. With neither, the model runs
   with no tools at all.
@@ -63,104 +102,33 @@ print(result.output, result.ok)
 `Agent` is this same class with the batteries bolted on, so anything overridden
 or injected below works in both.
 
-## Install
+## ▶️ Run (Tool)
 
-The package is on GitHub and can be installed straight from the repository with
-any PEP 508 installer (requires Python 3.12+):
-
-```
-uv add "agent @ git+https://github.com/iamhaymc/hayikit"
+```bash
+python main.py                     # no argument -> REPL
+python main.py --input notes.md    # any arguments -> one-shot
 ```
 
-or with pip:
+`--input`, `--repl`, `--serve` and `--config` are the only command line arguments
 
-```
-pip install "agent @ git+https://github.com/iamhaymc/hayikit"
-```
+## ▶️ Run (Page)
 
-You can pin to a tag or a commit:
-
-```
-pip install "agent @ git+https://github.com/iamhaymc/hayikit@v0.1.0"
-pip install "agent @ git+https://github.com/iamhaymc/hayikit@<commit-sha>"
-```
-
-Note that the transformers dependency is itself pulled from GitHub, so the
-first install may take a while.
-
-To develop on hayikit itself:
-
-```
-git clone https://github.com/iamhaymc/hayikit && cd hayikit
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e .
-```
-
-## Run
-
-```
-export AGENT_API_KEY=...                # only for endpoints that need auth
-python main.py                         # chat in the terminal
-python main.py --input notes.md        # one shot run, streamed to the console
-python main.py --serve                 # REST API + websocket hub + chat UI
-```
-
-With no arguments the terminal opens: type a message and the answer streams
-back, the session remembers the conversation, `/help` lists the slash commands
-and `/exit` (or Ctrl-D) leaves. Ctrl-C cancels the run in flight and keeps the
-prompt. The same class drives it, so a consumer can open one on its own agent
-with `await Repl(my_agent).start()`.
-
-`--input`, `--repl`, `--serve` and `--config` are the only command line
-arguments; everything else is configuration.
-
-## Configure
-
-Settings are resolved in layers — **defaults → config file → `AGENT_*`
-environment → constructor or CLI arguments** — so the later layer always wins.
-
-A config file is `agent.json`, `agent.yaml` or `settings.yml`: named after
-`main.py`, looked for in the current directory first and next to `main.py` as
-a fallback. Point at another one with `--config path` or
-`Agent(config_file="path")`, and switch the layer off entirely with
-`Agent(config_file=False)`.
-
-```yaml
-name: scribe
-model: some/leader-model
-api_key: ${oc.env:AGENT_API_KEY}   # omit it entirely for keyless endpoints
-vision:                            # a group flattens onto vision_*
-  model: some/vision-model
-repo:
-  url: owner/name
-genre: noir                        # unknown keys are extras: config.genre
-```
-
-Files are read with [omegaconf](https://omegaconf.readthedocs.io), so `${...}`
-interpolations to the environment and to other keys in the file work. The
-equivalent environment is `AGENT_NAME`, `AGENT_MODEL`, `AGENT_VISION_MODEL`,
-`AGENT_REPO_URL`, and so on:
-
-```
-AGENT_MODEL=some/leader-model \
-AGENT_VISION_MODEL=some/vision-model \
-AGENT_REPO_URL=owner/name AGENT_REPO_TOKEN=$TOKEN \
+```bash
 python main.py --serve
 ```
 
-In server mode the chat page is at `http://<host>:<port>/` (`127.0.0.1:8765` by
-default). Slash commands (`/help`) manage sessions, models and the repository
-from the terminal and the UI alike.
+> Default URL: `http://127.0.0.1:8765/`
 
-## Test
+## ▶️ Test
 
-```
+BDD Test(s):
+
+```bash
 python -m unittest test -v
 ```
 
-## More
+E2E Test(s):
 
-- [DESIGN.md](DESIGN.md) — the walkthrough of the implementation, with the full
-  configuration, tool, command and protocol reference.
-- [CHANGES.md](CHANGES.md) — what has been built and why it is built that way.
-- [TODO.md](TODO.md) — what is still open.
+```bash
+python -m unittest test -v
+```

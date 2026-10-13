@@ -1,4 +1,4 @@
-# agent — Guide
+# ⏬ Agentic — Design
 
 A walkthrough of the implementation. It follows the module from the outside in:
 the shape of a run first, then each subsystem in the order `main.py` declares
@@ -46,9 +46,9 @@ for a workspace, or none), builds the SDK agent and streams it, publishing the
 same `agent.*`, `block.*` and `tool.*` events and returning the same
 `RunResult`. It creates no database, no session, no workspace and no console, so
 an application that already has that infrastructure embeds it directly and pays
-for nothing it does not use. `env=False` keeps the `AGENT_*` environment out of
-the resolved config, and `config_file=False` keeps a stray `agent.yaml` in the
-working directory of the host process out of it too.
+for nothing it does not use. `env=False` keeps the `AGENT_*` environment (and
+any `.env` file) out of the resolved config, and `config_file=False` keeps a
+stray `agent.yaml` in the working directory of the host process out of it too.
 
 `Agent` subclasses `Engine` and adds the batteries: storage, sessions and their
 workspaces, conversation memory, git checkouts, slash commands, the console
@@ -111,7 +111,8 @@ running it again might work.
 
 Resolution order is **defaults → config file → environment → explicit
 arguments**, applied in `Engine.__init__` and again per run in
-`resolve_config()`.
+`resolve_config()`. A `.env` file is loaded into the environment before the
+config file is read (see [Env files](#env-files)).
 
 ### Config files
 
@@ -126,8 +127,8 @@ exists wins; there is no merging between them.
 - Files are parsed with `omegaconf`, so `${oc.env:VAR}` and `${other.key}`
   interpolations resolve at read time. Without it JSON still works and YAML
   falls back to `pyyaml`.
-- `flatten_config()` flattens a nested group onto field names — `vision: {model:
-  v}` becomes `vision_model` — but only when every key of the group names a real
+- `flatten_config()` flattens a nested group onto field names — `inference: {vlm:
+  v}` becomes `inference_vlm` — but only when every key of the group names a real
   field. Anything else stays as it is and becomes an extra, and a nested
   `extras:` mapping is folded in as is.
 - A `null` value leaves the default in place, an empty file is harmless and a
@@ -139,13 +140,44 @@ path that does not exist raises, because the caller named that file. The
 resolved path stays on the instance as `engine.config_file`, which is what the
 repl banner reports. `--config path` is the same switch from the command line.
 
+### Env files
+
+`find_env_file()` looks for `.env` in the same directories as the config file
+(`config_directories()`), and `Engine.__init__` loads it into `os.environ`
+before the config file is read, so `${oc.env:VAR}` interpolations and the
+`AGENT_*` layer both see its values.
+
+- [x] Parsed with `python-dotenv` (quoting, `export`, comments, `${VAR}`
+  expansion); a key without a value is dropped.
+- [x] The file wins over variables already set in the process environment
+  (`override=True`), so editing it always takes effect.
+- [x] `env_candidates()` is every path looked at, `read_env_file(path)` the
+  side-effect-free reader, `load_env_file(path, environ, override=False)` the
+  writer, returning what it applied.
+- [x] `Engine(env_file=...)` mirrors `config_file`: `True` searches, `False` or
+  `None` skips, a missing named path raises. `env=False` skips it too.
+- [x] The resolved path stays on the instance as `engine.env_file`, and the
+  repl banner reports it as `Env`.
+
+```mermaid
+flowchart LR
+  D[defaults] --> F[config file]
+  E[.env] -->|overrides os.environ| O[os.environ]
+  O -->|"${oc.env:VAR}"| F
+  F --> V["AGENT_* env"]
+  O --> V
+  V --> A[arguments]
+```
+
 ```yaml
 # agent.yaml
 name: scribe
-model: some/leader-model
-api_key: ${oc.env:AGENT_API_KEY}   # omit it entirely for keyless endpoints
+inference:
+  url: ${oc.env:AGENT_INFERENCE_URL}
+  key: ${oc.env:AGENT_INFERENCE_KEY}   # omit it entirely for keyless endpoints
+  llm: some/leader-model
+  vlm: some/vision-model
 vision:
-  model: some/vision-model
   max_tokens: 2048
 memory:
   summary: true
@@ -158,14 +190,14 @@ genre: noir
 | Variable / field                                            | Meaning                                     |
 | ----------------------------------------------------------- | ------------------------------------------- |
 | `AGENT_NAME`, `AGENT_INSTRUCTIONS`                          | Agent name and system instructions          |
-| `AGENT_MODEL`, `AGENT_API_URL`, `AGENT_API_KEY`             | Leader model, endpoint and credential       |
+| `AGENT_INFERENCE_LLM`, `_URL`, `_KEY`                       | Leader model, endpoint and credential       |
 | `AGENT_MAX_TURNS`                                           | Maximum agentic turns per run               |
 | `AGENT_REQUEST_TIMEOUT`                                     | Timeout per model call; leader stall guard  |
 | `AGENT_RETRY_ATTEMPTS`                                      | Attempts per model call (`1` never retries) |
 | `AGENT_RETRY_BACKOFF`, `AGENT_RETRY_MAX_BACKOFF`            | First wait between attempts, and its cap    |
 | `AGENT_RETRY_JITTER`                                        | Fraction of a wait that is randomized       |
 | `AGENT_COST_INPUT`, `AGENT_COST_OUTPUT`                     | Price of a million input / output tokens    |
-| `AGENT_VISION_MODEL`                                        | Vision specialist (unset: the leader sees)  |
+| `AGENT_INFERENCE_VLM`                                       | Vision specialist (unset: the leader sees)  |
 | `AGENT_VISION_API_URL`, `AGENT_VISION_API_KEY`              | Vision endpoint (defaults to the leader's)  |
 | `AGENT_VISION_INSTRUCTIONS`, `AGENT_VISION_MAX_TOKENS`      | Vision system prompt and answer budget      |
 | `AGENT_MEMORY_ENABLED`                                      | Remember the conversation of a session      |
@@ -807,7 +839,7 @@ Everything is a hook, an injectable collaborator or a registry entry. Start from
 `Agent` when it wants the batteries:
 
 ```python
-engine = Engine(model="some/model", api_key=..., env=False)
+engine = Engine(inference_llm="some/model", inference_key=..., env=False)
 result = await engine.run(my_messages, tools=my_tools, session_id=my_id)
 ```
 
@@ -839,7 +871,8 @@ Injectable collaborators: `events`, `renderer`, `prompts`, `tools`, `models`,
 `store`, `cache`, `sessions`, `memory`, `repos`, `commands`.
 
 Adding a model role: add `<role>_model` / `<role>_api_url` / `<role>_api_key`
-fields, resolve them with `config.model_spec(role)` and call
+fields (or map the role in `ROLE_MODEL_FIELDS`, as vision maps to
+`inference_vlm`), resolve them with `config.model_spec(role)` and call
 `agent.models.model(spec)` or `agent.models.complete(spec, messages)`.
 
 Bounding a deployment differently: override `build_policy()` to return a
