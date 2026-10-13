@@ -22,7 +22,7 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 - [ ] **Stronger tool sandboxing.** The workspace confines paths, but
       `run_shell_command` inherits the environment, the network and the whole
-      filesystem of the host, and `AGENT_SHELL_ENABLED` is the only control.
+      filesystem of the host, and `AGENTIC_SHELL_ENABLED` is the only control.
       Offer an allow/deny list of commands, a scrubbed environment, optional
       network isolation and a container or namespace backend for the cases where
       a real boundary is required.
@@ -34,9 +34,9 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       deployment can see what the harness is doing.
 
 - [ ] **Tests for the web layer and the client.** The unit tests stop at the
-      protocol codec and `e2e.py` only photographs a happy path: the hub
+      protocol codec and `test/agentic_e2e.py` only photographs a happy path: the hub
       handlers, attachment limits, cancellation, reconnection and most of
-      `ui.js` are still unasserted, which is most of the surface a user
+      `app/agentic_ui.js` are still unasserted, which is most of the surface a user
       actually touches. Add server tests over a real websocket, and assertions
       (plus cancellation, errors and reconnection) to the browser pass.
 

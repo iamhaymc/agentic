@@ -21,7 +21,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-import app.agent as A
+import app.agentic as A
 
 _find_env_file = A.find_env_file
 
@@ -56,14 +56,14 @@ class ConfigTest(unittest.TestCase):
             _ = config.missing
 
     def test_env_layer_coerces_types(self):
-        env = {"AGENT_PORT": "9100", "AGENT_QUIET": "true", "AGENT_INFERENCE_LLM": "env-model"}
+        env = {"AGENTIC_PORT": "9100", "AGENTIC_QUIET": "true", "AGENTIC_INFERENCE_LLM": "env-model"}
         config = A.AgentConfig().with_env(env)
         self.assertEqual(config.port, 9100)
         self.assertTrue(config.quiet)
         self.assertEqual(config.inference_llm, "env-model")
 
     def test_env_layer_coerces_paths(self):
-        config = A.AgentConfig().with_env({"AGENT_THEME": "/tmp/theme.json"})
+        config = A.AgentConfig().with_env({"AGENTIC_THEME": "/tmp/theme.json"})
         self.assertEqual(config.theme, Path("/tmp/theme.json"))
 
     def test_to_dict_redacts_secrets(self):
@@ -1213,7 +1213,7 @@ class RepoSpecTest(unittest.TestCase):
 
     def test_config_layers_into_a_spec(self):
         config = A.AgentConfig().with_env(
-            {"AGENT_REPO_URL": "owner/name", "AGENT_REPO_BRANCH": "trunk"}
+            {"AGENTIC_REPO_URL": "owner/name", "AGENTIC_REPO_BRANCH": "trunk"}
         )
         spec = A.RepoSpec.from_config(config)
         self.assertEqual((spec.url, spec.branch), ("owner/name", "trunk"))
@@ -1566,8 +1566,8 @@ class EngineTest(unittest.TestCase):
     def test_env_layer_can_be_skipped(self):
         import os
 
-        os.environ["AGENT_INFERENCE_LLM"] = "env-model"
-        self.addCleanup(os.environ.pop, "AGENT_INFERENCE_LLM", None)
+        os.environ["AGENTIC_INFERENCE_LLM"] = "env-model"
+        self.addCleanup(os.environ.pop, "AGENTIC_INFERENCE_LLM", None)
         self.assertEqual(A.Engine(env=False).config.inference_llm, A.DEFAULT_INFERENCE_LLM)
         self.assertEqual(A.Engine().config.inference_llm, "env-model")
 
@@ -2225,6 +2225,14 @@ class WebServerTest(unittest.TestCase):
         self.assertIsInstance(json.loads(self.server.rest("/api/commands")[1]), list)
         self.assertIsNone(self.server.rest("/api/unknown"))
 
+    def test_page_assets_exist_and_are_linked(self):
+        for name, _ in A.WebServer.ASSETS.values():
+            self.assertTrue((A.ROOT / name).is_file(), name)
+        page = (A.ROOT / A.WebServer.ASSETS["/"][0]).read_text(encoding="utf-8")
+        for path in ("/ui.css", "/ui.js"):
+            self.assertIn(path, page)
+            self.assertIn(path, A.WebServer.ASSETS)
+
     def test_event_payloads_drop_non_serializable_values(self):
         event = A.Event(
             type=A.EventType.BLOCK_DELTA, data={"text": "x", "config": A.AgentConfig()}
@@ -2295,7 +2303,7 @@ class E2eCaptureTest(unittest.TestCase):
     """The scripted agent behind `e2e.py`, without a browser."""
 
     def setUp(self):
-        import test.agent_e2e as E
+        import test.agentic_e2e as E
 
         self.E = E
         self.gate = E.Gate()
@@ -2374,7 +2382,7 @@ class ConfigFileTest(unittest.TestCase):
 
     def test_candidates_are_the_cwd_then_the_module_directory(self):
         names = [p.name for p in A.config_candidates(directories=[self.tmp])]
-        self.assertEqual(names, ["agent.json", "agent.yaml", "settings.yml"])
+        self.assertEqual(names, ["agentic.json", "agentic.yaml", "settings.yml"])
         directories = A.config_directories()
         self.assertEqual(directories[0], Path.cwd())
         self.assertIn(A.ROOT, directories)
@@ -2383,27 +2391,27 @@ class ConfigFileTest(unittest.TestCase):
         near, far = self.tmp / "near", self.tmp / "far"
         near.mkdir()
         far.mkdir()
-        (far / "agent.yaml").write_text("inference_llm: far\n", encoding="utf-8")
+        (far / "agentic.yaml").write_text("inference_llm: far\n", encoding="utf-8")
         self.assertEqual(
-            A.find_config_file(directories=[near, far]), far / "agent.yaml"
+            A.find_config_file(directories=[near, far]), far / "agentic.yaml"
         )
-        (near / "agent.yaml").write_text("inference_llm: near\n", encoding="utf-8")
+        (near / "agentic.yaml").write_text("inference_llm: near\n", encoding="utf-8")
         self.assertEqual(
-            A.find_config_file(directories=[near, far]), near / "agent.yaml"
+            A.find_config_file(directories=[near, far]), near / "agentic.yaml"
         )
 
     def test_a_missing_file_is_not_a_find(self):
         self.assertIsNone(A.find_config_file(directories=[self.tmp]))
 
     def test_json_and_yaml_read_the_same_way(self):
-        js = self.write("agent.json", '{"model": "j", "port": 9001}')
-        ya = self.write("agent.yaml", "inference_llm: y\nport: 9002")
+        js = self.write("agentic.json", '{"model": "j", "port": 9001}')
+        ya = self.write("agentic.yaml", "inference_llm: y\nport: 9002")
         self.assertEqual(A.read_config_file(js)["model"], "j")
         self.assertEqual(A.read_config_file(ya)["port"], 9002)
 
     def test_values_are_coerced_to_the_field_types(self):
         path = self.write(
-            "agent.yaml",
+            "agentic.yaml",
             """
             inference_llm: file-model
             port: 9100
@@ -2423,7 +2431,7 @@ class ConfigFileTest(unittest.TestCase):
 
     def test_nested_groups_flatten_onto_field_names(self):
         path = self.write(
-            "agent.yaml",
+            "agentic.yaml",
             """
             inference:
               vlm: eyes
@@ -2440,7 +2448,7 @@ class ConfigFileTest(unittest.TestCase):
 
     def test_unknown_keys_and_nested_extras_land_in_extras(self):
         path = self.write(
-            "agent.yaml",
+            "agentic.yaml",
             """
             genre: noir
             profile:
@@ -2455,14 +2463,14 @@ class ConfigFileTest(unittest.TestCase):
         self.assertEqual(config.mood, "calm")
 
     def test_null_leaves_the_default_in_place(self):
-        path = self.write("agent.yaml", "inference_llm: null")
+        path = self.write("agentic.yaml", "inference_llm: null")
         self.assertEqual(A.AgentConfig().with_file(path).inference_llm, A.DEFAULT_INFERENCE_LLM)
 
     def test_an_empty_file_is_harmless(self):
-        self.assertEqual(A.read_config_file(self.write("agent.yaml", "")), {})
+        self.assertEqual(A.read_config_file(self.write("agentic.yaml", "")), {})
 
     def test_a_file_that_is_not_a_mapping_is_rejected(self):
-        path = self.write("agent.json", "[1, 2, 3]")
+        path = self.write("agentic.json", "[1, 2, 3]")
         with self.assertRaises(ValueError):
             A.read_config_file(path)
 
@@ -2471,13 +2479,13 @@ class ConfigFileTest(unittest.TestCase):
             self.assertEqual(A.AgentConfig(inference_llm="m").with_file().inference_llm, "m")
 
     def test_the_engine_layers_file_then_environment_then_arguments(self):
-        path = self.write("agent.yaml", "inference_llm: from-file\nport: 9100")
+        path = self.write("agentic.yaml", "inference_llm: from-file\nport: 9100")
         engine = A.Engine(config_file=path, env=False)
         self.assertEqual(engine.config_file, path)
         self.assertEqual(engine.config.inference_llm, "from-file")
         self.assertEqual(engine.config.port, 9100)
         with unittest.mock.patch.dict(
-            "os.environ", {"AGENT_INFERENCE_LLM": "from-env"}, clear=False
+            "os.environ", {"AGENTIC_INFERENCE_LLM": "from-env"}, clear=False
         ):
             engine = A.Engine(config_file=path)
             self.assertEqual(engine.config.inference_llm, "from-env")
@@ -2486,7 +2494,7 @@ class ConfigFileTest(unittest.TestCase):
             self.assertEqual(engine.config.inference_llm, "from-argument")
 
     def test_a_file_in_the_working_directory_is_found_on_its_own(self):
-        self.write("agent.yaml", "inference_llm: from-the-cwd")
+        self.write("agentic.yaml", "inference_llm: from-the-cwd")
         cwd = os.getcwd()
         self.addCleanup(os.chdir, cwd)
         os.chdir(self.tmp)
@@ -2501,7 +2509,7 @@ class ConfigFileTest(unittest.TestCase):
             A.Engine(config_file=self.tmp / "nowhere.yaml")
 
     def test_an_agent_reads_the_same_layer(self):
-        path = self.write("agent.yaml", "name: scribe\nmemory_max_turns: 5")
+        path = self.write("agentic.yaml", "name: scribe\nmemory_max_turns: 5")
         agent = A.Agent(console=False, store=A.MemoryStore(), config_file=path)
         self.addCleanup(agent.close)
         self.assertEqual(agent.config.name, "scribe")
@@ -2566,26 +2574,26 @@ class EnvFileTest(unittest.TestCase):
         self.assertEqual(environ["KEEP"], "file")
 
     def test_the_engine_loads_it_before_the_config_file(self):
-        env = self.write(".env", "AGENT_PORT=9200\nDOTENV_MODEL=from-dotenv")
-        config = self.write("agent.yaml", "inference_llm: ${oc.env:DOTENV_MODEL}")
+        env = self.write(".env", "AGENTIC_PORT=9200\nDOTENV_MODEL=from-dotenv")
+        config = self.write("agentic.yaml", "inference_llm: ${oc.env:DOTENV_MODEL}")
         engine = A.Engine(env_file=env, config_file=config)
         self.assertEqual(engine.env_file, env)
         self.assertEqual(engine.config.inference_llm, "from-dotenv")
         self.assertEqual(engine.config.port, 9200)
 
     def test_the_file_wins_over_the_real_environment(self):
-        env = self.write(".env", "AGENT_INFERENCE_LLM=from-dotenv")
-        os.environ["AGENT_INFERENCE_LLM"] = "from-shell"
-        self.addCleanup(os.environ.pop, "AGENT_INFERENCE_LLM", None)
+        env = self.write(".env", "AGENTIC_INFERENCE_LLM=from-dotenv")
+        os.environ["AGENTIC_INFERENCE_LLM"] = "from-shell"
+        self.addCleanup(os.environ.pop, "AGENTIC_INFERENCE_LLM", None)
         engine = A.Engine(env_file=env, config_file=False)
         self.assertEqual(engine.config.inference_llm, "from-dotenv")
 
     def test_off_is_a_value_and_env_false_skips_it_too(self):
-        env = self.write(".env", "AGENT_INFERENCE_LLM=from-dotenv")
+        env = self.write(".env", "AGENTIC_INFERENCE_LLM=from-dotenv")
         self.assertIsNone(A.Engine(env_file=False, config_file=False).env_file)
         engine = A.Engine(env_file=env, env=False, config_file=False)
         self.assertIsNone(engine.env_file)
-        self.assertNotIn("AGENT_INFERENCE_LLM", os.environ)
+        self.assertNotIn("AGENTIC_INFERENCE_LLM", os.environ)
         self.assertEqual(engine.config.inference_llm, A.DEFAULT_INFERENCE_LLM)
 
     def test_a_named_file_that_does_not_exist_is_an_error(self):
@@ -2593,7 +2601,7 @@ class EnvFileTest(unittest.TestCase):
             A.Engine(env_file=self.tmp / "nowhere.env", config_file=False)
 
     def test_an_agent_reads_the_same_layer(self):
-        env = self.write(".env", "AGENT_NAME=scribe")
+        env = self.write(".env", "AGENTIC_NAME=scribe")
         agent = A.Agent(
             console=False, store=A.MemoryStore(), env_file=env, config_file=False
         )
@@ -2687,7 +2695,7 @@ class ReplTest(unittest.TestCase):
     def test_the_banner_names_the_config_file_and_session(self):
         repl = self.repl([None])
         repl.session = self.agent.sessions.ensure(None)
-        self.agent.config_file = Path("/somewhere/agent.yaml")
+        self.agent.config_file = Path("/somewhere/agentic.yaml")
         labels = [label for label, _ in repl.banner_items()]
         self.assertIn("Config", labels)
         self.assertIn("Session", labels)
@@ -2792,10 +2800,10 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "p.md"
             path.write_text("from file", encoding="utf-8")
-            os.environ["AGENT_TEMPLATE"] = str(path)
-            self.addCleanup(os.environ.pop, "AGENT_TEMPLATE", None)
+            os.environ["AGENTIC_TEMPLATE"] = str(path)
+            self.addCleanup(os.environ.pop, "AGENTIC_TEMPLATE", None)
             self.assertEqual(A.load_template(), "from file")
-            os.environ["AGENT_TEMPLATE"] = "raw {{ config.input }}"
+            os.environ["AGENTIC_TEMPLATE"] = "raw {{ config.input }}"
             self.assertEqual(A.load_template(), "raw {{ config.input }}")
 
     def test_template_resolution_prefers_the_config(self):
@@ -2810,8 +2818,8 @@ class CliTest(unittest.TestCase):
 
     def test_template_candidates_follow_the_config_directories(self):
         names = {p.name for p in A.template_candidates()}
-        self.assertEqual(names, {"agent_prompt.md"})
-        self.assertIn(A.ROOT / "agent_prompt.md", A.template_candidates())
+        self.assertEqual(names, {"agentic_prompt.md"})
+        self.assertIn(A.ROOT / "agentic_prompt.md", A.template_candidates())
 
     def test_the_passthrough_template_is_the_last_resort(self):
         with unittest.mock.patch.object(A, "template_candidates", return_value=[]):

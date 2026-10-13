@@ -22,7 +22,7 @@ dependencies = [
 e2e = ["playwright"]
 
 [project.scripts]
-agentic = "agent:main"
+agentic = "agentic:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -32,5 +32,5 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-only-include = ["app/agent.py", "app/agent_ui.html", "app/agent_ui.css", "app/agent_ui.js"]
+only-include = ["app/agentic.py", "app/agentic_ui.html", "app/agentic_ui.css", "app/agentic_ui.js"]
 sources = ["app"]

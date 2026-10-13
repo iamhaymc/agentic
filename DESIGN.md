@@ -1,7 +1,7 @@
 # ⏬ Agentic — Design
 
 A walkthrough of the implementation. It follows the module from the outside in:
-the shape of a run first, then each subsystem in the order `main.py` declares
+the shape of a run first, then each subsystem in the order `agentic.py` declares
 them, then the reference tables (configuration, tools, protocol) and the
 extension points.
 
@@ -12,18 +12,18 @@ is what has been built and why, and [`TODO.md`](TODO.md) is what is left.
 
 ## 1. Layout
 
-| File              | Contents                                        |
-| ----------------- | ----------------------------------------------- |
-| `main.py`        | The library: every subsystem and the CLI        |
-| `test.py`   | Unit tests                                      |
-| `e2e.py`    | Browser capture of the page, scripted end to end |
-| `ui.html` | Chat page markup                                |
-| `ui.css`  | Mobile first, theme driven styles               |
-| `ui.js`   | Client: blocks, markdown, media, commands, hub  |
-| `assets/`         | The screenshots this guide shows                |
-| `pyproject.toml`  | Package metadata, dependencies, `agent` script  |
+| File                  | Contents                                         |
+| --------------------- | ------------------------------------------------ |
+| `app/agentic.py`      | The library: every subsystem and the CLI         |
+| `test/agentic_bdd.py` | Unit tests                                       |
+| `test/agentic_e2e.py` | Browser capture of the page, scripted end to end |
+| `app/agentic_ui.html` | Chat page markup                                 |
+| `app/agentic_ui.css`  | Mobile first, theme driven styles                |
+| `app/agentic_ui.js`   | Client: blocks, markdown, media, commands, hub   |
+| `test/assets/`        | The screenshots this guide shows                 |
+| `pyproject.toml`      | Package metadata, dependencies, `agentic` script |
 
-`main.py` is a single flat module divided by commented section banners, in this
+`agentic.py` is a single flat module divided by commented section banners, in this
 order: **config, events, prompt, storage, sessions, memory, repository,
 resilience, models, tools, console, commands, core, repl, web, cli**. Each
 section is self-contained and depends only on the ones above it, so the file
@@ -46,9 +46,9 @@ for a workspace, or none), builds the SDK agent and streams it, publishing the
 same `agent.*`, `block.*` and `tool.*` events and returning the same
 `RunResult`. It creates no database, no session, no workspace and no console, so
 an application that already has that infrastructure embeds it directly and pays
-for nothing it does not use. `env=False` keeps the `AGENT_*` environment (and
+for nothing it does not use. `env=False` keeps the `AGENTIC_*` environment (and
 any `.env` file) out of the resolved config, and `config_file=False` keeps a
-stray `agent.yaml` in the working directory of the host process out of it too.
+stray `agentic.yaml` in the working directory of the host process out of it too.
 
 `Agent` subclasses `Engine` and adds the batteries: storage, sessions and their
 workspaces, conversation memory, git checkouts, slash commands, the console
@@ -101,7 +101,7 @@ running it again might work.
   annotated type (`int`, `float`, `bool`, `Path`, `str`).
 - `with_file(path)` — copy with a JSON or YAML file applied; without a path the
   one `find_config_file()` locates.
-- `with_env(environ)` — copy with `AGENT_<FIELD>` overrides applied, coerced the
+- `with_env(environ)` — copy with `AGENTIC_<FIELD>` overrides applied, coerced the
   same way.
 - `model_spec(role)` — resolve a role to a `ModelSpec`, or `None`.
 
@@ -117,8 +117,8 @@ config file is read (see [Env files](#env-files)).
 ### Config files
 
 `find_config_file()` looks for `<stem>.json`, `<stem>.yaml` and `<stem>.yml`,
-where the stem is the name of the module itself (`agent`), in the current
-directory first and in the directory of `main.py` as a fallback — so an
+where the stem is the name of the module itself (`agentic`), in the current
+directory first and in the directory of `agentic.py` as a fallback — so an
 application overrides whatever ships beside the harness. The first file that
 exists wins; there is no merging between them.
 
@@ -145,7 +145,7 @@ repl banner reports. `--config path` is the same switch from the command line.
 `find_env_file()` looks for `.env` in the same directories as the config file
 (`config_directories()`), and `Engine.__init__` loads it into `os.environ`
 before the config file is read, so `${oc.env:VAR}` interpolations and the
-`AGENT_*` layer both see its values.
+`AGENTIC_*` layer both see its values.
 
 - [x] Parsed with `python-dotenv` (quoting, `export`, comments, `${VAR}`
   expansion); a key without a value is dropped.
@@ -164,17 +164,17 @@ flowchart LR
   D[defaults] --> F[config file]
   E[.env] -->|overrides os.environ| O[os.environ]
   O -->|"${oc.env:VAR}"| F
-  F --> V["AGENT_* env"]
+  F --> V["AGENTIC_* env"]
   O --> V
   V --> A[arguments]
 ```
 
 ```yaml
-# agent.yaml
+# agentic.yaml
 name: scribe
 inference:
-  url: ${oc.env:AGENT_INFERENCE_URL}
-  key: ${oc.env:AGENT_INFERENCE_KEY}   # omit it entirely for keyless endpoints
+  url: ${oc.env:AGENTIC_INFERENCE_URL}
+  key: ${oc.env:AGENTIC_INFERENCE_KEY}   # omit it entirely for keyless endpoints
   llm: some/leader-model
   vlm: some/vision-model
 vision:
@@ -187,37 +187,37 @@ genre: noir
 
 ### Configuration reference
 
-| Variable / field                                            | Meaning                                     |
-| ----------------------------------------------------------- | ------------------------------------------- |
-| `AGENT_NAME`, `AGENT_INSTRUCTIONS`                          | Agent name and system instructions          |
-| `AGENT_INFERENCE_LLM`, `_URL`, `_KEY`                       | Leader model, endpoint and credential       |
-| `AGENT_MAX_TURNS`                                           | Maximum agentic turns per run               |
-| `AGENT_REQUEST_TIMEOUT`                                     | Timeout per model call; leader stall guard  |
-| `AGENT_RETRY_ATTEMPTS`                                      | Attempts per model call (`1` never retries) |
-| `AGENT_RETRY_BACKOFF`, `AGENT_RETRY_MAX_BACKOFF`            | First wait between attempts, and its cap    |
-| `AGENT_RETRY_JITTER`                                        | Fraction of a wait that is randomized       |
-| `AGENT_COST_INPUT`, `AGENT_COST_OUTPUT`                     | Price of a million input / output tokens    |
-| `AGENT_INFERENCE_VLM`                                       | Vision specialist (unset: the leader sees)  |
-| `AGENT_VISION_API_URL`, `AGENT_VISION_API_KEY`              | Vision endpoint (defaults to the leader's)  |
-| `AGENT_VISION_INSTRUCTIONS`, `AGENT_VISION_MAX_TOKENS`      | Vision system prompt and answer budget      |
-| `AGENT_MEMORY_ENABLED`                                      | Remember the conversation of a session      |
-| `AGENT_MEMORY_MAX_TURNS`, `AGENT_MEMORY_MAX_CHARS`          | Memory budget (`0` disables a limit)        |
-| `AGENT_MEMORY_SUMMARY`                                      | Summarise trimmed turns instead of dropping |
-| `AGENT_SUMMARY_MODEL`, `AGENT_SUMMARY_API_URL`, `AGENT_SUMMARY_API_KEY` | Summary role (defaults to the leader) |
-| `AGENT_SUMMARY_INSTRUCTIONS`, `AGENT_SUMMARY_MAX_TOKENS`    | Summary system prompt and answer budget     |
-| `AGENT_INPUT_SOURCE`                                        | Input path or text (also `--input`)         |
-| `AGENT_TEMPLATE`                                            | Template path or raw template for `main()`  |
-| `AGENT_WORKSPACE_ROOT`, `AGENT_WORKSPACE_SEED`              | Parent of workspaces; directory copied in   |
-| `AGENT_SESSION_TTL`, `AGENT_KEEP_WORKSPACE`                 | Session lifetime; keep the directory        |
-| `AGENT_SESSION_DURABLE`, `AGENT_SESSION_SWEEP_INTERVAL`      | Survive a restart; expiry sweep period      |
-| `AGENT_REPO_URL`, `AGENT_REPO_BRANCH`, `AGENT_REPO_TOKEN`   | Default repository, base branch, credential |
-| `AGENT_REPO_REMOTE`, `AGENT_REPO_BRANCH_PREFIX`, `AGENT_REPO_DIR` | Remote name, branch prefix, clone dir |
-| `AGENT_REPO_AUTHOR_NAME`, `AGENT_REPO_AUTHOR_EMAIL`         | Identity the harness commits with           |
-| `AGENT_REPO_DEPTH`, `AGENT_REPO_CLONE`, `AGENT_REPO_TIMEOUT`| Clone depth, auto clone, git timeout        |
-| `AGENT_DB_PATH`, `AGENT_CACHE_SIZE`                         | SQLite file and LRU capacity                |
-| `AGENT_SHELL_TIMEOUT`, `AGENT_SHELL_ENABLED`                | Shell tool limits                           |
-| `AGENT_HOST`, `AGENT_PORT`, `AGENT_THEME`                   | Web bind address and UI theme file          |
-| `AGENT_QUIET`, `AGENT_COLOR`                                | Console output                              |
+| Variable / field                                                              | Meaning                                     |
+| ----------------------------------------------------------------------------- | ------------------------------------------- |
+| `AGENTIC_NAME`, `AGENTIC_INSTRUCTIONS`                                        | Agent name and system instructions          |
+| `AGENTIC_INFERENCE_LLM`, `_URL`, `_KEY`                                       | Leader model, endpoint and credential       |
+| `AGENTIC_MAX_TURNS`                                                           | Maximum agentic turns per run               |
+| `AGENTIC_REQUEST_TIMEOUT`                                                     | Timeout per model call; leader stall guard  |
+| `AGENTIC_RETRY_ATTEMPTS`                                                      | Attempts per model call (`1` never retries) |
+| `AGENTIC_RETRY_BACKOFF`, `AGENTIC_RETRY_MAX_BACKOFF`                          | First wait between attempts, and its cap    |
+| `AGENTIC_RETRY_JITTER`                                                        | Fraction of a wait that is randomized       |
+| `AGENTIC_COST_INPUT`, `AGENTIC_COST_OUTPUT`                                   | Price of a million input / output tokens    |
+| `AGENTIC_INFERENCE_VLM`                                                       | Vision specialist (unset: the leader sees)  |
+| `AGENTIC_VISION_API_URL`, `AGENTIC_VISION_API_KEY`                            | Vision endpoint (defaults to the leader's)  |
+| `AGENTIC_VISION_INSTRUCTIONS`, `AGENTIC_VISION_MAX_TOKENS`                    | Vision system prompt and answer budget      |
+| `AGENTIC_MEMORY_ENABLED`                                                      | Remember the conversation of a session      |
+| `AGENTIC_MEMORY_MAX_TURNS`, `AGENTIC_MEMORY_MAX_CHARS`                        | Memory budget (`0` disables a limit)        |
+| `AGENTIC_MEMORY_SUMMARY`                                                      | Summarise trimmed turns instead of dropping |
+| `AGENTIC_SUMMARY_MODEL`, `AGENTIC_SUMMARY_API_URL`, `AGENTIC_SUMMARY_API_KEY` | Summary role (defaults to the leader)       |
+| `AGENTIC_SUMMARY_INSTRUCTIONS`, `AGENTIC_SUMMARY_MAX_TOKENS`                  | Summary system prompt and answer budget     |
+| `AGENTIC_INPUT_SOURCE`                                                        | Input path or text (also `--input`)         |
+| `AGENTIC_TEMPLATE`                                                            | Template path or raw template for `main()`  |
+| `AGENTIC_WORKSPACE_ROOT`, `AGENTIC_WORKSPACE_SEED`                            | Parent of workspaces; directory copied in   |
+| `AGENTIC_SESSION_TTL`, `AGENTIC_KEEP_WORKSPACE`                               | Session lifetime; keep the directory        |
+| `AGENTIC_SESSION_DURABLE`, `AGENTIC_SESSION_SWEEP_INTERVAL`                   | Survive a restart; expiry sweep period      |
+| `AGENTIC_REPO_URL`, `AGENTIC_REPO_BRANCH`, `AGENTIC_REPO_TOKEN`               | Default repository, base branch, credential |
+| `AGENTIC_REPO_REMOTE`, `AGENTIC_REPO_BRANCH_PREFIX`, `AGENTIC_REPO_DIR`       | Remote name, branch prefix, clone dir       |
+| `AGENTIC_REPO_AUTHOR_NAME`, `AGENTIC_REPO_AUTHOR_EMAIL`                       | Identity the harness commits with           |
+| `AGENTIC_REPO_DEPTH`, `AGENTIC_REPO_CLONE`, `AGENTIC_REPO_TIMEOUT`            | Clone depth, auto clone, git timeout        |
+| `AGENTIC_DB_PATH`, `AGENTIC_CACHE_SIZE`                                       | SQLite file and LRU capacity                |
+| `AGENTIC_SHELL_TIMEOUT`, `AGENTIC_SHELL_ENABLED`                              | Shell tool limits                           |
+| `AGENTIC_HOST`, `AGENTIC_PORT`, `AGENTIC_THEME`                               | Web bind address and UI theme file          |
+| `AGENTIC_QUIET`, `AGENTIC_COLOR`                                              | Console output                              |
 
 Anything not listed is an extra: pass it as a constructor override and read it in
 the template as `config.<name>`.
@@ -490,10 +490,10 @@ opens and closes blocks as they stream, styles them per kind (dim italic
 reasoning, dim tool, red error), prints every tool call as `-> name(args)` and
 its outcome as `<- name: ok in 12 ms` followed by the result, and disables colour
 when the stream is not a TTY
-or `AGENT_COLOR` says so. `write()`, `style()` and `banner()` are the override
+or `AGENTIC_COLOR` says so. `write()`, `style()` and `banner()` are the override
 points; `banners=False` keeps the config banner from being printed on every run
 (which is what `Repl` does after printing its own), and `Agent(console=False)` or
-`AGENT_QUIET=1` removes the renderer entirely.
+`AGENTIC_QUIET=1` removes the renderer entirely.
 
 ## 15. Commands
 
@@ -622,14 +622,14 @@ current session and the task of the run it started, which is what `cancel`
 aborts; oversized, non-JSON and unknown messages are answered with an `error`
 rather than closing the socket.
 
-| Endpoint         | Response                                    |
-| ---------------- | ------------------------------------------- |
-| `GET /`          | `ui.html` (plus `.css`, `.js`)      |
-| `GET /api/health`| `{ok, name}`                                |
-| `GET /api/config`| The resolved config, secrets masked         |
-| `GET /api/commands` | The command list                         |
-| `GET /api/sessions` | Live sessions                            |
-| `GET /api/theme` | The server default theme variables          |
+| Endpoint            | Response                                    |
+| ------------------- | ------------------------------------------- |
+| `GET /`             | `app/agentic_ui.html` (plus `.css`, `.js`)  |
+| `GET /api/health`   | `{ok, name}`                                |
+| `GET /api/config`   | The resolved config, secrets masked         |
+| `GET /api/commands` | The command list                            |
+| `GET /api/sessions` | Live sessions                               |
+| `GET /api/theme`    | The server default theme variables          |
 
 | Message      | Direction | Fields                                      |
 | ------------ | --------- | ------------------------------------------- |
@@ -672,7 +672,7 @@ differs.
 
 ## 19. Web client
 
-`ui.js` is eight small subsystems over one socket, exposed on
+`app/agentic_ui.js` is eight small subsystems over one socket, exposed on
 `window.agentUI` so a console or a test harness can reach them without one:
 
 - **Icons** — a stroke icon set written inline with the code: no font, no
@@ -732,7 +732,7 @@ both, and every state is that same mark modulated:
 The words are still there for a screen reader (`#status-text`, and the mark's
 own label) and in its tooltip; the eye reads the shape.
 
-`ui.css` is mobile first: a `100dvh` grid of header, scrolling discussion
+`app/agentic_ui.css` is mobile first: a `100dvh` grid of header, scrolling discussion
 and composer, centred at `52rem`, with every colour taken from a CSS custom
 property so a theme can replace the palette wholesale. There are two complete
 fallback palettes, one per theme type, because a VS Code theme names only part
@@ -762,7 +762,7 @@ hairline of accent and a soft ring rather than a heavy halo.
 
 ### Screenshots
 
-`e2e.py` is the page as it actually renders. It starts the real server with
+`test/agentic_e2e.py` is the page as it actually renders. It starts the real server with
 a scripted agent behind it — no provider, no key, a fixed answer that pauses
 halfway through — drives the page with Playwright and writes the images below
 into `assets/`:
@@ -770,7 +770,7 @@ into `assets/`:
 ```
 pip install -e ".[e2e]"
 playwright install chromium
-python e2e.py
+python -m test.agentic_e2e
 ```
 
 Three moments are captured per device: after launch, during the request (the
@@ -814,8 +814,8 @@ back its URL. `--device`, `--out`, `--pace` and `--browser` cover the rest.
 
 `parse_args()` accepts `--input`, `--repl`, `--serve` and `--config`.
 `load_template()` resolves the template from `config.template` (a path or the
-template itself, which the config file or `AGENT_TEMPLATE` sets), then
-`agent_prompt.md` in the current directory and next to `main.py`, and finally
+template itself, which the config file or `AGENTIC_TEMPLATE` sets), then
+`agentic_prompt.md` in the current directory and next to `agentic.py`, and finally
 falls back to passing the input through.
 
 `Agent.cli(template, argv)` parses the arguments, passes `--config` to the
@@ -828,7 +828,7 @@ process exit code, closing the agent either way:
 - with no arguments at all the terminal opens, because a harness with nothing to
   do is a harness waiting to be talked to.
 
-`main()` is the packaged entry point (`agent` on the command line): it builds the
+`main()` is the packaged entry point (`agentic` on the command line): it builds the
 agent, lets it resolve its config file and environment, and takes the template
 from there.
 
@@ -886,7 +886,7 @@ provider misreports, or override `Usage.price` (or read `result.usage` on
 python -m unittest test -v
 ```
 
-`test.py` covers the embedded `Engine` path (no batteries, verbatim model
+`test/agentic_bdd.py` covers the embedded `Engine` path (no batteries, verbatim model
 input, supplied or workspace built tools, trapped failures), config layering and redaction, model specs and the pool,
 the error taxonomy, the retry policy (backoff, jitter, bounded attempts,
 timeouts, cancellation), token and cost accounting, the stall guard around the
@@ -900,10 +900,10 @@ URL normalization, git operations against local fixture repositories, pull
 request posting against a stubbed forge, command parsing, config file resolution
 (search order, JSON and YAML, nested groups, coercion, the layers around it), the
 repl (prompts, commands, sessions, interrupts, the banner) driven by an injected
-reader, the websocket protocol codec, and the scripted agent `e2e.py`
+reader, the websocket protocol codec, and the scripted agent `test/agentic_e2e.py`
 drives. No test needs a network or a model.
 
-`e2e.py` is the one that needs a browser: it is not part of the unit suite,
+`test/agentic_e2e.py` is the one that needs a browser: it is not part of the unit suite,
 it is run by hand (or in CI) to prove the page still works end to end and to
 refresh the screenshots above.
 

@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-import app.agent as A
+import app.agentic as A
 
 ROOT = Path(__file__).resolve().parent
 
@@ -60,7 +60,7 @@ BROWSER_CANDIDATES = (
 # can stop between the halves and be photographed mid stream.
 # ---------------------------------------------------------------------------
 
-PROMPT = "Read main.py and summarise what the harness does."
+PROMPT = "Read agentic.py and summarise what the harness does."
 
 REASONING = """\
 The file is one module, so the summary should follow its sections rather than \
@@ -68,11 +68,11 @@ its classes. Read it first, then describe the three layers and how to run them.
 """
 
 TOOL_NAME = "read_file"
-TOOL_ARGUMENTS = {"path": "main.py"}
-TOOL_RESULT = "main.py — 4656 lines, 16 sections"
+TOOL_ARGUMENTS = {"path": "agentic.py"}
+TOOL_RESULT = "agentic.py — 4656 lines, 16 sections"
 
 ANSWER_HEAD = """\
-`main.py` is one flat module: the agentic loop, the batteries around it and the application shell, in that order.
+`agentic.py` is one flat module: the agentic loop, the batteries around it and the application shell, in that order.
 
 - **Engine** — config, events, prompt, tools and models. `Engine.run()` streams the model and publishes the agent, block and tool events this page listens to.
 """
@@ -83,8 +83,8 @@ ANSWER_TAIL = """\
 
 | Entry point | What it gives you |
 | --- | --- |
-| `agent --serve` | this page |
-| `agent --repl` | the terminal |
+| `agentic --serve` | this page |
+| `agentic --repl` | the terminal |
 """
 
 
@@ -403,7 +403,7 @@ MOMENTS = ("launch", "request", "response")
 
 def find_browser(explicit: str = "") -> str:
     """The Chromium executable to drive, or an empty string for Playwright's own."""
-    for candidate in (explicit, os.environ.get("AGENT_E2E_BROWSER", "")):
+    for candidate in (explicit, os.environ.get("AGENTIC_E2E_BROWSER", "")):
         if candidate:
             if not Path(candidate).exists():
                 raise FileNotFoundError(f"no such browser: {candidate}")

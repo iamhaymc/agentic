@@ -24,25 +24,25 @@ each be replaced by a consumer:
 
 In the simplest case a consumer owns a prompt template and does no more than::
 
-    import asyncio, agent
-    asyncio.run(agent.Agent().run(MY_TEMPLATE))
+    import asyncio, agentic
+    asyncio.run(agentic.Agent().run(MY_TEMPLATE))
 
 An application that already has its own sessions, history and storage embeds
 the loop on its own instead, with none of the batteries above::
 
-    engine = agent.Engine(inference_key=..., inference_llm=..., env=False)
+    engine = agentic.Engine(inference_key=..., inference_llm=..., env=False)
     result = await engine.run(my_messages, tools=my_tools)
 
 The module also works as a data driven application. With no arguments it opens
 an interactive terminal; ``--input`` performs one run and ``--serve`` starts the
 web layer::
 
-    python main.py                     # chat in the terminal
-    python main.py --input notes.md    # one run, streamed to the console
-    python main.py --serve             # REST API, websocket hub and chat UI
+    python agentic.py                  # chat in the terminal
+    python agentic.py --input notes.md # one run, streamed to the console
+    python agentic.py --serve          # REST API, websocket hub and chat UI
 
-Configuration is read from ``agent.json``, ``agent.yaml`` or ``settings.yml`` — the
-current directory first, then next to this file — before the ``AGENT_*``
+Configuration is read from ``agentic.json``, ``agentic.yaml`` or ``settings.yml`` — the
+current directory first, then next to this file — before the ``AGENTIC_*``
 environment, which a ``.env`` file found the same way adds to; see
 `find_config_file`, `find_env_file` and `main`.
 """
@@ -137,11 +137,11 @@ Handler = Callable[["Event"], Any]
 # Config
 #
 # Values are resolved in layers: dataclass defaults, then a JSON or YAML config
-# file, then the environment (``AGENT_*``, plus a ``.env`` file loaded into it
+# file, then the environment (``AGENTIC_*``, plus a ``.env`` file loaded into it
 # first), then whatever the consumer or the CLI passes in.
 # ---------------------------------------------------------------------------
 
-ENV_PREFIX = "AGENT_"
+ENV_PREFIX = f"{STEM.upper()}_"
 
 DEFAULT_INFERENCE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_INFERENCE_LLM = "deepseek/deepseek-v4-flash-0731"
@@ -221,7 +221,7 @@ def _coerce_value(value: Any, kind: Any) -> Any:
     return value
 
 
-# Config files. A file named after this module (``agent.json``, ``agent.yaml``
+# Config files. A file named after this module (``agentic.json``, ``agentic.yaml``
 # or ``settings.yml``) is the layer between the dataclass defaults and the
 # environment. The current directory wins over the directory this module lives
 # in, so a consumer overrides the defaults shipped beside the harness.
@@ -270,7 +270,7 @@ def read_config_file(path: Path | str) -> dict[str, Any]:
     """Read a JSON or YAML config file into a mapping.
 
     Parsed with `omegaconf` when it is installed, which also resolves
-    interpolations such as ``inference_key: ${oc.env:AGENT_INFERENCE_KEY}`` and
+    interpolations such as ``inference_key: ${oc.env:AGENTIC_INFERENCE_KEY}`` and
     ``inference_llm: ${defaults.llm}``. Without it JSON still works and YAML falls
     back to `pyyaml`.
     """
@@ -340,7 +340,7 @@ def flatten_config(data: dict[str, Any], known: Iterable[str]) -> dict[str, Any]
 
 # Env files. A ``.env`` file, looked for in the same directories as the config
 # file, is loaded into the process environment before the config file is read,
-# so both ``${oc.env:VAR}`` interpolations and the ``AGENT_*`` layer see it.
+# so both ``${oc.env:VAR}`` interpolations and the ``AGENTIC_*`` layer see it.
 # The file wins over variables already set, so editing it always takes effect.
 
 ENV_FILE = ".env"
@@ -489,7 +489,7 @@ class AgentConfig:
     input_source: str = ""
     input: str = ""
     # Prompt template used by the data driven application: a file path or the
-    # template itself. Left empty, `load_template` looks for `agent_prompt.md`.
+    # template itself. Left empty, `load_template` looks for `agentic_prompt.md`.
     template: str = ""
     # Workspaces / sessions
     workspace_root: Path | None = None
@@ -555,7 +555,7 @@ class AgentConfig:
         return replace(self, extras=extras, **values)
 
     def with_env(self, environ: dict[str, str] | None = None) -> "AgentConfig":
-        """Return a copy with ``AGENT_<FIELD>`` environment overrides applied."""
+        """Return a copy with ``AGENTIC_<FIELD>`` environment overrides applied."""
         environ = os.environ if environ is None else environ
         overrides: dict[str, Any] = {}
         for f in fields(self):
@@ -590,8 +590,8 @@ class AgentConfig:
         """Return a copy with the values of a JSON or YAML config file applied.
 
         Without a path the file is the one `find_config_file` locates:
-        ``agent.json``, ``agent.yaml`` or ``settings.yml``, taken from the current
-        directory first and from the directory of ``main.py`` as a fallback.
+        ``agentic.json``, ``agentic.yaml`` or ``settings.yml``, taken from the current
+        directory first and from the directory of ``agentic.py`` as a fallback.
         Missing files are not an error when nothing was asked for by name.
         """
         file = Path(path).expanduser() if path else find_config_file()
@@ -3943,7 +3943,7 @@ class Agent(Engine):
         """Run this agent as a CLI application. Returns a process exit code.
 
         Without a template the one `load_template` resolves is used, which the
-        config file, ``AGENT_TEMPLATE`` or an ``agent_prompt.md`` beside the
+        config file, ``AGENTIC_TEMPLATE`` or an ``agentic_prompt.md`` beside the
         module can all supply.
         """
         args = parse_args(argv)
@@ -4516,10 +4516,10 @@ class WebServer:
     """
 
     ASSETS = {
-        "/": ("ui.html", "text/html; charset=utf-8"),
-        "/index.html": ("ui.html", "text/html; charset=utf-8"),
-        "/ui.css": ("ui.css", "text/css; charset=utf-8"),
-        "/ui.js": ("ui.js", "text/javascript; charset=utf-8"),
+        "/": (f"{STEM}_ui.html", "text/html; charset=utf-8"),
+        "/index.html": (f"{STEM}_ui.html", "text/html; charset=utf-8"),
+        "/ui.css": (f"{STEM}_ui.css", "text/css; charset=utf-8"),
+        "/ui.js": (f"{STEM}_ui.js", "text/javascript; charset=utf-8"),
     }
 
     def __init__(
@@ -4778,7 +4778,7 @@ PASSTHROUGH_TEMPLATE = "{{ config.input }}"
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the supported arguments: ``--input``, ``--repl``, ``--serve``, ``--config``."""
-    parser = argparse.ArgumentParser(prog="agent", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(prog=STEM, description=__doc__.splitlines()[0])
     parser.add_argument("--input", default="", help="a prompt file path or raw text")
     parser.add_argument(
         "--repl",
@@ -4806,9 +4806,9 @@ def template_candidates(directories: Iterable[Path | str] | None = None) -> list
 def load_template(config: AgentConfig | None = None) -> str:
     """Resolve the template for the data driven application.
 
-    Looks at `config.template` — which a config file or ``AGENT_TEMPLATE`` sets,
-    as a path or as the template itself — then ``agent_prompt.md`` in the current
-    directory and next to ``main.py``, and finally falls back to passing the
+    Looks at `config.template` — which a config file or ``AGENTIC_TEMPLATE`` sets,
+    as a path or as the template itself — then ``agentic_prompt.md`` in the current
+    directory and next to ``agentic.py``, and finally falls back to passing the
     input through.
     """
     raw = (getattr(config, "template", "") or "").strip()

@@ -29,7 +29,7 @@ cd ./hayhay
 Add repository as project dependency:
 
 ```bash
-uv add "agent @ git+https://github.com/iamhaymc/hayhay"
+uv add "agentic @ git+https://github.com/iamhaymc/hayhay"
 ```
 
 ## ▶️ Configure
@@ -37,9 +37,9 @@ uv add "agent @ git+https://github.com/iamhaymc/hayhay"
 Settings are resolved in layers:
 **defaults → config file → env vars → constructor / program args**
 
-A config file is `agent.json`, `agent.yaml` or `settings.yml`
+A config file is `agentic.json`, `agentic.yaml` or `settings.yml`
 
-- looked for in current directory then next to `main.py` as a fallback.
+- looked for in current directory then next to `agentic.py` as a fallback.
 - Point at another one with `--config path` or `Agent(config_file="path")`
 - Switch the layer off entirely with `Agent(config_file=False)`.
 
@@ -51,8 +51,8 @@ A `.env` file is loaded into the environment before the config file is read
 
 ```yaml
 inference: # a group flattens onto inference_*
-  url: ${oc.env:AGENT_INFERENCE_URL}
-  key: ${oc.env:AGENT_INFERENCE_KEY}
+  url: ${oc.env:AGENTIC_INFERENCE_URL}
+  key: ${oc.env:AGENTIC_INFERENCE_KEY}
   llm: some/general-model
   vlm: some/vision-model
 ```
@@ -63,7 +63,7 @@ inference: # a group flattens onto inference_*
 
 ```python
 import asyncio
-from agent import Agent
+from agentic import Agent
 PROMPT = """
 Summarise the following notes as bullet points.
 {{ config.input }}
@@ -81,7 +81,7 @@ text is assigned to `config.input`, which is what the template injects.
 `Engine` is the inference and tool call loop without: store, sessions, memory, checkouts, console, web layer.
 
 ```python
-from agent import Engine
+from agentic import Engine
 engine = Engine(inference_llm="some/model", inference_key=..., env=False)
 result = await engine.run(
   [{"role": "user", "content": "What did I ask before?"}],
@@ -90,7 +90,7 @@ result = await engine.run(
 print(result.output, result.ok)
 ```
 
-- `env=False` keeps the `AGENT_*` environment (and `.env`) out of an embedded process.
+- `env=False` keeps the `AGENTIC_*` environment (and `.env`) out of an embedded process.
 - `tools=` replaces the tool list; `workspace=` (per run, or on the constructor)
   builds the sandboxed file and shell tools instead. With neither, the model runs
   with no tools at all.
@@ -105,8 +105,8 @@ or injected below works in both.
 ## ▶️ Run (Tool)
 
 ```bash
-python main.py                     # no argument -> REPL
-python main.py --input notes.md    # any arguments -> one-shot
+python app/agentic.py                     # no argument -> REPL
+python app/agentic.py --input notes.md    # any arguments -> one-shot
 ```
 
 `--input`, `--repl`, `--serve` and `--config` are the only command line arguments
@@ -114,7 +114,7 @@ python main.py --input notes.md    # any arguments -> one-shot
 ## ▶️ Run (Page)
 
 ```bash
-python main.py --serve
+python app/agentic.py --serve
 ```
 
 > Default URL: `http://127.0.0.1:8765/`
@@ -124,11 +124,12 @@ python main.py --serve
 BDD Test(s):
 
 ```bash
-python -m unittest test -v
+python -m unittest test.agentic_bdd -v
 ```
 
 E2E Test(s):
 
 ```bash
-python -m unittest test -v
+uv sync --extra e2e && playwright install chromium
+python -m test.agentic_e2e
 ```

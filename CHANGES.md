@@ -67,7 +67,7 @@ version, with the phase log and the fixes at the end.
 - **Async end to end.** The web layer, the SDK stream and the tools all live on
   one event loop, so every blocking primitive (file IO, `git`, subprocesses)
   either runs in a thread or uses an async subprocess.
-- **A single flat module.** `main.py` is one file with commented subsystem
+- **A single flat module.** `agentic.py` is one file with commented subsystem
   sections. It keeps the import graph trivial, the library copyable into another
   tree and the whole surface readable in one pass.
 
@@ -76,13 +76,13 @@ version, with the phase log and the fixes at the end.
 ## Configuration
 
 `AgentConfig` is a dataclass resolved in layers: dataclass defaults, then a JSON
-or YAML file, then `AGENT_*` environment variables, then whatever the consumer or
+or YAML file, then `AGENTIC_*` environment variables, then whatever the consumer or
 the CLI passes in. Layering in that order is what lets the same object serve a
 library caller, a shell and a deployment without any of them knowing about the
 others.
 
 Values are coerced from the environment against the field annotations, so
-`AGENT_PORT` becomes an `int` and `AGENT_THEME` a `Path` without a schema.
+`AGENTIC_PORT` becomes an `int` and `AGENTIC_THEME` a `Path` without a schema.
 Unknown keys are not errors: they land in `extras` and are reachable from a
 template as `config.<name>`, which is how an application adds its own values
 without subclassing the config.
@@ -104,18 +104,23 @@ The environment is a poor place to keep two dozen settings: it is flat, it is
 untyped, and a deployment ends up with a wrapper script whose only job is to
 export things. A file layer fixes that without becoming a framework.
 
-- **Named after the module.** `agent.json`, `agent.yaml` or `settings.yml` — the
-  stem of `main.py`. A consumer that renames the module renames its config with
-  it, and nothing needs to be configured to find the configuration.
+- **Named after the module.** `agentic.json`, `agentic.yaml` or `settings.yml` — the
+  stem of `agentic.py`. A consumer that renames the module renames its config with
+  it, and nothing needs to be configured to find the configuration. The same
+  stem names the environment prefix (`AGENTIC_*`), the prompt file
+  (`agentic_prompt.md`), the CLI program and the page assets
+  (`agentic_ui.*`), so renaming the module is a file rename and nothing else.
+  The module was renamed from `agent` to `agentic` to match the package and
+  its script; `AGENT_*` variables in an existing `.env` must be renamed.
 - **The current directory first, the module directory as a fallback.** An
   installed harness ships whatever defaults it likes beside itself; the
   application that runs it overrides them from where it is run. The first file
   that exists wins, because merging two files invites the question of which one
   set what.
 - **Below the environment.** A file is checked in, the environment is not, so
-  `AGENT_API_KEY` must still beat a value in the file — and a credential that
+  `AGENTIC_API_KEY` must still beat a value in the file — and a credential that
   belongs nowhere near a repository can be pulled in explicitly with
-  `${oc.env:AGENT_API_KEY}` instead.
+  `${oc.env:AGENTIC_API_KEY}` instead.
 - **omegaconf, not a schema.** It reads both formats and resolves `${...}`
   interpolations to the environment and to other keys, which is what makes one
   file serve several environments. It stays optional at runtime: JSON is read by
@@ -126,7 +131,7 @@ export things. A file layer fixes that without becoming a framework.
   else is left alone and lands in `extras`, so an application's own nested values
   survive intact and a typo never silently invents a setting.
 - **Off is a value.** `config_file=False` keeps an embedded engine from reading a
-  stray `agent.yaml` in the working directory of its host, in the same spirit as
+  stray `agentic.yaml` in the working directory of its host, in the same spirit as
   `env=False`; a named file that does not exist raises, because the caller asked
   for that file by name.
 
@@ -138,7 +143,7 @@ remove. A `.env` file closes that gap.
 
 - **Loaded into the environment, not into the config.** `.env` feeds
   `os.environ` before the config file is read, so it serves both
-  `${oc.env:VAR}` interpolations (`INFERENCE_URL`, ...) and the `AGENT_*` layer
+  `${oc.env:VAR}` interpolations (`INFERENCE_URL`, ...) and the `AGENTIC_*` layer
   without a second resolution path.
 - **Fills gaps, never overrides.** A variable already set in the shell or the
   deployment wins, so CI and production need not care whether a stray `.env`
@@ -149,7 +154,7 @@ remove. A `.env` file closes that gap.
   so `env=False` skips it as well and an embedded host's process environment is
   left untouched.
 - **python-dotenv, imported lazily.** The parser handles quoting, `export` and
-  `${VAR}` expansion; a vendored `agent.py` without it only fails when a `.env`
+  `${VAR}` expansion; a vendored `agentic.py` without it only fails when a `.env`
   is actually there to read.
 
 ## Events
@@ -542,8 +547,8 @@ regardless of token rate and the text still appears as it arrives.
 
 ## End to end capture
 
-`e2e.py` exists because the page was the one subsystem nothing looked at.
-Every other part is asserted by `test.py`, while the client was only ever
+`test/agentic_e2e.py` exists because the page was the one subsystem nothing looked at.
+Every other part is asserted by `test/agentic_bdd.py`, while the client was only ever
 checked by a person opening a browser — so the two defects below sat in plain
 sight.
 
@@ -697,3 +702,8 @@ harness.
 - **Unit tests read the developer's `.env`.** Default discovery found the real
   file in the working directory and loaded it into the test process. The test
   module now makes the default search find nothing; explicit lookups still run.
+- **The page served nothing.** `WebServer.ASSETS` mapped `/` to `ui.html` while
+  the files on disk were `agent_ui.*`, and the page linked `/ui.css` beside
+  `/agent_ui.js`, so every asset was a 404. Asset file names are now built from
+  the module stem, the page links only the served `/ui.*` paths, and a unit
+  test asserts both.
