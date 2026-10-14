@@ -493,6 +493,16 @@ a placeholder rather than letting it refuse to construct a client over a
 credential it would never send. A set `OPENAI_API_KEY` still wins, so the SDK's
 own environment fallback keeps working.
 
+`inference_ctx` (`AGENTIC_INFERENCE_CTX`) is sent with every leader and
+specialist request as `extra_body={"options": {"num_ctx": n}}`, Ollama's name for
+the context size, because a Modelfile can pin a small one (e.g. `num_ctx 8192`
+on a model trained for `262144`). Unset, the pool looks up the trained length
+once per model (`/api/show` `model_info.<arch>.context_length`) and sends
+nothing when there is none (any non-Ollama provider). Caveat: Ollama 0.34's
+OpenAI-compatible `/v1` drops `options`, so the value takes effect only on a
+server that reads it; the harness window (`context_window`) is not derived from
+it, since a server that ignores it still truncates at its own `num_ctx`.
+
 ## Tools
 
 `Workspace` holds the sandboxed primitives and `ToolRegistry` exposes them to the
@@ -983,6 +993,7 @@ harness.
 - **Shell timeouts that did not kill.** A leader running a nested agent (`python app\agentic.py --input …`) failed with `leader model timeout: the model sent nothing for 240s` although `shell_timeout` was 120s. On Windows the shell is `cmd.exe /c …`, `process.kill()` reached only `cmd.exe`, and the grandchild `python.exe` kept stdout/stderr open; on Python 3.12 `Process.wait()` waits for those pipes, so the tool hung until the child ended and the stall guard (`request_timeout` + `shell_timeout`) fired first, leaving the child orphaned. A 2s timeout on an 8s sleep returned after 8.1s. `Workspace.kill_tree()` now kills the whole tree (`taskkill /F /T`, or `os.killpg` on the new session the shell starts in), on cancellation as well as on timeout, and the wait for the pipes afterwards is bounded by `KILL_GRACE`; stdin is closed so a prompt cannot hang a command either. The same fix streams output and heartbeats as `tool.progress`, so a slow command is visibly alive in the console (dots) and the web UI (tailed output, seconds in the label, a pulse of the mark). The default `shell_timeout` went from 120s to 900s, since a timeout that now really kills would otherwise cut a nested agent run short.
 - **Stall guard shorter than a tool call.** A leader on Ollama asked for a 1,000 line story said `I'll write a 1000-line … story …` and then failed with `leader model timeout: the model sent nothing for 120s`. Ollama's OpenAI endpoint parses tool calls out of the model's output and sends each one whole once it is complete, so while the model writes the `content` argument of a `write_file` the stream carries no bytes at all: a direct probe of `satgeze/qwenpaw-9b-heretic-1m` (Ollama 0.34.0) was 17.2s of silence for a 3.4K char call, then one chunk with every argument; a story of 1,000 lines is ~15× that. `request_timeout` (120s) was both the stall guard and the read timeout of the shared `httpx` client, so either would have cut it. The stall guard is now its own setting, `stream_timeout` (default 600s, `RetryPolicy.stall`), and `ModelPool.client()` gives the transport a read timeout of the longer of the two while connect, write and pool stay at `request_timeout`; a specialist call is still bounded by `request_timeout` as a whole.
 - **Unbounded shell output.** A recursive listing (`dir /s /b` over a project with a `.venv`, ~350K chars) went whole into the leader's context and the next model turn stalled past the 120s guard, so the web UI sat frozen on the tool block. `Workspace.run_shell()` now clips output to `shell_output_limit` characters (default 32,000, `0` disables), keeping the head and tail around an `[... N chars omitted ...]` marker, and logs each clip to stderr.
+- **Compaction loop on a big read.** A leader on a small Ollama window read a ~22K token file; it outgrew the usable budget, so compaction clipped it (`Compacted 22k → 4.0k tokens: … clipped 1 tool outputs`), the model saw a truncated file and read it again, whole, to be clipped the same way. `read_text_file` returned whole files and the only exit offered was the same call (the stub even said `Call the tool again`). Three fixes: `read_text_file` takes `offset` / `limit` and returns a page of whole lines capped at `read_output_limit` (default a quarter of the usable budget), ending `[lines A-B of N of path; continue with offset=B+1]`, so a fresh read never needs clipping; a cut read repeated back to back with the same arguments is refused with a pointer to the next range (`ReadRepeats`, forgotten on any write or shell call); a clipped output is headed by `CLIP_NOTE` (a repeat returns the same size), and a cleared output over a quarter of the usable budget says it is too large to read again whole.
 - **A boundary the shell walked around.** With `read_outside` off and writes
   confined, `run_shell_command` could still `cat ~/.ssh/id_rsa` or write
   anywhere the process could. The outside flags now hold the shell too (an OS

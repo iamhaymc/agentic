@@ -489,6 +489,8 @@ class ModelSpec:
     name: str
     api_url: str
     api_key: str = ""
+    #: Context size asked of the server per request (Ollama `num_ctx`); 0 looks it up.
+    num_ctx: int = 0
 
     @property
     def endpoint(self) -> tuple[str, str]:
@@ -508,6 +510,10 @@ class AgentConfig:
     inference_url: str = DEFAULT_INFERENCE_URL
     inference_key: str = ""
     inference_llm: str = DEFAULT_INFERENCE_LLM
+    # Context size sent with every model request as `options.num_ctx` (Ollama's
+    # name for it). 0 looks up the length the model was trained for (Ollama
+    # `/api/show`) and sends nothing when none is found.
+    inference_ctx: int = 0
     max_turns: int = 100
     # Resilience of model calls. Every request to a provider is bounded by a
     # timeout and tried again on a transient failure (a timeout, a rate limit, a
@@ -635,6 +641,11 @@ class AgentConfig:
     # A command's output is clipped to this many characters (head and tail
     # kept) before the model sees it; 0 disables the cap.
     shell_output_limit: int = 32_000
+    # Characters one `read_text_file` call returns; a longer file comes back a
+    # page of whole lines at a time, ending with the offset of the next page.
+    # 0 sizes the page to a quarter of the usable context budget, -1 returns
+    # files whole.
+    read_output_limit: int = 0
     shell_enabled: bool = True
     # Reach beyond the session workspace. `outside_read` lets the read tools
     # (list, read, image) take outside paths, `outside_write` the write tools
@@ -746,7 +757,11 @@ class AgentConfig:
         """
         if role == LEADER_ROLE:
             return ModelSpec(
-                LEADER_ROLE, self.inference_llm, self.inference_url, self.inference_key
+                LEADER_ROLE,
+                self.inference_llm,
+                self.inference_url,
+                self.inference_key,
+                self.inference_ctx,
             )
         name = getattr(self, ROLE_MODEL_FIELDS.get(role, f"{role}_model"), "") or ""
         if not name:
@@ -756,6 +771,7 @@ class AgentConfig:
             name,
             getattr(self, f"{role}_api_url", "") or self.inference_url,
             getattr(self, f"{role}_api_key", "") or self.inference_key,
+            self.inference_ctx,
         )
 
     def to_dict(self, *, redact: bool = True) -> dict[str, Any]:
@@ -1753,6 +1769,11 @@ PINNED_HEADER = "## Active request (verbatim)"
 
 #: Stands in for the reasoning of an earlier step once it is cleared.
 THOUGHT_STUB = "[earlier reasoning cleared to save context]"
+#: Heads a tool output compaction clipped: the same call returns the same size.
+CLIP_NOTE = (
+    "[output clipped to fit the context window. Calling the tool again returns "
+    "the same size; ask for a narrower part (a line range, a filter) instead.]"
+)
 
 
 def summary_message(text: str) -> dict[str, str]:
@@ -2338,10 +2359,11 @@ class Compactor:
                 if keep >= costs[index]:
                     continue
                 text = content_text(self.masked(items[index], state).get("output"))
+                keep -= self.counter.text(CLIP_NOTE)
                 chars = max(int(len(text) * keep / max(costs[index], 1)), 200)
                 call_id = str(items[index]["call_id"])
                 state.cleared.pop(call_id, None)
-                state.clipped[call_id] = clip_output(text, chars)
+                state.clipped[call_id] = f"{CLIP_NOTE}\n{clip_output(text, chars)}"
                 report.clipped.append(call_id)
                 settle(index)
         report.after = self.counter.scaled(current)
@@ -2378,8 +2400,16 @@ class Compactor:
             ),
             "tool",
         )
+        size = self.counter.scaled(tokens)
+        if size > self.budget.usable // 4:
+            # Called again whole it would only be cleared or clipped again.
+            return (
+                f"[{name} output cleared to save context: {size:,} tokens, too large "
+                "to read again whole. Ask for only the part you need (a line range, "
+                "a filter).]"
+            )
         return (
-            f"[{name} output cleared to save context: {self.counter.scaled(tokens):,} "
+            f"[{name} output cleared to save context: {size:,} "
             "tokens. Call the tool again if you need it.]"
         )
 
@@ -3687,6 +3717,8 @@ class ModelPool:
         self.usage = Usage()
         #: Context windows by endpoint and model, as found or learned (0: unknown).
         self._windows: dict[tuple[str, str], int] = {}
+        #: `num_ctx` to send by endpoint and model, as found (0: send none).
+        self._contexts: dict[tuple[str, str], int] = {}
 
     def client(self, spec: ModelSpec) -> Any:
         """Return the shared async client for the endpoint of `spec`.
@@ -3814,6 +3846,59 @@ class ModelPool:
                     return int(match.group(1))
         return OLLAMA_CONTEXT_WINDOW
 
+    async def num_ctx(self, spec: ModelSpec) -> int:
+        """The `num_ctx` to send for `spec`: configured, else looked up, else 0.
+
+        Looked up once per endpoint and model; a lookup that fails or stalls is
+        remembered as 0 (send none) and never fails a run.
+        """
+        if spec.num_ctx > 0:
+            return int(spec.num_ctx)
+        key = (spec.api_url, spec.name)
+        if key not in self._contexts:
+            found = 0
+            try:
+                found = int(
+                    await asyncio.wait_for(self.probe_ctx(spec), self.PROBE_TIMEOUT) or 0
+                )
+            except Exception as exc:
+                print(f"[context] no num_ctx found for {spec.name}: {exc!r}", file=sys.stderr)
+            self._contexts[key] = found
+        return self._contexts[key]
+
+    def known_num_ctx(self, spec: ModelSpec) -> int:
+        """The `num_ctx` of `spec` when configured or looked up already, else 0."""
+        return int(spec.num_ctx) if spec.num_ctx > 0 else self._contexts.get((spec.api_url, spec.name), 0)
+
+    def extra_body(self, spec: ModelSpec | None) -> dict[str, Any] | None:
+        """Request body extras for `spec`: ``{"options": {"num_ctx": n}}`` or ``None``."""
+        size = self.known_num_ctx(spec) if spec is not None else 0
+        return {"options": {"num_ctx": size}} if size > 0 else None
+
+    async def probe_ctx(self, spec: ModelSpec) -> int:
+        """The context length an Ollama model was trained for (`/api/show`), else 0."""
+        import httpx
+
+        root = spec.api_url.rstrip("/").removesuffix("/v1")
+        async with httpx.AsyncClient(timeout=self.PROBE_TIMEOUT) as http:
+            shown = await http.post(f"{root}/api/show", json={"model": spec.name})
+        if shown.status_code != 200:
+            return 0
+        try:
+            info = shown.json().get("model_info")
+        except (ValueError, AttributeError):
+            return 0
+        if not isinstance(info, dict):
+            return 0
+        lengths = [
+            int(value)
+            for name, value in info.items()
+            if name.endswith(".context_length")
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ]
+        return max(lengths, default=0)
+
     async def complete(
         self,
         spec: ModelSpec,
@@ -3833,10 +3918,12 @@ class ModelPool:
         did.
         """
         resolved = policy or self.policy
+        await self.num_ctx(spec)
+        extra_body = self.extra_body(spec)
 
         async def request() -> Any:
             return await self.client(spec).chat.completions.create(
-                model=spec.name, messages=messages, max_tokens=max_tokens
+                model=spec.name, messages=messages, max_tokens=max_tokens, extra_body=extra_body
             )
 
         response = await resolved.call(request, role=spec.role, on_retry=on_retry)
@@ -3941,6 +4028,73 @@ def clip_output(text: str, limit: int) -> str:
     tail = limit - head
     omitted = len(text) - head - tail
     return f"{text[:head]}\n[... {omitted} chars omitted ...]\n{text[-tail:]}"
+
+
+@dataclass
+class TextPage:
+    """A run of whole lines of a text file (`Workspace.read_page`)."""
+
+    text: str
+    #: First and last line returned (1-based, inclusive) and the line count.
+    start: int
+    end: int
+    total: int
+    path: str = ""
+    #: The one line returned was longer than the page and is clipped.
+    clipped: bool = False
+
+    @property
+    def complete(self) -> bool:
+        """True when the page is the whole file, nothing cut."""
+        return not self.clipped and self.start <= 1 and self.end >= self.total
+
+    @property
+    def footer(self) -> str:
+        """Where the page sits in the file and how to read on; empty when whole."""
+        if self.complete:
+            return ""
+        note = f"lines {self.start}-{self.end} of {self.total} of {self.path}"
+        if self.clipped:
+            note += f", line {self.end} clipped (too long to return whole)"
+        if self.end < self.total:
+            note += f"; continue with offset={self.end + 1}"
+        return f"[{note}]"
+
+    def render(self) -> str:
+        """The page as a tool returns it: the lines, then the footer."""
+        if self.complete:
+            return self.text
+        return f"{self.text.rstrip(chr(10))}\n{self.footer}"
+
+
+class ReadRepeats:
+    """Refuses a read repeated back to back when its last answer was cut short.
+
+    The same arguments return the same cut, so a model that answers a cut
+    output by reading it again loops (more so while compaction trims the
+    context around it); it is pointed at the next range instead. A write in
+    between forgets the last read, as the file may have changed.
+    """
+
+    def __init__(self) -> None:
+        self.key: tuple[Any, ...] | None = None
+        self.footer = ""
+
+    def check(self, key: tuple[Any, ...]) -> str | None:
+        """An error to return instead of running `key`, or ``None`` to run it."""
+        if not self.footer or key != self.key:
+            return None
+        return (
+            f"Error: this exact read just returned {self.footer}. Repeating it "
+            "returns the same text; read the next range (offset) or a narrower "
+            "one (offset and limit) instead."
+        )
+
+    def record(self, key: tuple[Any, ...], footer: str) -> None:
+        self.key, self.footer = key, footer
+
+    def forget(self) -> None:
+        self.key, self.footer = None, ""
 
 
 def guess_mime(path: Path | str) -> str:
@@ -4316,6 +4470,35 @@ class Workspace:
             raise WorkspaceError(f"file too large: {self.relative(path)}")
         return path.read_text(encoding="utf-8", errors="replace")
 
+    def read_page(self, raw: str, offset: int = 1, limit: int = 0, max_chars: int = 0) -> "TextPage":
+        """Whole lines of a text file from line `offset` (1-based).
+
+        At most `limit` lines (0: any) and `max_chars` characters (0: any); a
+        first line longer than `max_chars` on its own is clipped.
+        """
+        text = self.read_text(raw)
+        name = self.relative(self.resolve(raw, read=True))
+        lines = text.splitlines(keepends=True)
+        total = len(lines)
+        offset = max(int(offset or 1), 1)
+        if total == 0:
+            return TextPage("", 1, 0, 0, name)
+        if offset > total:
+            raise WorkspaceError(f"offset {offset} is past the end: {name} has {total} lines")
+        stop = total if limit <= 0 else min(total, offset - 1 + int(limit))
+        chosen: list[str] = []
+        size = 0
+        clipped = False
+        for line in lines[offset - 1 : stop]:
+            if max_chars > 0 and size + len(line) > max_chars:
+                if not chosen:
+                    chosen.append(clip_output(line, max_chars))
+                    clipped = True
+                break
+            chosen.append(line)
+            size += len(line)
+        return TextPage("".join(chosen), offset, offset - 1 + len(chosen), total, name, clipped)
+
     def write_text(self, raw: str, content: str) -> str:
         path = self.resolve(raw)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -4510,6 +4693,7 @@ class ToolRegistry:
         checkout: "Checkout | None" = None,
         progress: ToolReporter | None = None,
         ask: Asker | None = None,
+        read_limit: int = 0,
     ) -> list[Any]:
         """Build the tools for `workspace`.
 
@@ -4520,10 +4704,13 @@ class ToolRegistry:
         also gets the tools that publish its work. `progress` receives the
         ``(call_id, text)`` a long running tool reports while it works. `ask`
         puts a question to the person behind the run; when it is given the
-        leader gets `ask_user`.
+        leader gets `ask_user`. `read_limit` is the characters one
+        `read_text_file` call returns (0: whole files).
         """
         tools = (
-            list(self._build_defaults(workspace, vision, progress)) if self._defaults else []
+            list(self._build_defaults(workspace, vision, progress, read_limit))
+            if self._defaults
+            else []
         )
         if checkout is not None:
             tools.extend(self._build_repo_tools(checkout))
@@ -4645,11 +4832,13 @@ class ToolRegistry:
         ws: Workspace,
         vision: Callable[[str, str], Awaitable[str]] | None = None,
         progress: ToolReporter | None = None,
+        read_limit: int = 0,
     ) -> Iterable[Any]:
         from agents import function_tool
         from agents.tool_context import ToolContext
 
         guard = self.guard
+        repeats = ReadRepeats()
         reach = " Paths outside the workspace may be read too." if ws.outside_read else ""
         write_reach = (
             " Paths outside the workspace may be written too." if ws.outside_write else ""
@@ -4670,13 +4859,22 @@ class ToolRegistry:
         @function_tool(
             name_override="read_text_file",
             description_override=(
-                "Read a UTF-8 text file from the workspace and return its contents."
-                + reach
+                "Read a UTF-8 text file from the workspace and return its contents. "
+                "A long file comes back a page of whole lines at a time, ending with "
+                "'[lines A-B of N ...; continue with offset=B+1]'. Pass 'offset' "
+                "(first line, 1-based) and 'limit' (line count, 0 for as many as "
+                "fit) to read a range." + reach
             ),
         )
         @guard
-        async def read_text_file(path: str) -> str:
-            return await asyncio.to_thread(ws.read_text, path)
+        async def read_text_file(path: str, offset: int = 1, limit: int = 0) -> str:
+            key = (path.strip(), max(int(offset or 1), 1), max(int(limit or 0), 0))
+            refused = repeats.check(key)
+            if refused:
+                return refused
+            page = await asyncio.to_thread(ws.read_page, path, offset, limit, read_limit)
+            repeats.record(key, page.footer)
+            return page.render()
 
         @function_tool(
             name_override="write_text_file",
@@ -4687,6 +4885,7 @@ class ToolRegistry:
         )
         @guard
         async def write_text_file(path: str, content: str) -> str:
+            repeats.forget()
             written = await asyncio.to_thread(ws.write_text, path, content)
             return f"Wrote {len(content)} characters to {written}"
 
@@ -4734,6 +4933,7 @@ class ToolRegistry:
         async def apply_patch(
             path: str, diff: str, operation: str = "update_file"
         ) -> str:
+            repeats.forget()
             return await asyncio.to_thread(ws.apply_patch, path, diff, operation)
 
         tools = [list_directory, read_text_file, write_text_file, image_tool, apply_patch]
@@ -4747,6 +4947,7 @@ class ToolRegistry:
 
             @guard
             async def run_shell_command(ctx: Any, command: str) -> str:
+                repeats.forget()
                 report = functools.partial(progress, ctx.tool_call_id) if progress else None
                 return await ws.run_shell(command, report)
 
@@ -5433,11 +5634,17 @@ class Engine:
         session_id: str | None = None,
         progress: ToolReporter | None = None,
         ask: Asker | None = None,
+        read_limit: int = 0,
     ) -> list[Any]:
         resolved = config or self.config
         vision = self.build_vision(resolved, usage=usage, session_id=session_id)
         return self.tools.build(
-            workspace, vision=vision, checkout=checkout, progress=progress, ask=ask
+            workspace,
+            vision=vision,
+            checkout=checkout,
+            progress=progress,
+            ask=ask,
+            read_limit=read_limit,
         )
 
     def build_sdk_agent(self, config: AgentConfig, tools: list[Any]) -> Any:
@@ -5450,7 +5657,10 @@ class Engine:
             tools=tools,
             # usage on every streamed response: it prices the run and
             # calibrates the context count (most providers omit it unasked)
-            model_settings=ModelSettings(include_usage=True),
+            model_settings=ModelSettings(
+                include_usage=True,
+                extra_body=self.models.extra_body(config.model_spec(LEADER_ROLE)),
+            ),
         )
 
     # -- context ------------------------------------------------------------
@@ -5478,6 +5688,18 @@ class Engine:
             config.context_trigger,
             config.context_target,
         )
+
+    async def read_limit(self, config: AgentConfig) -> int:
+        """Characters one `read_text_file` call returns (0: whole files).
+
+        Configured, else a quarter of the usable budget: a page always fits
+        beside the conversation, so compaction never has to clip a fresh read
+        (which the model would answer by reading it again, and again).
+        """
+        if config.read_output_limit:
+            return max(int(config.read_output_limit), 0)
+        budget = await self.context_budget(config)
+        return max(budget.usable // 4 * TokenCounter.BYTES_PER_TOKEN, 2000)
 
     def build_summarizer(
         self, config: AgentConfig
@@ -5726,6 +5948,7 @@ class Engine:
                     session_id=result.session_id,
                     progress=self.tool_reporter(result),
                     ask=self.build_asker(config, result),
+                    read_limit=await self.read_limit(config),
                 )
                 if sandbox
                 else []
@@ -5734,6 +5957,9 @@ class Engine:
             result.context = await self.build_context(
                 config, result, pinned_at=input_size(model_input) - 1, pinned=prompt_of(model_input)
             )
+        leader = config.model_spec(LEADER_ROLE)
+        if leader is not None:
+            await self.models.num_ctx(leader)  # cached for build_sdk_agent
         sdk_agent = self.guard_model(self.build_sdk_agent(config, tools), result)
         return await self.build_policy(config).call(
             lambda: self.stream(sdk_agent, model_input, config, result),

@@ -197,6 +197,7 @@ genre: noir
 | ----------------------------------------------------------------------------- | ------------------------------------------- |
 | `AGENTIC_NAME`, `AGENTIC_INSTRUCTIONS`                                        | Agent name and system instructions          |
 | `AGENTIC_INFERENCE_LLM`, `_URL`, `_KEY`                                       | Leader model, endpoint and credential       |
+| `AGENTIC_INFERENCE_CTX`                                                       | `num_ctx` sent per request (`0`: look up)   |
 | `AGENTIC_MAX_TURNS`                                                           | Maximum agentic turns per run               |
 | `AGENTIC_REQUEST_TIMEOUT`                                                     | Timeout per specialist call and connect     |
 | `AGENTIC_STREAM_TIMEOUT`                                                      | Leader stall guard; transport read timeout  |
@@ -231,6 +232,7 @@ genre: noir
 | `AGENTIC_DB_PATH`, `AGENTIC_CACHE_SIZE`                                       | SQLite file and LRU capacity                |
 | `AGENTIC_SHELL_TIMEOUT`, `AGENTIC_SHELL_ENABLED`                              | Shell tool limits                           |
 | `AGENTIC_SHELL_HEARTBEAT`                                                     | Seconds between shell heartbeats (`0` off)  |
+| `AGENTIC_READ_OUTPUT_LIMIT`                                                   | Chars per `read_text_file` page (`0` auto)  |
 | `AGENTIC_OUTSIDE_READ`, `AGENTIC_OUTSIDE_WRITE`                               | Reads / writes beyond the workspace         |
 | `AGENTIC_SHELL_SANDBOX`, `AGENTIC_ASK_ENABLED`                                | Shell confinement backend; `ask_user` tool  |
 | `AGENTIC_HOST`, `AGENTIC_PORT`, `AGENTIC_THEME`                               | Web bind address and UI theme file          |
@@ -399,9 +401,11 @@ Counting (`TokenCounter`, one per leader model):
 Tiers (`Compactor.compact`), cheapest first, each only as far as `low` needs:
 
 1. reasoning before the newest response → `THOUGHT_STUB` (no model call)
-2. tool outputs, oldest first, newest `context_keep` (4) spared, under 200 tokens left alone → a stub naming the tool and the tokens it held
+2. tool outputs, oldest first, newest `context_keep` (4) spared, under 200 tokens left alone → a stub naming the tool and the tokens it held; over a quarter of `usable` the stub says it is too large to read again whole (ask for a part), else to call the tool again
 3. oldest prefix → summary: the smallest safe cut whose tail fits, folded by the `summary` role into the previous summary (anchored, never rebuilt), a chunk per call when the segment outgrows the summary model; skipped when the segment is too small to be worth a call; the newest response is always kept
-4. what still exceeds `usable` (a giant newest output) → clipped, head and tail
+4. what still exceeds `usable` (a giant newest output) → clipped, head and tail, headed by `CLIP_NOTE` (a repeat returns the same size; ask for a narrower part)
+
+> Loop guard: a clipped read answered by the same read clips again; `read_text_file` pages (`read_output_limit`) so a fresh read always fits, and refuses a cut read repeated back to back (see Tools)
 
 Cuts (`safe_cuts`):
 
@@ -623,6 +627,14 @@ error revealed. The SDK agent asks for usage on every stream
 (`ModelSettings(include_usage=True)`): it prices the run and calibrates the
 context count.
 
+`ModelPool.num_ctx(spec)` is the context size sent with every request as
+`extra_body={"options": {"num_ctx": n}}` (leader via `ModelSettings.extra_body`,
+specialists via `complete`): `spec.num_ctx` (`inference_ctx`) when set, else the
+trained length from Ollama `/api/show` (`model_info.<arch>.context_length`,
+`probe_ctx`, once per model), else nothing is sent. Ollama 0.34's `/v1` drops
+`options`, so it only takes effect on a server that reads it; `window` is not
+derived from it.
+
 `Agent.build_model(config, role)` pulls from the pool, disables SDK tracing and
 sets the leader's client as the SDK default. `Agent.build_vision(config)` returns
 a `(data_url, question) -> text` delegate, or `None` when no vision model is
@@ -687,13 +699,20 @@ returns `(the user did not answer)` for an empty answer.
 | Tool                | Present when                | Effect                                    |
 | ------------------- | --------------------------- | ----------------------------------------- |
 | `list_directory`    | always                      | List a workspace directory                |
-| `read_text_file`    | always                      | Read a UTF-8 file                         |
+| `read_text_file`    | always                      | Read a UTF-8 file, a page at a time       |
 | `write_text_file`   | always                      | Write a file, creating parents            |
 | `apply_patch`       | always                      | Apply a unified diff                      |
 | `view_image`        | no vision model             | Return the image as a data URL            |
 | `describe_image`    | vision model configured     | Ask the specialist about the image        |
 | `run_shell_command` | `shell_enabled`, unconfined or sandboxed | Run a command in the workspace |
 | `ask_user`          | `ask_enabled` (repl, web)   | Ask the user, wait for the answer         |
+
+Paged reads (`read_text_file(path, offset=1, limit=0)`):
+
+- `Workspace.read_page(path, offset, limit, max_chars)` → `TextPage`: whole lines from `offset` (1-based), at most `limit` lines and `max_chars` characters; a first line longer than the cap is clipped
+- `TextPage.render()` — the file as is when whole, else the lines + `[lines A-B of N of path; continue with offset=B+1]`
+- `max_chars` is `Engine.read_limit(config)`: `read_output_limit`, or a quarter of the usable budget (× 4 chars/token, ≥ 2,000); `-1` reads whole
+- `ReadRepeats` — per tool build: a cut read repeated back to back with the same arguments returns an error naming the next range instead of the same page; `write_text_file`, `apply_patch` and `run_shell_command` forget it
 | `git_status`        | the session has a checkout  | Branch and working tree                   |
 | `git_commit`        | the session has a checkout  | Stage everything and commit               |
 | `git_push`          | the session has a checkout  | Push the session branch                   |

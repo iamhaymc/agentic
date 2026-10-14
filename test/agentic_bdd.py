@@ -29,6 +29,7 @@ import app.agentic as A
 
 _find_env_file = A.find_env_file
 _probe_window = A.ModelPool.probe_window
+_probe_ctx = A.ModelPool.probe_ctx
 
 
 def setUpModule():
@@ -46,6 +47,7 @@ def setUpModule():
     for patch in (
         unittest.mock.patch.object(A.TokenCounter, "encodings", {"o200k_base": None}),
         unittest.mock.patch.object(A.ModelPool, "probe_window", _no_window),
+        unittest.mock.patch.object(A.ModelPool, "probe_ctx", _no_window),
     ):
         patch.start()
         unittest.addModuleCleanup(patch.stop)
@@ -223,6 +225,83 @@ class ModelPoolTest(unittest.TestCase):
         first = self.pool.client(spec)
         self.pool.clear()
         self.assertIsNot(first, self.pool.client(spec))
+
+    def test_a_configured_num_ctx_is_sent_as_an_option(self):
+        spec = A.ModelSpec("vision", "v", "http://url", "k", num_ctx=65536)
+        run(self.pool.describe_image(spec, "data:image/png;base64,AA"))
+        payload = self.pool.client(spec).calls[0]
+        self.assertEqual(payload["extra_body"], {"options": {"num_ctx": 65536}})
+
+    def test_without_a_num_ctx_nothing_extra_is_sent(self):
+        spec = A.ModelSpec("vision", "v", "http://url", "k")
+        run(self.pool.describe_image(spec, "data:image/png;base64,AA"))
+        self.assertIsNone(self.pool.client(spec).calls[0]["extra_body"])
+
+    def test_an_unset_num_ctx_is_looked_up_once(self):
+        calls = []
+
+        async def probe(spec):
+            calls.append(spec)
+            return 262144
+
+        self.pool.probe_ctx = probe
+        spec = A.ModelSpec("leader", "m", "http://url", "k")
+        self.assertEqual(run(self.pool.num_ctx(spec)), 262144)
+        self.assertEqual(run(self.pool.num_ctx(spec)), 262144)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.pool.extra_body(spec), {"options": {"num_ctx": 262144}})
+
+    def test_a_failed_num_ctx_lookup_sends_none(self):
+        async def probe(spec):
+            raise RuntimeError("offline")
+
+        self.pool.probe_ctx = probe
+        spec = A.ModelSpec("leader", "m", "http://url", "k")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(run(self.pool.num_ctx(spec)), 0)
+        self.assertIsNone(self.pool.extra_body(spec))
+
+    def test_ollama_show_gives_the_trained_context_length(self):
+        import httpx
+
+        def handler(request):
+            self.assertEqual(request.url.path, "/api/show")
+            body = {"model_info": {"general.architecture": "qwen35", "qwen35.context_length": 262144}}
+            return httpx.Response(200, json=body)
+
+        self.assertEqual(self.show(handler), 262144)
+
+    def test_a_server_without_ollama_show_gives_none(self):
+        import httpx
+
+        self.assertEqual(self.show(lambda request: httpx.Response(404)), 0)
+        self.assertEqual(self.show(lambda request: httpx.Response(200, text="<html>")), 0)
+
+    def show(self, handler):
+        import httpx
+
+        real = httpx.AsyncClient
+        transport = httpx.MockTransport(handler)
+        with unittest.mock.patch.object(
+            httpx, "AsyncClient", lambda **kw: real(transport=transport, **kw)
+        ):
+            return run(_probe_ctx(self.pool, A.ModelSpec("leader", "m", "http://host:11434/v1")))
+
+    def test_the_config_carries_num_ctx_to_every_role(self):
+        config = A.AgentConfig(inference_ctx=32768, inference_vlm="v")
+        self.assertEqual(config.model_spec(A.LEADER_ROLE).num_ctx, 32768)
+        self.assertEqual(config.model_spec(A.VISION_ROLE).num_ctx, 32768)
+
+    def test_the_environment_sets_inference_ctx(self):
+        config = A.AgentConfig().with_env({"AGENTIC_INFERENCE_CTX": "65536"})
+        self.assertEqual(config.inference_ctx, 65536)
+
+    def test_the_leader_sends_num_ctx_in_its_model_settings(self):
+        engine = A.Engine(inference_ctx=16384, env=False, config_file=False)
+        agent = engine.build_sdk_agent(engine.config, [])
+        self.assertEqual(agent.model_settings.extra_body, {"options": {"num_ctx": 16384}})
+        bare = A.Engine(env=False, config_file=False)
+        self.assertIsNone(bare.build_sdk_agent(bare.config, []).model_settings.extra_body)
 
 
 class RateLimitError(Exception):
@@ -1706,6 +1785,18 @@ class CompactorTest(unittest.TestCase):
         self.assertLessEqual(report.after, self.budget.usable)
         self.assertIn("chars omitted", self.compactor().view(items, state)[-1]["output"])
 
+    def test_a_clipped_output_says_a_repeat_returns_the_same(self):
+        items = [user("go"), *tool_pair("c1", self.big(3000))]
+        state = A.ContextState()
+        report = run(self.compactor().compact(items, state))
+        self.assertLessEqual(report.after, self.budget.usable)
+        self.assertTrue(self.compactor().view(items, state)[-1]["output"].startswith(A.CLIP_NOTE))
+
+    def test_a_cleared_output_too_large_to_reread_says_so(self):
+        compactor = self.compactor()
+        self.assertIn("too large to read again whole", compactor.stub(list(tool_pair("c1")), 1, 300))
+        self.assertIn("Call the tool again", compactor.stub(list(tool_pair("c1")), 1, 200))
+
     def test_the_marker_is_announced_before_the_slow_tier(self):
         order: list[str] = []
 
@@ -2159,6 +2250,38 @@ class WorkspaceTest(unittest.TestCase):
         with self.assertRaises(A.WorkspaceError):
             self.ws.list_dir("missing")
 
+    def test_read_page_returns_whole_lines_up_to_the_cap(self):
+        self.ws.write_text("f.txt", "".join(f"line {n}\n" for n in range(1, 11)))
+        page = self.ws.read_page("f.txt", max_chars=20)
+        self.assertEqual((page.start, page.end, page.total), (1, 2, 10))
+        self.assertEqual(page.text, "line 1\nline 2\n")
+        self.assertEqual(page.render(), "line 1\nline 2\n[lines 1-2 of 10 of f.txt; continue with offset=3]")
+        page = self.ws.read_page("f.txt", offset=9)
+        self.assertEqual(page.text, "line 9\nline 10\n")
+        self.assertIn("lines 9-10 of 10", page.footer)
+        self.assertNotIn("continue", page.footer)
+        self.assertEqual(self.ws.read_page("f.txt", offset=3, limit=2).text, "line 3\nline 4\n")
+        with self.assertRaises(A.WorkspaceError):
+            self.ws.read_page("f.txt", offset=11)
+
+    def test_read_page_of_a_whole_file_is_the_file(self):
+        self.ws.write_text("f.txt", "a\nb")
+        page = self.ws.read_page("f.txt", max_chars=100)
+        self.assertTrue(page.complete)
+        self.assertEqual(page.render(), "a\nb")
+        self.assertTrue(self.ws.read_page("f.txt").complete)  # no cap
+        self.ws.write_text("empty.txt", "")
+        self.assertEqual(self.ws.read_page("empty.txt").render(), "")
+
+    def test_read_page_clips_a_line_longer_than_the_cap(self):
+        self.ws.write_text("f.txt", "x" * 500 + "\nshort\n")
+        page = self.ws.read_page("f.txt", max_chars=100)
+        self.assertTrue(page.clipped)
+        self.assertEqual((page.start, page.end), (1, 1))
+        self.assertIn("chars omitted", page.text)
+        self.assertIn("line 1 clipped", page.footer)
+        self.assertIn("offset=2", page.footer)
+
     def test_read_data_url(self):
         (Path(self.ws.root) / "pixel.png").write_bytes(b"\x89PNG\r\n")
         url = self.ws.read_data_url("pixel.png")
@@ -2287,6 +2410,40 @@ class ToolRegistryTest(unittest.TestCase):
         self.ws.outside_write = True
         for name in ("write_text_file", "apply_patch"):
             self.assertIn("written too", self.tools()[name].description)
+
+    def test_long_files_are_read_a_page_at_a_time(self):
+        self.ws.write_text("f.txt", "".join(f"line {n}\n" for n in range(1, 101)))
+        tools = {t.name: t for t in A.ToolRegistry(shell=False).build(self.ws, read_limit=80)}
+        first = self.invoke(tools["read_text_file"], '{"path": "f.txt"}')
+        self.assertTrue(first.startswith("line 1\n"))
+        self.assertIn("continue with offset=", first)
+        offset = int(first.rsplit("offset=", 1)[1].rstrip("]"))
+        second = self.invoke(tools["read_text_file"], f'{{"path": "f.txt", "offset": {offset}}}')
+        self.assertTrue(second.startswith(f"line {offset}\n"))
+
+    def test_a_cut_read_repeated_back_to_back_is_refused(self):
+        self.ws.write_text("f.txt", "".join(f"line {n}\n" for n in range(1, 101)))
+        tools = {t.name: t for t in A.ToolRegistry(shell=False).build(self.ws, read_limit=80)}
+        read = lambda: self.invoke(tools["read_text_file"], '{"path": "f.txt"}')
+        first = read()
+        refused = read()
+        self.assertTrue(refused.startswith("Error: this exact read just returned [lines 1-"))
+        self.assertNotIn("line 1\n", refused)
+        self.invoke(tools["write_text_file"], '{"path": "g.txt", "content": "x"}')
+        self.assertEqual(read(), first)  # a write in between: the file may have changed
+
+    def test_a_whole_read_may_be_repeated(self):
+        self.ws.write_text("f.txt", "short")
+        tools = {t.name: t for t in A.ToolRegistry(shell=False).build(self.ws, read_limit=80)}
+        for _ in range(2):
+            self.assertEqual(self.invoke(tools["read_text_file"], '{"path": "f.txt"}'), "short")
+
+    def test_read_limit_is_configured_or_a_quarter_of_the_usable_budget(self):
+        agent = A.Agent(console=False, store=A.MemoryStore(), config_file=False, env=False)
+        self.assertEqual(run(agent.read_limit(A.AgentConfig(read_output_limit=1234))), 1234)
+        self.assertEqual(run(agent.read_limit(A.AgentConfig(read_output_limit=-1))), 0)
+        config = A.AgentConfig(context_window=40_000, context_reserve=8_000)
+        self.assertEqual(run(agent.read_limit(config)), 8_000 * A.TokenCounter.BYTES_PER_TOKEN)
 
     def test_vision_model_replaces_the_raw_image_tool(self):
         seen: list[tuple[str, str]] = []

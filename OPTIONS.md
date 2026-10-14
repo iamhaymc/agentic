@@ -21,6 +21,14 @@ Inference model ID (general)
 - OpenRouter ID: `deepseek/deepseek-v4-flash-0731`
 - Ollama ID: `huihui_ai/Qwen3.8-abliterated:27b`
 
+### `inference_ctx`
+Context size sent with every model request as `options.num_ctx` (Ollama).
+- Environment variable: `AGENTIC_INFERENCE_CTX`
+- Expected format `{{TOKENS}}` (integer), default `0`: look up the model's trained length (Ollama `/api/show`), else send none
+- Applies to every role (leader, vision, summary)
+- ❗ Ollama 0.34's OpenAI-compatible `/v1` ignores `num_ctx`; for now raise it server side (Modelfile `PARAMETER num_ctx`, or `OLLAMA_CONTEXT_LENGTH`)
+- Does not set `context_window`
+
 ### `inference_vlm`
 Inference model ID (vision)
 - Environment variable: `AGENTIC_INFERENCE_VLM`
@@ -58,6 +66,13 @@ Seconds between heartbeats (`tool.progress`) of a running shell command.
 - Environment variable: `AGENTIC_SHELL_HEARTBEAT`
 - Expected format `{{SECONDS}}` (float), default `5`, `0` disables
 - Each heartbeat restarts the leader's stall guard, so a slow but live command is never failed as a silent model
+
+### `read_output_limit`
+Characters one `read_text_file` call returns; a longer file comes back a page of whole lines at a time.
+- Environment variable: `AGENTIC_READ_OUTPUT_LIMIT`
+- Expected format `{{CHARS}}` (integer), default `0`: a quarter of the usable context budget; `-1` returns files whole
+- Each page ends with `[lines A-B of N of path; continue with offset=B+1]`
+- A page always fits beside the conversation, so compaction never clips a fresh read (which the model would answer by reading it again)
 
 ### `outside_read`
 Let the read tools (`list_directory`, `read_text_file`, `view_image`, `describe_image`) and the shell read outside the session workspace.
