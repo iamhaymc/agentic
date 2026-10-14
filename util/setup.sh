@@ -78,6 +78,18 @@ install_clang() {
     fi
 }
 
+install_app() {
+    echo "Installing agentic command to PATH via uv tool (editable)..."
+    uv tool install --python 3.12 --editable --force .
+    uv tool update-shell || true
+    export PATH="$(uv tool dir --bin):$PATH"
+    if ! command_exists agentic; then
+        echo "WARNING: agentic was installed but is not on PATH. Open a new terminal and run setup.sh again."
+        return
+    fi
+    echo "agentic ready: $(command -v agentic)"
+}
+
 NVM_VERSION="v0.40.3"
 
 load_nvm() {
@@ -115,8 +127,10 @@ install_node() {
 
 install_uv
 install_python
+install_app
 install_clang
 install_node
 
 echo "Setup complete."
 echo "Activate the environment with: source .venv/bin/activate"
+echo "Run the app from anywhere with: agentic"

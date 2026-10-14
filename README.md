@@ -25,6 +25,8 @@ cd ./hayhay
 ./setup # or run VS Code task "init"
 ```
 
+> Setup also installs `agentic` command to PATH (`uv tool install --editable .`); source edits apply without reinstall.
+
 ## ▶️ Package (Use)
 
 Add repository as project dependency:

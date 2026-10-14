@@ -62,6 +62,21 @@ function Install-Python {
     }
 }
 
+function Install-App {
+    Write-Host "Installing agentic command to PATH via uv tool (editable)..."
+    uv tool install --python 3.12 --editable --force .
+    if ($LASTEXITCODE -ne 0) { throw "uv tool install failed." }
+    uv tool update-shell
+    $toolBin = uv tool dir --bin
+    Update-ProcessPath
+    $env:Path = "$toolBin;$env:Path"
+    if (-not (Test-CommandExists "agentic")) {
+        Write-Host "WARNING: agentic was installed but is not on PATH. Open a new terminal and run setup.ps1 again."
+        return
+    }
+    Write-Host "agentic ready: $((Get-Command agentic).Source)"
+}
+
 function Install-Clang {
     $compiler = @("cc", "clang", "gcc") | Where-Object { Test-CommandExists $_ } | Select-Object -First 1
     if ($compiler) {
@@ -134,10 +149,12 @@ function Install-Node {
 try {
     Install-Uv
     Install-Python
+    Install-App
     Install-Clang
     Install-Node
     Write-Host "Setup complete."
     Write-Host "Activate the environment with: .venv\Scripts\Activate.ps1"
+    Write-Host "Run the app from anywhere with: agentic"
 }
 catch {
     Write-Error "Setup failed: $_"
