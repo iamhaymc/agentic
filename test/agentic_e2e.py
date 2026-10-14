@@ -71,6 +71,9 @@ TOOL_NAME = "read_file"
 TOOL_ARGUMENTS = {"path": "agentic.py"}
 TOOL_RESULT = "agentic.py — 4656 lines, 16 sections"
 
+#: What the scripted distiller learns from any vote.
+RULE = "Show the reasoning before the answer."
+
 ANSWER_HEAD = """\
 `agentic.py` is one flat module: the agentic loop, the batteries around it and the application shell, in that order.
 
@@ -157,6 +160,15 @@ class ScriptedAgent(A.Agent):
     def build_sdk_agent(self, config: A.AgentConfig, tools: list[Any]) -> Any:
         return {"config": config, "tools": tools}
 
+    def build_distiller(self, config: A.AgentConfig) -> Any:
+        """Turn every vote into the same rule, a moment later."""
+
+        async def distill(messages: list[dict[str, str]]) -> str:
+            await asyncio.sleep(self.pace * 10)
+            return json.dumps({"action": "add", "polarity": "do", "rule": RULE})
+
+        return distill
+
     async def stream(
         self,
         sdk_agent: Any,
@@ -181,6 +193,7 @@ class ScriptedAgent(A.Agent):
         await self.write(block, ANSWER_HEAD)
         await self.gate.hold()
         await self.write(block, ANSWER_TAIL)
+        block.done = True
         await self.events.publish(
             A.EventType.BLOCK_END,
             session_id=result.session_id,
@@ -207,6 +220,7 @@ class ScriptedAgent(A.Agent):
             role=block.role,
         )
         await self.write(block, REASONING)
+        block.done = True
         await self.events.publish(
             A.EventType.BLOCK_END,
             session_id=result.session_id,
@@ -224,6 +238,9 @@ class ScriptedAgent(A.Agent):
             arguments=TOOL_ARGUMENTS,
         )
         result.tools.append(call)
+        # the block of the call, as the real stream keeps one for a reconnect
+        block = A.Block(id=call.id, kind="tool", session_id=result.session_id, text=call.report())
+        result.blocks.append(block)
         await self.events.publish(
             A.EventType.TOOL_START,
             session_id=result.session_id,
@@ -236,6 +253,7 @@ class ScriptedAgent(A.Agent):
         )
         await asyncio.sleep(self.pace * 4)
         call.finish(TOOL_RESULT)
+        block.text, block.done = call.report(), True
         await self.events.publish(
             A.EventType.TOOL_END,
             session_id=result.session_id,
@@ -494,6 +512,69 @@ def assert_streaming(page: Any) -> None:
         raise AssertionError("the whole answer was painted at once, not as it arrived")
 
 
+def recover(browser: Any, device: Device, url: str, gate: Gate) -> None:
+    """Assert the page survives what a person does to it: a reload mid run
+    reattaches to the run, a vote teaches a rule that a reload keeps, and a
+    stopped run offers resume and resumes."""
+    context = browser.new_context(**device.context())
+    page = context.new_page()
+    output = '.block[data-kind="output"]'
+
+    def online() -> None:
+        page.wait_for_selector('#app[data-state="online"]')
+        page.wait_for_function("() => !document.getElementById('input').disabled")
+
+    def expect(ok: Any, what: str) -> None:
+        if not ok:
+            raise AssertionError(f"recovery: {what}")
+
+    try:
+        page.goto(url, wait_until="load")
+        online()
+        gate.arm()
+        page.fill("#input", PROMPT)
+        page.click("#send")
+        expect(gate.wait(), "the run never reached the hold point")
+        page.reload()
+        online()
+        page.wait_for_function("() => !document.getElementById('stop').hidden")
+        half = page.text_content(f"{output} .block-body") or ""
+        expect("is one flat module" in half, "the half written answer was not revived")
+        gate.release()
+        page.wait_for_function("() => document.getElementById('stop').hidden")
+        page.wait_for_function(
+            "() => !document.querySelector('.block[data-streaming=\"true\"]')"
+        )
+        answer = page.text_content(f"{output} .block-body") or ""
+        expect("read only REST" in answer, "the reattached run did not finish streaming")
+
+        page.click(f'{output} .vote[data-vote="up"]')
+        page.wait_for_function(f"() => document.body.textContent.includes({json.dumps(RULE)})")
+        expect(page.get_attribute(output, "data-vote") == "up", "the vote was not pressed")
+        page.reload()
+        online()
+        expect(page.get_attribute(output, "data-vote") == "up", "the vote did not survive a reload")
+
+        gate.arm()
+        page.fill("#input", "second request")
+        page.click("#send")
+        expect(gate.wait(), "the second run never reached the hold point")
+        page.wait_for_function("() => !document.getElementById('stop').hidden")
+        page.click("#stop")
+        page.wait_for_function("() => document.getElementById('stop').hidden")
+        page.reload()
+        online()
+        resume = page.locator('.block[data-kind="prompt"] .resume')
+        expect(resume.count() == 1, "the stopped run did not offer resume")
+        gate.arm()
+        resume.click()
+        expect(gate.wait(), "resume did not start a run")
+        gate.release()
+        page.wait_for_function("() => document.getElementById('stop').hidden")
+    finally:
+        context.close()
+
+
 def settle(page: Any, milliseconds: int = 250) -> None:
     """Let the last paint land before the shutter."""
     page.wait_for_timeout(milliseconds)
@@ -521,6 +602,8 @@ def run(devices: Iterable[Device], out: Path, args: argparse.Namespace) -> list[
                 for device in devices:
                     print(f"[e2e] {device.name} {device.width}x{device.height}")
                     written.extend(capture(browser, device, server.url, gate, out))
+                print("[e2e] recovery: reattach, vote, resume")
+                recover(browser, DEVICES[1], server.url, gate)
             finally:
                 browser.close()
     finally:

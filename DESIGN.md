@@ -67,24 +67,30 @@ same in either.
    is reused or a new workspace is created.
 3. **Prepare the session.** If a repository is configured it is cloned into the
    workspace on a session branch (idempotent, and never fatal).
-4. **Publish `agent.start`.** Subscribers (console, web) react.
+4. **Publish `agent.start`** and the prompt as the first block of the run
+   (`publish_prompt()`, under the id the journal keeps). Subscribers react.
 5. **Render the prompt.** `build_prompt()` renders the template against the
-   config, then `decorate_prompt()` appends the attachment listing.
-6. **Build the tools.** A `Workspace` is scoped to the session directory and the
-   registry builds the tool list for it, including the git tools when the
-   session has a checkout.
-7. **Build the SDK agent** with the leader model, the instructions and the tools.
-8. **Build the model input.** `build_input()` prepends what the session
-   remembers, so the prompt is the newest message of a conversation rather than
-   a one shot request.
-9. **Stream.** `stream()` consumes the SDK event stream and republishes it as
-   `block.*` and `tool.*` events, under a stall guard and, while nothing has
-   been produced yet, the retry policy of the run.
-10. **Remember.** `remember()` appends the exchange to the transcript of the
-    session, trimming (or summarising) it back inside its budget.
-11. **Finish.** `agent.end` (or `agent.error`) is published with the tokens and
-    the cost of the run, and a `RunResult` is returned; cancellation is
-    re-raised after being recorded.
+   config, then `decorate_prompt()` appends the attachment listing;
+   `decorate_instructions()` has already appended the learned rules.
+6. **Build the model input.** `build_input()` prepends the journal of the
+   session — messages and tool calls — so the prompt is the newest message of a
+   context window rather than a one shot request.
+7. **Journal the prompt** (`journal_prompt()`), marked `running`, before the
+   model is called.
+8. **Build the tools.** A `Workspace` is scoped to the session directory, held
+   to `outside_read` / `outside_write` and, unless both are on, given a sandbox
+   for its shell; the registry builds the tool list for it, including the git
+   tools when the session has a checkout.
+9. **Build the SDK agent** with the leader model, the instructions and the tools.
+10. **Stream.** `stream()` consumes the SDK event stream and republishes it as
+    `block.*` and `tool.*` events, under a stall guard and, while nothing has
+    been produced yet, the retry policy of the run. Each finished assistant
+    message and tool call goes to `checkpoint()`, which journals it at once.
+11. **Remember.** `remember()` journals a final answer no message carried and
+    trims (or summarises) the journal back inside its budget.
+12. **Finish.** `agent.end` (or `agent.error`) is published with the tokens and
+    the cost of the run, `settle()` records how the run ended on its prompt, and
+    a `RunResult` is returned; cancellation is re-raised after being recorded.
 
 Failures inside the loop are captured on the result rather than raised, so a
 caller always gets a `RunResult` and can branch on `result.ok`, on
@@ -205,10 +211,14 @@ genre: noir
 | `AGENTIC_MEMORY_ENABLED`                                                      | Remember the conversation of a session      |
 | `AGENTIC_MEMORY_MAX_TURNS`, `AGENTIC_MEMORY_MAX_CHARS`                        | Memory budget (`0` disables a limit)        |
 | `AGENTIC_MEMORY_SUMMARY`                                                      | Summarise trimmed turns instead of dropping |
+| `AGENTIC_MEMORY_TOOLS`                                                        | Replay journaled tool calls to the model    |
+| `AGENTIC_RULES_ENABLED`, `AGENTIC_RULES_MAX_CHARS`                            | Learned rules; size that raises a warning   |
+| `AGENTIC_RULES_INSTRUCTIONS`, `AGENTIC_RULES_MAX_TOKENS`                      | Rule distiller prompt and answer budget     |
 | `AGENTIC_SUMMARY_MODEL`, `AGENTIC_SUMMARY_API_URL`, `AGENTIC_SUMMARY_API_KEY` | Summary role (defaults to the leader)       |
 | `AGENTIC_SUMMARY_INSTRUCTIONS`, `AGENTIC_SUMMARY_MAX_TOKENS`                  | Summary system prompt and answer budget     |
 | `AGENTIC_INPUT_SOURCE`                                                        | Input path or text (also `--input`)         |
 | `AGENTIC_TEMPLATE`                                                            | Template path or raw template for `main()`  |
+| `AGENTIC_STATE_DIR`                                                           | Home of the database and the workspaces     |
 | `AGENTIC_WORKSPACE_ROOT`, `AGENTIC_WORKSPACE_SEED`                            | Parent of workspaces; directory copied in   |
 | `AGENTIC_SESSION_TTL`, `AGENTIC_KEEP_WORKSPACE`                               | Session lifetime; keep the directory        |
 | `AGENTIC_SESSION_DURABLE`, `AGENTIC_SESSION_SWEEP_INTERVAL`                   | Survive a restart; expiry sweep period      |
@@ -219,12 +229,24 @@ genre: noir
 | `AGENTIC_DB_PATH`, `AGENTIC_CACHE_SIZE`                                       | SQLite file and LRU capacity                |
 | `AGENTIC_SHELL_TIMEOUT`, `AGENTIC_SHELL_ENABLED`                              | Shell tool limits                           |
 | `AGENTIC_SHELL_HEARTBEAT`                                                     | Seconds between shell heartbeats (`0` off)  |
-| `AGENTIC_READ_OUTSIDE`, `AGENTIC_ASK_ENABLED`                                 | Reads beyond the workspace; `ask_user` tool |
+| `AGENTIC_OUTSIDE_READ`, `AGENTIC_OUTSIDE_WRITE`                               | Reads / writes beyond the workspace         |
+| `AGENTIC_SHELL_SANDBOX`, `AGENTIC_ASK_ENABLED`                                | Shell confinement backend; `ask_user` tool  |
 | `AGENTIC_HOST`, `AGENTIC_PORT`, `AGENTIC_THEME`                               | Web bind address and UI theme file          |
 | `AGENTIC_QUIET`, `AGENTIC_COLOR`                                              | Console output                              |
 
 Anything not listed is an extra: pass it as a constructor override and read it in
 the template as `config.<name>`.
+
+### Modes
+
+**A mode settles only what the layers left unset (`None`):**
+
+- `MODE_TOOLS` — `outside_read`, `outside_write`, `ask_enabled`: repl all `true`, web `false` / `false` / `true`
+- `MODE_STATE` — `state_dir` (`.agentic`), `session_durable` (`true`), `session_ttl` (`86400`): repl and web alike
+- `Agent(mode="repl" | "web")` applies both before the store opens; `cli()` passes `mode_of(args)`
+- `Repl` and `WebServer` apply `MODE_TOOLS` again, for an agent built without a mode
+- a one shot `--input` run and an embedded `Engine` take no mode: confined tools, nothing on disk
+- `AgentConfig.state_paths()` derives `db_path` (`<state_dir>/agentic.db`) and `workspace_root` (`<state_dir>/workspaces`) where unset
 
 ## 5. Events
 
@@ -238,7 +260,7 @@ Handlers may be sync or async; exceptions are printed to stderr and swallowed.
 | `agent.start`                  | `config` (never forwarded to the web)      |
 | `agent.end`                    | `output`, `error`, `error_kind`, `usage`, `config` |
 | `agent.error`                  | `error`, `error_kind`                      |
-| `block.start`                  | `id`, `kind`, `role`                       |
+| `block.start`                  | `id`, `kind`, `role`; a prompt adds `text`, `attachments`, `complete` |
 | `block.delta`                  | `id`, `kind`, `text` (the delta)           |
 | `block.end`                    | `id`, `kind`, `text` (the full block)      |
 | `tool.start`                   | `id`, `kind`, `name`, `call_id`, `arguments`, `text` |
@@ -248,6 +270,7 @@ Handlers may be sync or async; exceptions are printed to stderr and swallowed.
 | `model.wait`                   | `role`, `elapsed` (seconds silent), `timeout` (the stall budget, `0` unbounded) |
 | `question.start`               | `id`, `kind`, `call_id`, `question`, `options` |
 | `question.end`                 | `id`, `kind`, `call_id`, `answer`, `ok` (false when cancelled) |
+| `feedback`                     | `ok`, `id` (the answer), `vote`, `message`, plus `action`, `rule`, `warning` when learned |
 | `session.open`, `session.close`| `kind`, `repo`                             |
 | `log`                          | `kind`, `message`                          |
 
@@ -312,6 +335,12 @@ The store record of a live session is what makes a session outlive its process:
 destroys every workspace, and with it set the manager only forgets them so the
 next start rehydrates the same sessions (workspaces, `meta["repo"]` checkouts
 and transcripts included). Pass `close_all(destroy=True)` to wipe them anyway.
+The repl and the web server are durable by default (see [Modes](#modes)).
+
+- [x] `listeners` — called with every session as it is destroyed (closed, expired, reconciled); `Agent` forgets its journal and cancels a run still in it (through the run's own loop, since the sweeper sweeps on a thread).
+- [x] `latest(**meta)` — the most recently used live session whose meta matches; the repl resumes `latest(client="repl")`.
+- [x] Front ends tag what they open: `meta["client"]` is `repl` or `web`, and `/new` keeps the tag.
+- [x] A run renews its lease at every checkpoint; `Agent.reconcile()` forgets, at start, journals whose session did not come back.
 
 ## 9. Memory
 
@@ -331,11 +360,12 @@ ordered turns of one session (`append`, `messages`, `size`, `overflow`) and
 - `forget(session_id)` — erase it, in memory and in the store.
 
 On the `Agent` side, `build_input()` returns the prompt alone when nothing is
-remembered (a one shot run) and `[*history, {"role": "user", …}]` otherwise, and
-`remember()` decides what is kept: by default the input the user wrote (not the
-rendered template, which would be replayed verbatim every turn) and the output
-of the model, and only for a run that succeeded with output. Override
-`remember()` to remember more, less or something else; inject
+remembered (a one shot run) and `[*history, {"role": "user", …}]` otherwise. The
+prompt is kept as the input the user wrote (not the rendered template, which
+would be replayed verbatim every turn), and every step of the run is journaled
+as it finishes (see [Journal](#journal)), a failed or stopped run included;
+`remember()` closes a run that finished with its final answer and the trim.
+Override it to remember more, less or something else; inject
 `memory=ConversationMemory(...)` or subclass it for another policy;
 `memory_enabled=False` turns the whole subsystem off.
 
@@ -343,6 +373,47 @@ Summarising is opt-in: `memory_summary` makes `build_summarizer()` return a
 delegate over the `summary` role, which falls back to the leader model when
 `summary_model` is unset. `/forget` clears a transcript, and `/new` and `/end`
 forget the session they close.
+
+### Journal
+
+**A run writes ahead: prompt → each finished step → final answer → status.**
+
+- `Turn` also carries `id` (the block it came from), `run`, `items` (raw model input items) and `meta` (`status` on a prompt, `vote` on an answer, `name` / `ok` on a tool call)
+- `Turn.replay(tools)` — its items when it has them, else the plain message; a tool turn without items, or with `tools` off, is left out
+- `Transcript.messages(tools)` is the context window; `find(id)`, `run_of(run)`, `prompt_of(run)`, `last_run()` look it up
+- `ConversationMemory.journal(session, *turns)` appends and persists at once, without trimming; `remember()` trims at the end of a run
+- `ConversationMemory.TOOL_LIMIT` (8,000) clips a tool output in the journal, head and tail; `tools` (`memory_tools`) keeps calls out of the replay
+- `Agent.journal_prompt()` writes the prompt (`status: running`); `Agent.checkpoint()` journals each step the stream reports; `Agent.settle()` writes `ok`, `failed` (with `error`) or `cancelled`
+- `Agent.unfinished(session)` — the prompt of the newest run when it did not finish and nothing live is behind it; `Agent.resume(session)` runs `RESUME_PROMPT` through the passthrough template over that context
+- `Agent.live` — the run in flight per session, with its task
+
+Raw items keep the context well formed: an assistant message is a `ResponseOutputMessage` the Chat Completions converter merges its tool calls into, and a tool call is journaled only with its output.
+
+```mermaid
+sequenceDiagram
+  participant A as Agent
+  participant S as Stream (SDK)
+  participant J as Journal (store)
+  A->>J: prompt (running)
+  S->>A: message_output_created
+  A->>J: assistant turn (message item)
+  S->>A: tool_called, tool_output
+  A->>J: tool turn (call + output items)
+  A->>J: final answer, trim
+  A->>J: status ok / failed / cancelled
+```
+
+### Rules
+
+**A vote becomes a rule: trace + existing rules → distiller → add or edit → instructions.**
+
+- `Rule` — `id`, `polarity` (`do` / `avoid`), `text`, `votes`, timestamps; `line()` is `Do: …` / `Avoid: …`
+- `RuleBook` — the rules in the store (namespace `rules`): `rules()`, `get`, `add`, `edit`, `drop`, `clear`, `render()`, `decorate(instructions)`
+- `RuleBook.learn(vote, turns, distill, note=)` — under a lock: `messages()` (rules, trace cut to `TRACE_LIMIT`, verdict, note) → `distill` → `parse()` (JSON, else the reply as the rule; an edit of an unknown id adds) → `add` / `edit`
+- `RuleBook.warning()` — set while the rendered rules exceed `max_chars` (`rules_max_chars`)
+- `Agent.build_distiller(config)` — the `summary` role (falling back to the leader), `rules_instructions`, `rules_max_tokens`
+- `Agent.feedback(session, vote, target=, note=)` — rates one answer (the newest when no target), once: claims it, learns from its run up to it, persists the vote, publishes `feedback`
+- `Agent.decorate_instructions()` appends `RuleBook.render()` to the instructions of every run
 
 ## 10. Repository
 
@@ -481,13 +552,13 @@ configured — which is exactly what decides the image tool.
 `Workspace` is the sandbox. `resolve()` rejects empty paths, strips quotes,
 anchors relative paths at the root and refuses anything that resolves outside it
 (which also blocks symlink escapes). `resolve(raw, read=True)` skips that check
-when the workspace was built with `read_outside` (from the config field of the
-same name), so `read_text`, `list_dir` and `read_data_url` may leave the root
-while writes never do; the read tools then tell the model so in their
-descriptions. The field is tri-state: `None` is settled by the mode through
-`AgentConfig.with_defaults()` — `Repl` sets `True`, `WebServer` sets `False`, and
-anything else builds the workspace with `bool(None)`, i.e. confined. An explicit
-value always wins. On top of it: `read_text` (2 MiB cap),
+when the workspace was built with `outside_read`, and a write (`read=False`)
+when it was built with `outside_write` (both from the config fields of the same
+names), so the tools may leave the root only as far as the flags say; they tell
+the model so in their descriptions. The fields are tri-state: `None` is settled
+by the mode through `AgentConfig.with_defaults()` — the repl allows both, the web
+server neither, and anything else builds the workspace with `bool(None)`, i.e.
+confined. An explicit value always wins. On top of it: `read_text` (2 MiB cap),
 `write_text` (creates parents), `list_dir`, `read_data_url` (base64 with a
 guessed MIME type, empty files rejected), `apply_patch` (unified diff via
 `agents.apply_diff`, with `create_file` / `update_file` / `delete_file`) and
@@ -507,6 +578,22 @@ shell and keep the call waiting until it ended on its own. The wait for the
 pipes after a kill is bounded by `Workspace.KILL_GRACE` (5 s), after which they
 are abandoned with a diagnostic on stderr.
 
+### Sandbox
+
+**The shell is held to the outside flags: unconfined only when both are on, else sandboxed, else withheld.**
+
+- `Workspace.confined` — some outside path is off limits; `shell_allowed` — not confined, or a `sandbox` is set
+- `run_shell` on a confined workspace with a sandbox execs `sandbox.argv(command, ws)` with `sandbox.environ(env, ws)`; the primitive itself never refuses, `ToolRegistry` decides
+- `Sandbox.paths(ws)` — `(read, write, full)`: `system_paths()` or `/`, `/` only with `outside_write`, the workspace
+- `Sandbox.environ()` — `TMPDIR` into `.sandbox/tmp`; `HOME` into `.sandbox/home` when reads are confined, else `XDG_CACHE_HOME` into `.sandbox/cache` when writes are
+- `LandlockSandbox` — `python -I -S -c LANDLOCK_LAUNCHER <policy>`: a ruleset for the ABI the kernel has (refer, truncate, ioctl when present), then `/bin/sh -c`; exits 126 on any failure
+- `BubblewrapSandbox` — `bwrap` read-only binds of the read paths, binds of the write paths, `--dev /dev`; probed once
+- `SeatbeltSandbox` — `sandbox-exec -p` with `(allow default)` and `deny file-write*` / `deny file-read-data` outside the allowed paths
+- `pick_sandbox(name)` — `auto` tries `SANDBOXES` in order; `none`, an unknown name or no backend gives `None`
+- `Engine.build_sandbox(config)` — the hook (`shell_sandbox`); a withheld shell is reported once on stderr
+
+> ❗ Network access is not restricted by any backend; Seatbelt is not exercised by the tests on Linux.
+
 `ToolRegistry.build(workspace, vision=…, checkout=…, progress=…, ask=…)`
 assembles the list. `progress` is a `ToolReporter`, `(call_id, text) -> None`:
 the shell tool takes the SDK `ToolContext` to learn the id of its call and
@@ -524,7 +611,7 @@ returns `(the user did not answer)` for an empty answer.
 | `apply_patch`       | always                      | Apply a unified diff                      |
 | `view_image`        | no vision model             | Return the image as a data URL            |
 | `describe_image`    | vision model configured     | Ask the specialist about the image        |
-| `run_shell_command` | `shell_enabled`             | Run a command in the workspace            |
+| `run_shell_command` | `shell_enabled`, unconfined or sandboxed | Run a command in the workspace |
 | `ask_user`          | `ask_enabled` (repl, web)   | Ask the user, wait for the answer         |
 | `git_status`        | the session has a checkout  | Branch and working tree                   |
 | `git_commit`        | the session has a checkout  | Stage everything and commit               |
@@ -576,6 +663,10 @@ client.
 | `/sessions`         | List live sessions                                |
 | `/use <id>`         | Switch to an existing session                     |
 | `/forget`           | Forget the conversation of the current session    |
+| `/resume`           | Continue the run that did not finish              |
+| `/good [why]`       | Rate the last answer good: learn a rule           |
+| `/bad [why]`        | Rate the last answer bad: learn a rule            |
+| `/rules [drop <id>\|clear]` | List or prune the learned rules           |
 | `/model [name]`     | Show or set the leader model                      |
 | `/vision [name\|none]` | Show or set the vision specialist              |
 | `/repo [url\|none]` | Show, set or clear the default repository         |
@@ -587,16 +678,21 @@ client.
 | `/publish <title>`  | Commit, push and open the pull request            |
 
 `/clear` and `/theme` are client-side only and never reach the server, and
-`/exit` (with `/quit`) is answered by the repl rather than the registry.
+`/exit` (with `/quit`) is answered by the repl rather than the registry. A
+result with `resume: true` asks its front end to start `Agent.resume()`, since
+the front end owns the task and the stream of a run.
 
 ## 16. Core
 
-`Block` is a chronological unit of content (`id`, `kind`, `role`, `text`),
+`Block` is a chronological unit of content (`id`, `kind`, `role`, `text`, and
+`done` once nothing more will stream into it),
 `ToolCall` is one tool invocation (`name`, `call_id`, redacted `arguments`,
 `result`, `ok`, `duration`, with `signature()`, `report()` and `to_dict()`) and
 `RunResult` collects the blocks, the tool calls, the rendered prompt, the final
 output, the error and its `error_kind`, plus the `usage` of every model call the
-run made, with `ok`, `transient`, `fail(error, kind)` and `text_of(kind)`. Its
+run made and the `turns` it added to the context window (assistant messages and
+tool calls as raw input items, which an embedded caller appends to its own
+history), with `ok`, `transient`, `fail(error, kind)` and `text_of(kind)`. Its
 `run_id` is unique per run and is part of every block id
 (`{session}-{run}-{n}`), so the runs of one session never collide in a client
 that keys blocks by id.
@@ -627,6 +723,11 @@ ready made `text` line, `ToolCall.report()`, for a renderer that does not want t
 format the fields itself. Every call is kept on `RunResult.tools`, so a finished
 run can be audited without subscribing to anything.
 
+The same run item events feed the journal: `message_output_created` and each
+`tool_output` whose call is known hand a `Turn` to `Engine.checkpoint()` — the
+item converted by `Engine.input_item()` (`to_input_item()`, JSON safe) — which
+keeps it on `RunResult.turns`; `Agent.checkpoint()` also journals it.
+
 In between, a tool that reports progress publishes `tool.progress` on the same
 block id: `text` is output it produced (redacted and cut like a result) or empty
 for a heartbeat, and `duration` is the time the call has run so far. The console
@@ -640,7 +741,7 @@ The model asks the person behind a run through `ask_user`, and the core only
 brokers the question; a front end shows it and answers it:
 
 - [x] `Engine.build_asker(config, result)` is the `Asker` of a run, or `None`
-  unless `ask_enabled` — tri-state like `read_outside`, settled by the mode
+  unless `ask_enabled` — tri-state like `outside_read`, settled by the mode
   (`Repl` and `WebServer` set `True`, an embedded engine or a one shot run stay
   off, since a question nobody can answer would hang the run).
 - [x] A question takes the id of its tool call's block, so a client turns that
@@ -652,6 +753,9 @@ brokers the question; a front end shows it and answers it:
 - [x] `Engine.answer(id, text, session_id=…)` resolves it and returns whether
   there was such a question; with a `session_id` the question must belong to
   that session.
+- [x] `Engine.pending_questions(session)` returns the open questions of a
+  session as `question.start` published them (`Engine.asking`), which is how a
+  client that (re)connects shows the card again.
 - [x] While it waits the call is marked `ToolCall.asking`, and `alive_at()`
   reports such a call as alive now: the stall guard bounds silent models, not
   people who are thinking. Stop (web) or Ctrl-C (repl) cancels the run and the
@@ -702,6 +806,11 @@ await Repl(agent).start()
 - The session carries from prompt to prompt, with its conversation remembered,
   until `/new` or `/end`. `adopt()` follows whatever a command did to it and
   `current()` opens a fresh one when the old one is gone.
+- A start resumes the newest live session tagged `client: repl`
+  (`SessionManager.latest`), and `recap()` prints after the banner where it
+  left off (`Repl.RECAP_TURNS` turns), whether its last run did not finish
+  (`/resume to continue it`) and the rules warning. `/resume` runs
+  `Agent.resume()` like a prompt; `/good` and `/bad` rate the last answer.
 - Lines are read on one dedicated thread that is asked for a line at a time, so
   the event loop keeps running while the terminal waits: timers fire, the session
   sweeper sweeps and nothing is blocked by the prompt. `readline` is imported
@@ -739,10 +848,17 @@ safe values with `encode()`.
 
 `Hub` owns connections and channels: `join`, `leave`, `broadcast`, `send_all`
 and named message handlers registered with `on()`, plus the `connected` /
-`disconnected` lifecycle hooks. A `Connection` has an id, its channels, its
-current session and the task of the run it started, which is what `cancel`
-aborts; oversized, non-JSON and unknown messages are answered with an `error`
-rather than closing the socket.
+`disconnected` lifecycle hooks. A `Connection` has an id, its channels and its
+current session; oversized, non-JSON and unknown messages are answered with an
+`error` rather than closing the socket.
+
+A run belongs to its session, not to the socket that started it:
+`WebServer.runs` holds the task per session, `active()` enforces one run per
+session across connections, `cancel` stops the run of the connection's session,
+and a closed socket leaves the run going. `live_blocks(session)` lists the
+blocks of the run in flight the journal does not hold yet, which `hello`
+replays. A vote (`feedback`) learns on a task of its own (`WebServer.tasks`),
+since it calls a model, and its outcome reaches the session as `feedback`.
 
 | Endpoint            | Response                                    |
 | ------------------- | ------------------------------------------- |
@@ -756,11 +872,12 @@ rather than closing the socket.
 | Message      | Direction | Fields                                      |
 | ------------ | --------- | ------------------------------------------- |
 | `ready`      | server    | `connection`                                |
-| `hello`      | both      | client: `session`; server: `session`, `config`, `commands`, `theme`, `history` |
+| `hello`      | both      | client: `session`; server: `session`, `config`, `commands`, `theme`, `history`, `live`, `questions`, `busy`, `unfinished`, `warning` |
 | `prompt`     | client    | `text`, `attachments[{name, type, data}]`   |
 | `command`    | client    | `text`                                      |
 | `cancel`     | client    | —                                           |
 | `answer`     | client    | `id`, `text`                                |
+| `feedback`   | both      | client: `id`, `vote` (`up`/`down`), `note?`; server: the `feedback` event |
 | `ping`/`pong`| both      | —                                           |
 | `block.start`| server    | `id`, `kind`, `role`, `text`, `attachments`, `complete` |
 | `block.delta`| server    | `id`, `kind`, `text`                        |
@@ -783,12 +900,17 @@ with sanitized names and passed to the run as `extras["attachments"]`.
 
 `hello` resumes a session: `on_hello` calls `sessions.ensure(id)`, which hands
 back the session when it is still live and opens a new one when it has expired,
-ended or never existed, so the client may always send the last id it saw.
+ended or never existed, so the client may always send the last id it saw. The
+reply reattaches the client: `history` is the journal (turns keep their block
+ids, votes and run status), `live` the blocks of the run in flight not yet
+journaled (whole, with `done`), `questions` what the run is waiting on, `busy`
+whether a run is in flight, `unfinished` the run id `/resume` would continue and
+`warning` the rules warning.
 `on_answer` hands an `answer` to `agent.answer()` scoped to the session of the
 connection (a connection without one answers nothing) and replies with an
 `error` only when there was no such question; the outcome reaches every client
-of the session as `question.end`. `WebServer` settles `ask_enabled` to `True`
-next to `read_outside=False`.
+of the session as `question.end`. `WebServer` settles `MODE_TOOLS["web"]`:
+`ask_enabled` on, both outside flags off.
 
 `load_vscode_theme()` maps a subset of the VS Code theme spec onto the CSS
 custom properties the page uses, and the result is served at `/api/theme` and
@@ -808,7 +930,7 @@ differs.
 
 ## 19. Web client
 
-`app/agentic_ui.js` is eleven small subsystems over one socket, exposed on
+`app/agentic_ui.js` is thirteen small subsystems over one socket, exposed on
 `window.agentUI` so a console or a test harness can reach them without one:
 
 - **Icons** — a stroke icon set written inline with the code: no font, no
@@ -854,6 +976,14 @@ differs.
   the answer in words appears under it, or `no answer` when the run was
   cancelled. A later `tool.start`/`tool.end` of the same id only opens and ends
   the card, never rewrites it.
+- **Feedback** — every finished `output` block carries a thumb up and down
+  beside copy (`Block.votes`, hidden while streaming). A click sends
+  `feedback`, presses its thumb and pulses it (`Block.voted(vote, pending)`)
+  while `data-learning` turns the core of the mark; the `feedback` message
+  marks the answer on every client, hides the other thumb and notes the rule
+  learned, or the failure, and a `warning` note when the book is oversized.
+- **Resume** — the prompt of the run that did not finish (`hello.unfinished`)
+  wears a play button that sends `/resume`; a new prompt withdraws it.
 - **Wait** — `model.wait` shows a timer beside the mark (`42s`, then `m:ss`),
   started from the reported `elapsed` and ticking locally each second, with the
   budget in its tooltip; any `block.*`, `tool.*`, `agent.*`, `question.*`,
@@ -865,10 +995,13 @@ differs.
   forgets it. Storage that is barred (a private window) only costs the resume.
 - **Socket** — connects to `/ws`, says `hello` with the current session, routes
   server messages, and reconnects with exponential backoff (250 ms doubling to
-  8 s) while the composer disables itself. The `history` of the `hello` reply is
-  replayed into the discussion, replacing what is shown, so a reload or a
-  reconnect restores the conversation. A closed socket forgets open questions
-  and stops the timer, since the server cancels the run of a closed socket.
+  8 s) while the composer disables itself. The `hello` reply reattaches: the
+  `history` is replayed into the discussion under the journal's block ids
+  (votes pressed, a stopped run's prompt dashed), replacing what is shown; the
+  `live` blocks of a run in flight are revived whole and streamed into; the
+  open `questions` become cards again and `busy` brings Stop back. A closed
+  socket forgets open questions and stops the timer until then; the run itself
+  keeps going on the server.
 
 `Theme.fromVsCode()` is the same table as `THEME_KEYS` on the server, for a
 theme the reader loads themselves with `/theme`, and `Theme.apply()` writes the
@@ -890,6 +1023,8 @@ both, and every state is that same mark modulated:
 - **asking** — the ring stops and closes and the halo ripples outward
   (`data-asking`): the run waits on the reader. With reduced motion the halo is
   held still instead.
+- **learning** — the core turns a quarter and back (`data-learning`) while a
+  vote is being turned into a rule.
 - **disconnected** — a dotted ring and a hollow core, in the error colour.
 
 The words are still there for a screen reader (`#status-text`, and the mark's
@@ -1023,16 +1158,20 @@ agent.commands.register("mode", "Switch mode", my_handler)
 ```
 
 Common overrides: `resolve_config`, `build_prompt`, `decorate_prompt`,
-`build_model`, `build_vision`, `build_summarizer`, `build_tools`,
-`build_sdk_agent`, `build_input`, `build_policy`, `build_asker`,
-`stall_timeout`, `wait_reporter`, `remember`,
-`turn`, `stream`, `prepare_session`,
+`decorate_instructions`, `build_model`, `build_vision`, `build_summarizer`,
+`build_distiller`, `build_tools`, `build_sandbox`, `build_sdk_agent`,
+`build_input`, `build_policy`, `build_asker`, `stall_timeout`, `wait_reporter`,
+`checkpoint`, `remember`, `settle`, `turn`, `stream`, `prepare_session`,
 `register_default_commands`, `ConversationMemory.trim`, `ConsoleRenderer.write` /
 `.style`, `Agent.repl` / `Repl.report` / `.banner_items` / `.reader`,
 `WebServer.encode` / `.rest` / `.register_handlers`, `Hub.connected`.
 
 Injectable collaborators: `events`, `renderer`, `prompts`, `tools`, `models`,
-`store`, `cache`, `sessions`, `memory`, `repos`, `commands`.
+`store`, `cache`, `sessions`, `memory`, `repos`, `commands`, `rules`.
+
+Confining the shell differently: subclass `Sandbox` (`available`, `argv`, and
+`environ` if scratch paths differ), add it to `SANDBOXES`, or return it from
+`build_sandbox()` — a container or a VM backend fits the same two methods.
 
 Adding a model role: add `<role>_model` / `<role>_api_url` / `<role>_api_key`
 fields (or map the role in `ROLE_MODEL_FIELDS`, as vision maps to
@@ -1067,8 +1206,16 @@ request posting against a stubbed forge, command parsing, config file resolution
 (search order, JSON and YAML, nested groups, coercion, the layers around it), the
 repl (prompts, commands, sessions, interrupts, the banner, questions answered by
 number or in words and handed back on Ctrl-C) driven by an injected reader, the
-websocket protocol codec (session resume, answers scoped to their session), and
-the scripted agent `test/agentic_e2e.py`
+websocket protocol codec (session resume, answers scoped to their session), the
+modes and the state directory, the shell sandboxes (gating, wiring, Seatbelt
+profiles and bubblewrap argv as text, Landlock for real where the kernel has
+it), the journal (checkpoints from the stream, a crash read back by a second
+process over the same database, `/resume`, failed and cancelled runs, the
+replay through the SDK's own Chat Completions converter, journals dying with
+their sessions), learned rules (parsing, persistence, serialized learning,
+feedback from the commands and the page, the warning), the web reattach (a run
+outliving its socket, live blocks, open questions, one run per session, resume)
+and the repl resume, and the scripted agent `test/agentic_e2e.py`
 drives. No test needs a network or a model.
 
 `test/agentic_e2e.py` is the one that needs a browser: it is not part of the unit suite,

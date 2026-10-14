@@ -10,6 +10,7 @@
 _Yet another agent harness_
 
 - [EXAMPLE](EXAMPLE.ipynb) — Notebook of examples
+- [OPTIONS](OPTIONS.md) — Configuration properties
 - [DESIGN](DESIGN.md) — Complete overview and reference
 - [CHANGES](CHANGES.md) — Closed development tasks (with rationale)
 - [TODO](TODO.md) — Open development tasks (sorted by impact)
@@ -48,6 +49,8 @@ A `.env` file is loaded into the environment before the config file is read
 - looked for in the same directories as the config file.
 - the file wins over variables already set in the shell, so editing it always takes effect.
 - Point at another one with `Agent(env_file="path")`, skip it with `Agent(env_file=False)`.
+
+> Reach: `outside_read` / `outside_write` (repl both, web neither); the shell runs sandboxed unless both are on
 
 ```yaml
 inference: # a group flattens onto inference_*
@@ -118,6 +121,29 @@ python app/agentic.py --serve # or run VS Code task "serve"
 ```
 
 > Default URL: `http://127.0.0.1:8765/`
+
+## ▶️ Resume (Session)
+
+Interactive state survives a crash:
+
+- `.agentic/` in the cwd holds the database and the workspaces (`state_dir`)
+- every step of a run is journaled as it finishes: prompt, tool calls, answers
+- a restart resumes the session: the repl its last one, the page its saved one
+- a dropped socket leaves the run going; reconnecting picks it up mid-stream
+- `/resume` (or ▶ on the prompt) continues a run that crashed, failed or was stopped
+
+## ▶️ Teach (Rules)
+
+Votes become rules the agent keeps:
+
+```bash
+/good keep the tables  # or thumb up on an answer
+/bad too verbose       # or thumb down
+/rules                 # list; /rules drop <id>, /rules clear
+```
+
+- the model distils one do / avoid rule from the run behind the answer, editing a related rule instead of adding a twin
+- rules join the instructions of every run; past `rules_max_chars` a warning shows
 
 ## ▶️ Test
 

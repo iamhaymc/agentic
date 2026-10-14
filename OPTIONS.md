@@ -59,13 +59,75 @@ Seconds between heartbeats (`tool.progress`) of a running shell command.
 - Expected format `{{SECONDS}}` (float), default `5`, `0` disables
 - Each heartbeat restarts the leader's stall guard, so a slow but live command is never failed as a silent model
 
-### `read_outside`
-Let the read tools (`list_directory`, `read_text_file`, `view_image`, `describe_image`) take paths outside the session workspace.
-- Environment variable: `AGENTIC_READ_OUTSIDE`
+### `outside_read`
+Let the read tools (`list_directory`, `read_text_file`, `view_image`, `describe_image`) and the shell read outside the session workspace.
+- Environment variable: `AGENTIC_OUTSIDE_READ`
 - Expected format `true`, `false` or unset
 - Unset follows the mode: repl `true`, web `false`, embedded `Engine` / one shot `--input` run `false`
-- Writes (`write_text_file`, `apply_patch`) stay confined to the workspace either way
-- Does not restrict `run_shell_command`, which can reach anything the process can; set `shell_enabled: false` for a hard boundary
+- With it off, a sandboxed shell reads only the workspace and the system directories (and `HOME` points into the workspace)
+
+### `outside_write`
+Let the write tools (`write_text_file`, `apply_patch`) and the shell write outside the session workspace.
+- Environment variable: `AGENTIC_OUTSIDE_WRITE`
+- Expected format `true`, `false` or unset
+- Unset follows the mode: repl `true`, web `false`, embedded `Engine` / one shot `--input` run `false`
+- Unless both outside flags are `true`, `run_shell_command` runs in the `shell_sandbox`, or is withheld when there is none
+
+### `shell_sandbox`
+OS sandbox that holds the shell to `outside_read` / `outside_write`.
+- Environment variable: `AGENTIC_SHELL_SANDBOX`
+- Expected format `auto`, `landlock`, `bwrap`, `seatbelt` or `none`, default `auto`
+- `auto`: Landlock (Linux 5.13+), else bubblewrap (Linux), Seatbelt (macOS); none on Windows
+- `none` (or no backend available): a confined shell is withheld, never run unconfined
+- Network access is not restricted
+
+### `state_dir`
+Directory that durable state lives in: `agentic.db` and `workspaces/`.
+- Environment variable: `AGENTIC_STATE_DIR`
+- Expected format `{{PATH}}` or unset
+- Unset follows the mode: repl and web `.agentic` in the current directory, embedded `Engine` / one shot run nothing (in-memory database, temporary workspaces)
+- `db_path` and `workspace_root` win when set
+
+### `session_durable`
+Keep sessions (workspaces, journals) across a shutdown or a crash, and rehydrate them on the next start.
+- Environment variable: `AGENTIC_SESSION_DURABLE`
+- Expected format `true`, `false` or unset
+- Unset follows the mode: repl and web `true`, otherwise `false`
+
+### `session_ttl`
+Seconds an idle session lives before it and its journal are removed.
+- Environment variable: `AGENTIC_SESSION_TTL`
+- Expected format `{{SECONDS}}` (integer) or unset
+- Unset follows the mode: repl and web `86400`, otherwise `3600`
+- A running run renews it at every step
+
+### `memory_tools`
+Replay journaled tool calls (call and clipped output) to the model, not only the words exchanged.
+- Environment variable: `AGENTIC_MEMORY_TOOLS`
+- Expected format `true` or `false`, default `true`
+- The journal keeps tool calls either way, for display and for `/resume`
+
+### `rules_enabled`
+Learn rules from votes (thumbs, `/good`, `/bad`) and append them to the instructions of every run.
+- Environment variable: `AGENTIC_RULES_ENABLED`
+- Expected format `true` or `false`, default `true`
+- Rules are distilled by the `summary` role, which falls back to the leader
+
+### `rules_max_chars`
+Size of the learned rules past which a warning is shown.
+- Environment variable: `AGENTIC_RULES_MAX_CHARS`
+- Expected format `{{CHARS}}` (integer), default `4000`, `0` disables
+- Shown after a vote, on page load and when the repl starts; prune with `/rules drop <id>`
+
+### `rules_instructions`
+System prompt of the rule distiller.
+- Environment variable: `AGENTIC_RULES_INSTRUCTIONS`
+- Expected format `{{TEXT}}`; must ask for JSON `{"action": "add" | "edit", "id", "polarity": "do" | "avoid", "rule"}`
+
+### `rules_max_tokens`
+Answer budget of the rule distiller.
+- Environment variable: `AGENTIC_RULES_MAX_TOKENS`
+- Expected format `{{TOKENS}}` (integer), default `400`, `0` leaves it to the provider
 
 ### `ask_enabled`
 Give the leader the `ask_user` tool, which puts a question (with optional choices) to the user and waits for the answer.
