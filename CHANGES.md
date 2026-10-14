@@ -283,14 +283,12 @@ Three decisions shaped it:
   spend the context window on them, so the default records the input the user
   wrote and the output of the model. `Agent.remember()` is the hook for a
   consumer that wants another rule.
-- **A budget with a fallback, not a token count.** Trimming is by turn count and
-  character count because the harness talks to many providers and has no
-  trustworthy tokenizer for them; both budgets are configurable, `0` disables
-  either, and the newest turn always survives so a small budget cannot erase the
-  conversation. When `memory_summary` is set, what falls out is compressed by the
-  `summary` model role (falling back to the leader) into one system turn instead
-  of being dropped — opt-in, because it costs a model call, and best effort,
-  because a failing summarizer must cost the summary rather than the run.
+- **Keep everything, show a window.** The journal is never trimmed; what the
+  model sees is decided by [context compaction](#context-compaction). The turn
+  and character budgets that used to trim the transcript (and the opt-in
+  `memory_summary`) are gone: they lost the history a person scrolls back
+  through, counted characters where providers bill tokens, and only ran
+  between runs, so one long run could still overflow.
 
 The web layer replays the transcript in the `hello` reply, which is what makes a
 reload or a reconnect restore the discussion instead of showing an empty page
@@ -308,8 +306,7 @@ write-ahead journal:
 - **Each step lands as it finishes.** The prompt is journaled (marked
   `running`) before the model is called; the stream hands every assistant
   message and every whole tool call to `Engine.checkpoint()`, which `Agent`
-  persists at once. A crash costs at most the step in flight. Trimming and
-  summarising (a model call) still wait for the end of the run.
+  persists at once. A crash costs at most the step in flight.
 - **Raw items, not prose.** A step keeps the model input items the SDK reports
   (`to_input_item()`): an assistant message as a `ResponseOutputMessage`, a tool
   call as its `function_call` plus `function_call_output`. Plain
@@ -333,6 +330,56 @@ write-ahead journal:
 `RunResult.turns` exposes the same steps to an embedded `Engine`, so an
 application with its own history appends `items` after its prompt and gets the
 same context window back.
+
+### Context compaction
+
+The goal is a chat without end, with a model that thinks at length and calls
+tools in any pattern. The constraints that shaped it:
+
+- **The SDK's compaction does not reach this harness.** `openai-agents` ships
+  `OpenAIResponsesCompactionSession` and `ModelSettings.context_management`,
+  but both need the OpenAI Responses API and `gpt-*` / `o*` models; the harness
+  speaks Chat Completions to OpenRouter, Ollama and the rest. What the SDK does
+  offer everywhere is `RunConfig.call_model_input_filter`, called before every
+  model call with the whole input, so compaction is the harness's own, plugged
+  in there (`ContextRun`).
+- **Inside a run, not only between runs.** A thinking model in a long tool loop
+  fills the window within one run; a filter on every call compacts it as it
+  goes, and the same `Compactor` works over the journal between runs.
+- **Tokens, calibrated.** No local tokenizer is the provider's, and the vocabulary
+  of tiktoken is a download that may be blocked, so the count is an estimate
+  (tiktoken, else bytes / 4) scaled by what the provider reported for recent
+  calls (`TokenCounter.ratio`, from `response.completed`; usage is asked for on
+  every stream). The estimate only has to be proportional.
+- **Cheapest first.** Old reasoning, then old tool outputs (observation
+  masking: cleared outputs are re-fetchable, and masking holds up against
+  summarising at a fraction of the cost), and only then a summary, which costs
+  a model call; a giant newest output is clipped last. Each tier stops at the
+  target.
+- **Rare and cache friendly.** Compaction starts past a high watermark and goes
+  down to a low one, so it happens once per `high − low` tokens of growth, and
+  its decisions are sticky: every later call applies them first, the input
+  changes only at a compaction, and the prefix a provider caches holds between
+  them. Cleared outputs are marked in the journal, so the next run's prefix is
+  the one the model last saw.
+- **Anchored, incremental summaries.** The summarizer folds a segment into the
+  previous summary under fixed sections (goal, user messages, decisions, files,
+  errors, progress, open work) instead of rebuilding it; a segment larger than
+  the summary model is folded a chunk at a time; the request in flight is
+  pinned verbatim; a failing summarizer leaves an extract rather than a hole.
+- **A cut never breaks a pair.** Calls stay with their outputs, reasoning with
+  what it led to, parallel calls together (`safe_cuts`), so any provider
+  accepts what is left.
+- **The journal stays O(1) a write.** A transcript that is never trimmed would
+  make every step rewrite the whole conversation, so turns became one record
+  each; the old inline format is rewritten on load.
+- **Nobody waits when nobody has to.** After a run the journal is compacted in
+  the background a little before the trigger; the next run awaits it. When the
+  provider still says the input is too long, the guard reads the window from
+  the error, teaches it to the pool, compacts hard and retries.
+- **Visible.** The mark's core fills with the context in use, the page and the
+  repl say when a compaction happened and what it saved, its summary is one
+  click away, and `/compact [focus]` does it on demand.
 
 ## Learned rules
 
@@ -906,6 +953,21 @@ harness.
       transitions, and the `edit` check in `test/agentic_e2e.py`.
     - [ ] Extended scope: in [`TODO.md`](TODO.md) (formatting shortcuts, a
       rendered preview, paste of files and images).
+32. Context compaction, in three scopes:
+    - [x] Minimum scope: `TokenCounter` (tiktoken or bytes, calibrated on
+      usage), `ContextBudget`, `safe_cuts`, the `Compactor` tiers, `ContextRun`
+      as the SDK's `call_model_input_filter`, one journal record per turn with
+      every turn kept, the window behind the newest summary, the background
+      compaction between runs, and the `context_*` options in place of the
+      memory budgets.
+    - [x] Complete scope: window lookups (`/models`, Ollama) and windows learned
+      from errors, `ContextGuard`, `context.usage` / `context.compact`, the
+      `compact` marker live and replayed, `/compact [focus]`, the gauge in the
+      mark, under the bar and in the repl, the `compact` check in
+      `test/agentic_e2e.py`, and the docs.
+    - [ ] Extended scope: in [`TODO.md`](TODO.md) (paged history, pre-summary
+      at a soft watermark, exact tokenizers, compaction evals, the Responses
+      API).
 
 ## Fixes worth remembering
 

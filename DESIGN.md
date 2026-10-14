@@ -209,13 +209,15 @@ genre: noir
 | `AGENTIC_VISION_API_URL`, `AGENTIC_VISION_API_KEY`                            | Vision endpoint (defaults to the leader's)  |
 | `AGENTIC_VISION_INSTRUCTIONS`, `AGENTIC_VISION_MAX_TOKENS`                    | Vision system prompt and answer budget      |
 | `AGENTIC_MEMORY_ENABLED`                                                      | Remember the conversation of a session      |
-| `AGENTIC_MEMORY_MAX_TURNS`, `AGENTIC_MEMORY_MAX_CHARS`                        | Memory budget (`0` disables a limit)        |
-| `AGENTIC_MEMORY_SUMMARY`                                                      | Summarise trimmed turns instead of dropping |
 | `AGENTIC_MEMORY_TOOLS`                                                        | Replay journaled tool calls to the model    |
+| `AGENTIC_CONTEXT_WINDOW`, `AGENTIC_CONTEXT_RESERVE`                           | Window (`0` asks) and room for the reply    |
+| `AGENTIC_CONTEXT_TRIGGER`, `AGENTIC_CONTEXT_TARGET`                           | Compact past / down to (share of budget)    |
+| `AGENTIC_CONTEXT_KEEP`, `AGENTIC_CONTEXT_SUMMARY`                             | Outputs never cleared; summarise or drop    |
+| `AGENTIC_CONTEXT_TOKENIZER`                                                   | tiktoken encoding (empty: byte estimate)    |
 | `AGENTIC_RULES_ENABLED`, `AGENTIC_RULES_MAX_CHARS`                            | Learned rules; size that raises a warning   |
 | `AGENTIC_RULES_INSTRUCTIONS`, `AGENTIC_RULES_MAX_TOKENS`                      | Rule distiller prompt and answer budget     |
 | `AGENTIC_SUMMARY_MODEL`, `AGENTIC_SUMMARY_API_URL`, `AGENTIC_SUMMARY_API_KEY` | Summary role (defaults to the leader)       |
-| `AGENTIC_SUMMARY_INSTRUCTIONS`, `AGENTIC_SUMMARY_MAX_TOKENS`                  | Summary system prompt and answer budget     |
+| `AGENTIC_SUMMARY_INSTRUCTIONS`, `AGENTIC_SUMMARY_MAX_TOKENS`                  | Summary system prompt and its size          |
 | `AGENTIC_INPUT_SOURCE`                                                        | Input path or text (also `--input`)         |
 | `AGENTIC_TEMPLATE`                                                            | Template path or raw template for `main()`  |
 | `AGENTIC_STATE_DIR`                                                           | Home of the database and the workspaces     |
@@ -268,6 +270,8 @@ Handlers may be sync or async; exceptions are printed to stderr and swallowed.
 | `tool.end`                     | the above plus `ok`, `result`, `duration`  |
 | `model.retry`                  | `role`, `error_kind`, `attempt`, `attempts`, `delay`, `error` |
 | `model.wait`                   | `role`, `elapsed` (seconds silent), `timeout` (the stall budget, `0` unbounded) |
+| `context.usage`                | `tokens`, `window`, `usable`, `high`, `low`, `fill` (tokens / usable), `estimated` (false when the provider counted) |
+| `context.compact`              | `id` (its marker block), `reason`, `tokens_before`, `tokens_after`, `thoughts`, `cleared`, `clipped`, `summarized`, `message` |
 | `question.start`               | `id`, `kind`, `call_id`, `question`, `options` |
 | `question.end`                 | `id`, `kind`, `call_id`, `answer`, `ok` (false when cancelled) |
 | `feedback`                     | `ok`, `id` (the answer), `vote`, `message`, plus `action`, `rule`, `warning` when learned |
@@ -290,6 +294,10 @@ carries attachments, unless the template already contains that heading.
 `close`) with two implementations: `MemoryStore` for tests and `SqliteStore`,
 which keeps JSON values in a `store(namespace, key, value, updated_at)` table
 and falls back to an in-memory database when no path is given.
+
+A store may also offer `clear(namespace)` (both do, `SqliteStore` in one
+statement); `ConversationMemory.forget` uses it when present and deletes key by
+key otherwise.
 
 `Cache` is `get`/`set`/`delete`/`clear`, implemented by `LruCache` over
 `cachetools` with an optional TTL. Sessions are written to both.
@@ -344,35 +352,96 @@ The repl and the web server are durable by default (see [Modes](#modes)).
 
 ## 9. Memory
 
-A session remembers its conversation. `Turn` is one message (`role`, `text`,
-`created_at`, plus the block `kind` its role maps onto), `Transcript` is the
-ordered turns of one session (`append`, `messages`, `size`, `overflow`) and
-`ConversationMemory` owns them:
+**The journal keeps every turn; the model sees a window: newest summary → turns after its boundary.**
 
-- `transcript(session_id)` — load once from the store, then keep in memory.
-- `history(session_id)` — the turns as chat messages for the model.
-- `replay(session_id)` — the turns as JSON for a client that (re)connects.
-- `remember(session_id, turns)` — append, `trim`, persist.
-- `trim(transcript)` — drop the oldest turns until `max_turns` and `max_chars`
-  are met; when a `summarizer` is set, what falls out is folded into a single
-  `system` turn instead. The newest turn always survives, and a failing
-  summarizer costs the summary rather than the run.
-- `forget(session_id)` — erase it, in memory and in the store.
+- `Turn` — one message: `role`, `text`, `created_at`, `seq` (order and store key), plus the block `kind` its role maps onto (`compact` → `compact`)
+- `Transcript` — the ordered turns of one session: `append` (numbers them), `summary()`, `boundary()`, `window()`, `messages()`
+- `ConversationMemory` — owns them, persisted one record per turn (namespace `transcripts:<session>`, key the zero padded `seq`) under a header record (`transcripts`, `format: 2`)
+  - `transcript(session_id)` — load once, then keep in memory; a header holding its turns inline (format 1) is rewritten one record per turn on load
+  - `window(session_id)` / `history(session_id)` — the context window, with the turn behind each item / as model input
+  - `replay(session_id)` — every turn as JSON for a client that (re)connects
+  - `journal(session_id, *turns)` — append and write only the new records; `remember()` is the same for a coroutine caller
+  - `persist(transcript, *turns)` — rewrite the records of the turns named (a vote, a status, a cleared output); all of them when none are
+  - `forget(session_id)` — erase it, in memory and in the store
+- Nothing is trimmed: a write costs one record however long the chat has grown, and what the model sees is [Context](#context)'s business
 
 On the `Agent` side, `build_input()` returns the prompt alone when nothing is
-remembered (a one shot run) and `[*history, {"role": "user", …}]` otherwise. The
+remembered (a one shot run) and `[*window, {"role": "user", …}]` otherwise. The
 prompt is kept as the input the user wrote (not the rendered template, which
 would be replayed verbatim every turn), and every step of the run is journaled
 as it finishes (see [Journal](#journal)), a failed or stopped run included;
-`remember()` closes a run that finished with its final answer and the trim.
+`remember()` closes a run that finished with its final answer.
 Override it to remember more, less or something else; inject
 `memory=ConversationMemory(...)` or subclass it for another policy;
-`memory_enabled=False` turns the whole subsystem off.
+`memory_enabled=False` turns the whole subsystem off. `/forget` clears a
+transcript, and `/new` and `/end` forget the session they close.
 
-Summarising is opt-in: `memory_summary` makes `build_summarizer()` return a
-delegate over the `summary` role, which falls back to the leader model when
-`summary_model` is unset. `/forget` clears a transcript, and `/new` and `/end`
-forget the session they close.
+### Context
+
+**Before every model call: estimate → past `high`? → clear reasoning → clear outputs → summarise → clip → down to `low`.**
+
+> ❗ SDK native compaction (`OpenAIResponsesCompactionSession`, `ModelSettings.context_management`) needs the OpenAI Responses API and `gpt-*` / `o*` models; the harness drives Chat Completions against any provider, so compaction is its own, plugged in through the SDK's `RunConfig.call_model_input_filter`.
+
+Budget (`ContextBudget`):
+
+- `window` — `context_window`, else the provider's listing (`ModelPool.window`), else `DEFAULT_CONTEXT_WINDOW` (128k); a context length error lowers it
+- `reserve` — `context_reserve`, else a fifth of the window within 4k–32k: the reply, reasoning included
+- `usable` = window − reserve; `high` = usable × `context_trigger` (0.85); `low` = usable × `context_target` (0.5)
+- hysteresis: a compaction goes down to `low`, so the next is `high − low` tokens of growth away and the cached prefix holds until then
+
+Counting (`TokenCounter`, one per leader model):
+
+- tiktoken `context_tokenizer` (`o200k_base`), else UTF-8 bytes / 4 (offline, or no vocabulary download allowed)
+- per item: framing + text of the content, call name and arguments, output, reasoning; an image a flat 1,024; cached by item digest
+- `ratio` — provider tokens per estimated token, an average of what `response.completed` reported against what was estimated for that call; every watermark is compared in those units
+- reasoning counts only where the SDK sends it back (`reasoning_replayed`: DeepSeek, which needs it during a tool loop)
+
+Tiers (`Compactor.compact`), cheapest first, each only as far as `low` needs:
+
+1. reasoning before the newest response → `THOUGHT_STUB` (no model call)
+2. tool outputs, oldest first, newest `context_keep` (4) spared, under 200 tokens left alone → a stub naming the tool and the tokens it held
+3. oldest prefix → summary: the smallest safe cut whose tail fits, folded by the `summary` role into the previous summary (anchored, never rebuilt), a chunk per call when the segment outgrows the summary model; skipped when the segment is too small to be worth a call; the newest response is always kept
+4. what still exceeds `usable` (a giant newest output) → clipped, head and tail
+
+Cuts (`safe_cuts`):
+
+- a call stays with its output, reasoning with what it led to, the calls of a response with the message that announced them
+- parallel calls are one unit
+
+Decisions are sticky (`ContextState`): `summary`, `cut` (+ the digest that finds it again), `cleared`, `clipped`, `thoughts`, `pinned`
+
+- every call applies them first, so the input only changes at a compaction
+- `pinned` — once the cut passes the request in flight, the summary keeps it verbatim under `PINNED_HEADER`
+- the summary reaches the model as a user message opening with `SUMMARY_HEADER` (some chat templates refuse a late system message)
+- a failing summarizer leaves an extract of the segment's requests and calls; `context_summary` off drops the segment with a note
+
+In a run (`ContextRun`, the filter):
+
+- `Engine.build_context()` builds it, `turn()` attaches it to `RunResult.context`, `build_run_config()` hands it to `Runner.run_streamed`
+- each call: `fit(items)` → compaction if due → `context.usage` (estimated)
+- `response.completed` → `observe(input_tokens)` → calibrate → `context.usage` (counted)
+- `ContextGuard` wraps the leader's SDK model: a context length error (`is_overflow`) reads the window it names (`overflow_window`, else ¾ of the assumed one), teaches it to the pool, compacts as hard as it goes and retries; twice per run at most, then `ErrorKind.CONTEXT`
+- a summary marker block (`kind: compact`) opens before the summarizer is called and closes with the summary
+
+Across runs (`Agent`):
+
+- `prepare_context()` seeds the run's state with the journal's summary and ties each starting item to its turn
+- `journal_compaction()` journals each compaction as a `compact` turn; a summary records where it keeps from (`keep_ref`): `{"seq": n}`, or `{"run", "calls"}` for a cut among items the run generated
+- `settle_context()` at the end of a run: cleared outputs are marked on their tool turns (`meta["cleared"]`, replayed as the stub, so the next prefix matches what the model last saw) and call references become `seq`
+- `schedule_compaction()` after the run: `compact(background=True)` at 0.9 × the trigger, in a task; the next run of the session awaits it (`compacted()`)
+- `compact(session, force=True, focus=)` — `/compact [focus]`: everything but the newest response into the summary
+
+```mermaid
+flowchart LR
+  I[input items] --> A{past high?}
+  A -- no --> S[send, sticky decisions applied]
+  A -- yes --> R[clear old reasoning] --> O[clear old outputs] --> M{under low?}
+  M -- yes --> S
+  M -- no --> F[fold prefix into summary] --> C{fits usable?}
+  C -- yes --> S
+  C -- no --> K[clip giant outputs] --> S
+  S --> U[provider usage] --> Q[calibrate ratio]
+```
 
 ### Journal
 
@@ -381,7 +450,7 @@ forget the session they close.
 - `Turn` also carries `id` (the block it came from), `run`, `items` (raw model input items) and `meta` (`status` on a prompt, `vote` on an answer, `name` / `ok` on a tool call)
 - `Turn.replay(tools)` — its items when it has them, else the plain message; a tool turn without items, or with `tools` off, is left out
 - `Transcript.messages(tools)` is the context window; `find(id)`, `run_of(run)`, `prompt_of(run)`, `last_run()` look it up
-- `ConversationMemory.journal(session, *turns)` appends and persists at once, without trimming; `remember()` trims at the end of a run
+- `ConversationMemory.journal(session, *turns)` appends and persists the new records at once
 - `ConversationMemory.TOOL_LIMIT` (8,000) clips a tool output in the journal, head and tail; `tools` (`memory_tools`) keeps calls out of the replay
 - `Agent.journal_prompt()` writes the prompt (`status: running`); `Agent.checkpoint()` journals each step the stream reports; `Agent.settle()` writes `ok`, `failed` (with `error`) or `cancelled`
 - `Agent.unfinished(session)` — the prompt of the newest run when it did not finish and nothing live is behind it; `Agent.resume(session)` runs `RESUME_PROMPT` through the passthrough template over that context
@@ -399,8 +468,9 @@ sequenceDiagram
   A->>J: assistant turn (message item)
   S->>A: tool_called, tool_output
   A->>J: tool turn (call + output items)
-  A->>J: final answer, trim
-  A->>J: status ok / failed / cancelled
+  A->>J: compact turn (when the filter compacted)
+  A->>J: final answer
+  A->>J: status ok / failed / cancelled, cleared outputs
 ```
 
 ### Rules
@@ -542,6 +612,17 @@ The key is optional: an empty `api_key` leaves the SDK's own environment lookup
 in place, and when that would find nothing the pool passes a placeholder so
 keyless endpoints (a local Ollama, a proxy) construct a client at all.
 
+`ModelPool.window(spec)` asks the endpoint for the model's context window once
+(`PROBE_TIMEOUT`, never failing a run): its `/models` listing under any of
+`WINDOW_KEYS` (OpenRouter, Together `context_length`, vLLM `max_model_len`,
+Groq `context_window`, LM Studio and Mistral `max_context_length`, LiteLLM
+`max_input_tokens`), then an Ollama server's own API (`/api/ps` for a loaded
+model, `num_ctx` from `/api/show`, else `OLLAMA_CONTEXT_WINDOW`, since Ollama
+truncates a longer prompt silently). `learn_window(spec, n)` keeps one an
+error revealed. The SDK agent asks for usage on every stream
+(`ModelSettings(include_usage=True)`): it prices the run and calibrates the
+context count.
+
 `Agent.build_model(config, role)` pulls from the pool, disables SDK tracing and
 sets the leader's client as the SDK default. `Agent.build_vision(config)` returns
 a `(data_url, question) -> text` delegate, or `None` when no vision model is
@@ -664,6 +745,7 @@ client.
 | `/use <id>`         | Switch to an existing session                     |
 | `/forget`           | Forget the conversation of the current session    |
 | `/resume`           | Continue the run that did not finish              |
+| `/compact [focus]`  | Summarise the conversation now (optional focus)   |
 | `/good [why]`       | Rate the last answer good: learn a rule           |
 | `/bad [why]`        | Rate the last answer bad: learn a rule            |
 | `/rules [drop <id>\|clear]` | List or prune the learned rules           |
@@ -1051,6 +1133,13 @@ both, and every state is that same mark modulated:
   held still instead.
 - **learning** — the core turns a quarter and back (`data-learning`) while a
   vote is being turned into a rule.
+- **context** — the core is a vial filled to the share of the context in use
+  (`--fill` from `context.usage`, clipped by `#mark-level`), its outline the
+  empty part, and a hairline under the bar (`#gauge`) grows with it; near the
+  trigger both turn warn (`data-gauge="high"`). Unknown use leaves the core full.
+- **compacting** — the vial squeezes and the hairline ebbs (`data-compacting`)
+  while a summary is written; the marker block (`compact`) then folds away,
+  labelled with what it saved, its summary one click away.
 - **disconnected** — a dotted ring and a hollow core, in the error colour.
 
 The words are still there for a screen reader (`#status-text`, and the mark's
@@ -1143,8 +1232,9 @@ Phone in landscape, 844×390 at 2×:
 </p>
 
 The pieces are small enough to borrow: `ScriptedAgent` replaces only
-`build_tools`, `build_sdk_agent` and `stream`, so sessions, memory, the event
-bridge, the hub and the page are the real thing; `Gate` parks the run mid answer
+`build_tools`, `build_sdk_agent`, `build_summarizer` and `stream` (which still
+hands its input to the run's context filter, as the SDK would), so sessions,
+memory, compaction, the event bridge, the hub and the page are the real thing; `Gate` parks the run mid answer
 until the capture lets it go, which is what makes the middle frame the same
 picture every time; `Server` runs the web layer on a background thread and hands
 back its URL. `--device`, `--out`, `--pace` and `--browser` cover the rest.
@@ -1239,8 +1329,14 @@ leader's stream and the `model.wait` heartbeat of a silent one, questions
 mode gating), input resolution, the event bus, prompt rendering, both stores
 and the cache,
 session isolation and cleanup, session durability (rehydration,
-reconciliation, reaping and the sweeper), conversation memory (persistence,
-trimming, summarising, replay), workspace path scoping (including symlinks and
+reconciliation, reaping and the sweeper), conversation memory (one record per
+turn, legacy rewrite, replay, the window behind a summary), context compaction
+(the counter and its calibration, safe cuts, the budget, every tier, sticky
+decisions, pinning, chunked and failing summaries, window lookups, overflow
+recognition; in-run compaction, prefix stability and overflow recovery through
+the real SDK runner and its `ScriptedModel`; an endless chat on a small window,
+summaries journaled against their turns, background compaction, `/compact`),
+workspace path scoping (including symlinks and
 shell timeouts), tool assembly (vision on and off, guarded errors), repository
 URL normalization, git operations against local fixture repositories, pull
 request posting against a stubbed forge, command parsing, config file resolution
@@ -1265,7 +1361,9 @@ refresh the screenshots above. Besides the captures it asserts recovery
 (reattach, vote, resume) and the editor (`edit`: the lift carries the text up,
 the paint holds the same characters with `md-*` spans, a list continues and
 ends, the draft survives a reload, the drop carries it back, and Ctrl+Enter
-sends, clears the draft and drops).
+sends, clears the draft and drops) and the context (`compact`: a run fills the
+gauge, `/compact` leaves a folded marker holding the summary, a reload replays
+it; captured as `desktop-compact.png`, not committed yet).
 
 ## 23. Example consumer
 

@@ -7,6 +7,15 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 ---
 
+- [ ] **Context compaction, extended scope.** Compaction is token aware,
+      tiered and runs before every model call (see CHANGES.md). Still open:
+  - [ ] Paged history replay: `hello` sends the newest N turns, older ones load on scroll (an endless journal is replayed whole today)
+  - [ ] Pre-summarise in the background at a soft watermark, so a blocking compaction inside a run is rare
+  - [ ] Exact tokenizers for open models (HF `tokenizers`) when available offline
+  - [ ] Compaction quality evals (`test/agentic_eval.py`): recall of facts and files after N compactions
+  - [ ] Clip a giant user message (a pasted file) the way a giant tool output is clipped
+  - [ ] OpenAI Responses path with server side compaction when the endpoint is api.openai.com
+
 - [ ] Create tool in a single file python file for creating markdown files. It should be in apps/tools and should be able to be plugged into the agent/engine.
 
 - [ ] **Authentication and authorization on the web layer.** The server binds

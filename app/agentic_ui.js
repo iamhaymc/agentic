@@ -19,6 +19,7 @@
     wait: $("wait"),
     status: $("status-text"),
     session: $("session"),
+    gauge: $("gauge"),
     discussion: $("discussion"),
     empty: $("empty"),
     form: $("form"),
@@ -72,6 +73,8 @@
         '<path d="M17 14V2"/><path d="M9 18.1 10 14H4.2a2 2 0 0 1-1.9-2.6l2.3-8A2 2 0 0 1 6.5 2H20' +
         'a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.8a2 2 0 0 0-1.8 1.1L12 22a3.1 3.1 0 0 1-3-3.9Z"/>',
       play: '<path d="M6 3.5v17a1 1 0 0 0 1.5.9l13-8.5a1 1 0 0 0 0-1.8l-13-8.5A1 1 0 0 0 6 3.5Z"/>',
+      shrink:
+        '<path d="m14 10 7-7"/><path d="M20 10h-6V4"/><path d="m3 21 7-7"/><path d="M4 14h6v6"/>',
     },
     /** Icon markup for a static template. The set is ours, so it is safe HTML. */
     markup(name, className) {
@@ -93,6 +96,7 @@
     log: "info",
     warning: "alert",
     error: "alert",
+    compact: "shrink",
   };
 
   // ---------------------------------------------------------------- markdown
@@ -1012,6 +1016,58 @@
     },
   };
 
+  // ------------------------------------------------------------------ gauge
+
+  /** A token count for people: `950`, `12k`, `1.2M`. */
+  const tokens = (count) => {
+    const n = Number(count) || 0;
+    if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+    if (n >= 1e4) return `${Math.round(n / 1e3)}k`;
+    if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+    return String(n);
+  };
+
+  /** The context in use (`context.usage`): the mark's core fills like a vial
+   *  and a hairline under the bar grows with it; near the point compaction
+   *  starts at, both turn warn. Unknown use leaves the core full. */
+  const Gauge = {
+    usage: null,
+    set(usage) {
+      if (!usage || !Number(usage.usable)) return;
+      this.usage = usage;
+      const fill = Math.max(0, Math.min(1, Number(usage.fill) || 0));
+      const trigger = Number(usage.high) / Number(usage.usable) || 0.85;
+      el.app.style.setProperty("--fill", fill.toFixed(4));
+      el.app.dataset.gauge = fill >= trigger * 0.9 ? "high" : fill >= trigger * 0.6 ? "mid" : "low";
+      el.gauge.hidden = false;
+      Socket.describe();
+    },
+    clear() {
+      this.usage = null;
+      el.app.style.removeProperty("--fill");
+      delete el.app.dataset.gauge;
+      el.gauge.hidden = true;
+      Socket.describe();
+    },
+    /** For the label of the mark: `context 45% (58k of 102k)`. */
+    text() {
+      const usage = this.usage;
+      if (!usage) return "";
+      const fill = Math.round(Math.min(1, Number(usage.fill) || 0) * 100);
+      return `context ${fill}% (${tokens(usage.tokens)} of ${tokens(usage.usable)})`;
+    },
+    /** A compaction block: squeezing while it summarises, its saving once done. */
+    compaction(block, data, done) {
+      block.label(
+        done
+          ? `compacted · ${tokens(data.tokens_before)} → ${tokens(data.tokens_after)}`
+          : "compacting…",
+      );
+      el.app.dataset.compacting = String(!done);
+      Socket.describe();
+    },
+  };
+
   /** Seconds as `42s`, or `m:ss` once there is a minute of them. */
   const clock = (seconds) =>
     seconds < 60
@@ -1169,19 +1225,22 @@
       const working =
         el.app.dataset.asking === "true"
           ? ", waiting for your answer"
-          : el.app.dataset.waiting === "true"
-            ? ", model writing"
-            : el.app.dataset.busy === "true"
-              ? ", working"
-              : el.app.dataset.learning === "true"
-                ? ", learning a rule"
-                : "";
+          : el.app.dataset.compacting === "true"
+            ? ", compacting the context"
+            : el.app.dataset.waiting === "true"
+              ? ", model writing"
+              : el.app.dataset.busy === "true"
+                ? ", working"
+                : el.app.dataset.learning === "true"
+                  ? ", learning a rule"
+                  : "";
       const words = {
         online: "connected",
         offline: "disconnected",
         connecting: "connecting",
       };
-      const label = `${this.name}, ${words[state] || state}${working}`;
+      const context = Gauge.text();
+      const label = `${this.name}, ${words[state] || state}${working}${context ? `, ${context}` : ""}`;
       el.brand.setAttribute("aria-label", label);
       el.brand.title = label.replace(", ", " — ");
     },
@@ -1223,6 +1282,8 @@
           this.describe();
           Commands.server = message.commands || [];
           Theme.apply(message.theme);
+          Gauge.clear();
+          Gauge.set(message.context);
           // The journal, then the run in flight where it is now, then what it asked.
           this.replay(message.history, message.unfinished);
           (message.live || []).forEach((live) => this.revive(live));
@@ -1247,6 +1308,7 @@
           }
           if (message.complete) Blocks.map.get(message.id).end();
           if (message.kind === "prompt") this.busy(true);
+          if (message.kind === "compact") Gauge.compaction(Blocks.map.get(message.id), message, false);
           break;
         case "block.delta":
           Blocks.ensure(message.id, message.kind).append(message.text || "");
@@ -1277,8 +1339,18 @@
           Blocks.scroll();
           break;
         }
-        case "block.end":
-          Blocks.ensure(message.id, message.kind).end();
+        case "block.end": {
+          const block = Blocks.ensure(message.id, message.kind);
+          if (message.kind === "compact") {
+            block.set(message.text || "");
+            Gauge.compaction(block, message, true);
+            block.collapse(true);
+          }
+          block.end();
+          break;
+        }
+        case "context.usage":
+          Gauge.set(message);
           break;
         case "model.wait":
           // The model is writing something it sends whole (a tool call on
@@ -1344,6 +1416,10 @@
           block.node.dataset.status = meta.ok === false ? "failed" : "ok";
         }
         block.set(turn.text || "");
+        if (turn.kind === "compact") {
+          Gauge.compaction(block, meta, true);
+          block.collapse(true);
+        }
         block.end();
         if (meta.vote) block.voted(meta.vote);
         // a run still journaled as running is either live (left plain) or unfinished
@@ -1367,6 +1443,7 @@
       // a vote is reported by its `feedback` message, to every client
       if (result.vote) return;
       if (result.session && result.session.id) {
+        if (result.session.id !== this.session) Gauge.clear();
         this.session = result.session.id;
         Saved.set(this.session);
         el.session.textContent = `#${this.session}`;

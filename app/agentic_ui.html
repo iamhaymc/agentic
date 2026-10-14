@@ -17,15 +17,22 @@
              motion all change with the connection and with a live run. -->
       <span class="brand" id="brand" role="img" aria-label="agentic, connecting" title="agentic — connecting">
         <svg class="mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <!-- The core fills like a vial with the context in use (`--fill`). -->
+          <clipPath id="mark-level">
+            <rect class="mark-level" x="0" y="6.4" width="24" height="24" />
+          </clipPath>
           <circle class="mark-halo" cx="12" cy="12" r="10.5" />
           <circle class="mark-ring" cx="12" cy="12" r="7.75" />
-          <path class="mark-core" d="M12 6.4 15.1 12 12 17.6 8.9 12Z" />
+          <path class="mark-shell" d="M12 6.4 15.1 12 12 17.6 8.9 12Z" />
+          <path class="mark-core" d="M12 6.4 15.1 12 12 17.6 8.9 12Z" clip-path="url(#mark-level)" />
         </svg>
       </span>
       <!-- How long a silent model has been writing; shown only while it is. -->
       <span class="wait" id="wait" hidden></span>
       <span class="sr-only" id="status-text" role="status">connecting</span>
       <span class="session" id="session" title="Active session"></span>
+      <!-- The context in use, as a hairline under the bar. -->
+      <span class="gauge" id="gauge" aria-hidden="true" hidden></span>
     </header>
     <main class="discussion" id="discussion" aria-live="polite">
       <div class="empty" id="empty">

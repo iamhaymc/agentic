@@ -175,6 +175,70 @@ body {
   transition: opacity 0.25s ease;
 }
 
+/* context: the core is a vial filled to the share of the context in use; its
+   outline holds the empty part. Unknown use leaves it full. Near the point
+   where compaction starts, the vial and the hairline under the bar turn warn. */
+.mark-shell {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 0.9;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.mark-level {
+  transform: translateY(calc((1 - var(--fill, 1)) * 11.2px));
+  transition: transform 0.4s ease;
+}
+
+.app[data-gauge] .mark-shell {
+  opacity: 0.45;
+}
+
+.app[data-gauge="high"] .mark-core,
+.app[data-gauge="high"] .mark-shell {
+  color: var(--warn);
+}
+
+.gauge {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: calc(var(--fill, 0) * 100%);
+  height: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+  opacity: 0.6;
+  pointer-events: none;
+  transition: width 0.4s ease, background-color 0.25s ease;
+}
+
+.app[data-gauge="high"] .gauge {
+  background: var(--warn);
+}
+
+/* compacting: the context is being folded into a summary, so the vial is
+   squeezed and the hairline breathes until it is done */
+.app[data-compacting="true"] .mark-core {
+  animation: squeeze 1s ease-in-out infinite;
+}
+
+.app[data-compacting="true"] .gauge {
+  animation: ebb 1s ease-in-out infinite;
+}
+
+@keyframes ebb {
+  50% {
+    opacity: 0.15;
+  }
+}
+
+@keyframes squeeze {
+  50% {
+    transform: scale(1.15, 0.6);
+  }
+}
+
 /* connecting: a gap chasing itself around a dim ring */
 .app[data-state="connecting"] .mark-ring {
   stroke-dasharray: 13 36;
@@ -357,7 +421,8 @@ body {
   .mark,
   .mark-halo,
   .mark-ring,
-  .mark-core {
+  .mark-core,
+  .gauge {
     animation: none !important;
   }
 
@@ -473,6 +538,17 @@ body {
 .block[data-kind="reasoning"] .block-body {
   color: var(--muted);
   font-style: italic;
+}
+
+/* a compaction: where the conversation was folded; its summary on demand */
+.block[data-kind="compact"] {
+  border-style: dashed;
+  border-color: var(--border);
+}
+
+.block[data-kind="compact"] .block-body {
+  color: var(--muted);
+  font-size: 0.86rem;
 }
 
 .block[data-kind="tool"] .block-body,

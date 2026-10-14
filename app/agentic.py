@@ -169,11 +169,27 @@ DEFAULT_VISION_INSTRUCTIONS = (
     "image: its subject, layout, text and anything notable."
 )
 
-DEFAULT_SUMMARY_INSTRUCTIONS = (
-    "You compress a conversation for another agent that has forgotten it. "
-    "Rewrite the exchange below as a compact, factual briefing in the third "
-    "person: decisions, facts, names, files, open questions. No preamble."
-)
+DEFAULT_SUMMARY_INSTRUCTIONS = """\
+You keep the working memory of an AI agent whose conversation has outgrown its \
+context window. You are given the current summary (possibly empty) and the next \
+segment of the conversation, which is about to leave the agent's context. \
+Rewrite the summary so it also covers the segment. The agent continues from \
+your summary plus the newest turns, which it still sees verbatim, so keep \
+everything it needs to carry on without asking again and drop what it no \
+longer needs.
+
+Write markdown with these sections, leaving out a section only when empty:
+## Goal: what the user wants overall; constraints and preferences they stated
+## User messages: every user request in order, condensed but faithful; quote short instructions verbatim
+## Decisions and facts: conclusions, values, names, URLs, ids, commands that worked
+## Files and artifacts: paths created, read or changed, and what matters about each
+## Errors and fixes: failures met and how they were resolved, or that they are not
+## Progress: what is done
+## Open work: what was in progress at the end of the segment and the exact next step
+
+Be dense: fragments over sentences, specifics (paths, numbers, identifiers) \
+over generalities, no preamble and no remarks about the summary itself. Keep \
+earlier content unless the segment supersedes it."""
 
 DEFAULT_RULES_INSTRUCTIONS = (
     "You turn a user's feedback on an agent's answer into one durable rule for "
@@ -526,20 +542,34 @@ class AgentConfig:
     vision_api_key: str = ""
     vision_instructions: str = DEFAULT_VISION_INSTRUCTIONS
     vision_max_tokens: int = 1024
-    # Conversation memory. Every run appends the exchange to the transcript of
-    # its session, and the transcript is replayed to the model on the next run
-    # until it exceeds one of the budgets below. When `memory_summary` is set
-    # the turns that fall out are compressed by the `summary` role instead of
-    # being dropped; that role falls back to the leader when it is unset.
+    # Conversation memory. Every run journals the exchange to the transcript of
+    # its session, which keeps every turn; the model is shown a window onto it
+    # (see the context budget below).
     memory_enabled: bool = True
-    memory_max_turns: int = 40
-    memory_max_chars: int = 24000
-    memory_summary: bool = False
+    # Context budget, in tokens of the leader's context window. The model sees
+    # the newest items verbatim and a summary of everything older. Past
+    # `context_trigger` of the usable budget (window minus `context_reserve`,
+    # the room left for the reply and its reasoning) the context is compacted
+    # down to `context_target`: old reasoning and old tool outputs are cleared
+    # first (the newest `context_keep` outputs never), then the oldest prefix is
+    # folded into the summary by the `summary` role (which falls back to the
+    # leader), or dropped when `context_summary` is off. `context_window` 0 asks
+    # the provider; `context_trigger` 0 turns compaction off.
+    context_window: int = 0
+    context_reserve: int = 0
+    context_trigger: float = 0.85
+    context_target: float = 0.5
+    context_keep: int = 4
+    context_summary: bool = True
+    # tiktoken encoding the context is counted with; empty estimates from the
+    # byte size. Either way the count is calibrated on the provider's usage.
+    context_tokenizer: str = "o200k_base"
     summary_model: str = ""
     summary_api_url: str = ""
     summary_api_key: str = ""
     summary_instructions: str = DEFAULT_SUMMARY_INSTRUCTIONS
-    summary_max_tokens: int = 512
+    # The size a summary may grow to, in tokens.
+    summary_max_tokens: int = 4096
     # Replay the tool calls of earlier runs (call and clipped output) to the
     # model, not only the words exchanged; the journal keeps them either way.
     memory_tools: bool = True
@@ -808,6 +838,8 @@ class EventType:
     TOOL_END = "tool.end"
     MODEL_RETRY = "model.retry"
     MODEL_WAIT = "model.wait"
+    CONTEXT_USAGE = "context.usage"
+    CONTEXT_COMPACT = "context.compact"
     QUESTION_START = "question.start"
     QUESTION_END = "question.end"
     FEEDBACK = "feedback"
@@ -963,6 +995,10 @@ class MemoryStore:
     def list(self, namespace: str) -> list[tuple[str, Any]]:
         return list(self._data.get(namespace, {}).items())
 
+    def clear(self, namespace: str) -> None:
+        """Delete every key of a namespace."""
+        self._data.pop(namespace, None)
+
     def close(self) -> None:
         self._data.clear()
 
@@ -1007,6 +1043,11 @@ class SqliteStore:
             "SELECT key, value FROM kv WHERE ns = ? ORDER BY updated_at", (namespace,)
         ).fetchall()
         return [(key, json.loads(value)) for key, value in rows]
+
+    def clear(self, namespace: str) -> None:
+        """Delete every key of a namespace in one statement."""
+        self._db.execute("DELETE FROM kv WHERE ns = ?", (namespace,))
+        self._db.commit()
 
     def close(self) -> None:
         with contextlib.suppress(sqlite3.Error):
@@ -1331,14 +1372,21 @@ class SessionManager:
 # ---------------------------------------------------------------------------
 # Memory
 #
-# A session remembers its conversation: every run appends the exchange to a
-# transcript that is persisted through the `Store`, replayed to the model on the
-# next run and replayed to a client that reconnects. Trimming keeps it inside a
-# budget, optionally summarising what falls out instead of dropping it.
+# A session remembers its conversation: every run journals the exchange to a
+# transcript that is persisted through the `Store`, one record per turn, and
+# kept whole: a client that reconnects is shown all of it. The model is shown a
+# window onto it instead, the newest summary and every turn after the point
+# that summary covers (see Context).
 # ---------------------------------------------------------------------------
 
 #: Roles a remembered turn may carry, mapped onto the block kind of the UI.
-TURN_KINDS = {"user": "prompt", "assistant": "output", "system": "log", "tool": "tool"}
+TURN_KINDS = {
+    "user": "prompt",
+    "assistant": "output",
+    "system": "log",
+    "tool": "tool",
+    "compact": "compact",
+}
 
 #: Run states a journaled prompt carries in `Turn.meta["status"]`.
 RUN_RUNNING, RUN_OK, RUN_FAILED, RUN_CANCELLED = "running", "ok", "failed", "cancelled"
@@ -1353,7 +1401,14 @@ class Turn:
     and the raw model input `items` it stands for in the context window — a
     tool call with its output, an assistant message — which are replayed to
     the model instead of the plain ``{role, content}`` message. `meta` holds
-    the status of a run on its prompt and the vote on an answer.
+    the status of a run on its prompt, the vote on an answer, and on a tool
+    call the stub its output was `cleared` to. `seq` orders the turns of a
+    transcript and keys their records in the store.
+
+    A ``compact`` turn marks a compaction: its text is shown to a client, and
+    when it carries a summary (``meta["summary"]``) the newest one opens the
+    context window in place of every turn before the point it keeps from
+    (``meta["keep"]``).
     """
 
     role: str
@@ -1363,17 +1418,18 @@ class Turn:
     run: str = ""
     items: list[dict[str, Any]] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
+    seq: int = 0
 
     @property
     def kind(self) -> str:
         return TURN_KINDS.get(self.role, "output")
 
     @property
-    def size(self) -> int:
-        """Characters this turn costs the context window."""
-        if not self.items:
-            return len(self.text)
-        return len(json.dumps(self.items, ensure_ascii=False, default=str))
+    def call_id(self) -> str:
+        """The id of the call a tool turn journals, else empty."""
+        if self.role != "tool" or not self.items:
+            return ""
+        return str(self.items[0].get("call_id") or "")
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -1382,7 +1438,7 @@ class Turn:
             "kind": self.kind,
             "created_at": self.created_at,
         }
-        for key in ("id", "run", "items", "meta"):
+        for key in ("id", "run", "items", "meta", "seq"):
             if getattr(self, key):
                 out[key] = getattr(self, key)
         return out
@@ -1399,6 +1455,7 @@ class Turn:
             run=str(data.get("run") or ""),
             items=[i for i in items if isinstance(i, dict)] if isinstance(items, list) else [],
             meta=dict(meta) if isinstance(meta, dict) else {},
+            seq=int(data.get("seq") or 0),
         )
 
     def as_message(self) -> dict[str, str]:
@@ -1411,9 +1468,18 @@ class Turn:
         Raw items when the run journaled them, else the plain message; a tool
         turn is left out when `tools` is false, and so is one without items,
         since a tool result means nothing without the call that asked for it.
+        A cleared tool output is replayed as its stub, and a compaction never:
+        its summary is placed by `Transcript.window`.
         """
+        if self.role == "compact":
+            return []
         if self.role == "tool":
-            return list(self.items) if tools else []
+            if not tools:
+                return []
+            stub = self.meta.get("cleared")
+            if isinstance(stub, str) and len(self.items) == 2:
+                return [self.items[0], {**self.items[1], "output": stub}]
+            return list(self.items)
         if self.items:
             return list(self.items)
         return [self.as_message()] if self.role in ("user", "assistant", "system") else []
@@ -1425,22 +1491,78 @@ class Transcript:
 
     session_id: str
     turns: list[Turn] = field(default_factory=list)
+    #: The `seq` the next appended turn gets.
+    next_seq: int = 1
+
+    def __post_init__(self) -> None:
+        self.next_seq = max([self.next_seq, *(t.seq + 1 for t in self.turns)])
 
     def __len__(self) -> int:
         return len(self.turns)
 
-    @property
-    def size(self) -> int:
-        """Total number of characters remembered."""
-        return sum(turn.size for turn in self.turns)
+    def append(self, *turns: Turn) -> list[Turn]:
+        """Append the turns worth keeping, numbering them; returns those kept."""
+        kept = [t for t in turns if t.text.strip() or t.items]
+        for turn in kept:
+            turn.seq = self.next_seq
+            self.next_seq += 1
+        self.turns.extend(kept)
+        return kept
 
-    def append(self, *turns: Turn) -> "Transcript":
-        self.turns.extend(t for t in turns if t.text.strip() or t.items)
-        return self
+    def summary(self) -> Turn | None:
+        """The newest compaction that carries a summary."""
+        return next(
+            (t for t in reversed(self.turns) if t.role == "compact" and t.meta.get("summary")),
+            None,
+        )
+
+    def boundary(self, summary: Turn | None = None) -> int:
+        """Index of the first turn the model sees verbatim after `summary`.
+
+        A summary keeps from a turn (``{"seq": n}``) or, when it was made in
+        the middle of a run before that run's turns were journaled, from the
+        response that made the calls ``{"run": id, "calls": [...]}``: the
+        first of their tool turns, and the assistant message that announced
+        them. A reference that resolves to nothing keeps every turn after the
+        summary itself.
+        """
+        summary = summary if summary is not None else self.summary()
+        if summary is None:
+            return 0
+        keep = summary.meta.get("keep") or {}
+        seq = keep.get("seq")
+        if isinstance(seq, int) and seq > 0:
+            return next((i for i, t in enumerate(self.turns) if t.seq >= seq), len(self.turns))
+        calls = {str(c) for c in keep.get("calls") or ()}
+        hits = [i for i, t in enumerate(self.turns) if calls and t.call_id in calls]
+        if hits:
+            index, run = min(hits), keep.get("run")
+            while index and self.turns[index - 1].role == "assistant" and self.turns[index - 1].run == run:
+                index -= 1
+            return index
+        return self.turns.index(summary) + 1 if summary in self.turns else len(self.turns)
+
+    def window(self, tools: bool = True) -> tuple[list[dict[str, Any]], list[Turn]]:
+        """The context window, and the turn each of its items stands for.
+
+        The newest summary first, then every turn from its `boundary` on as
+        the model input it stands for.
+        """
+        summary = self.summary()
+        items: list[dict[str, Any]] = []
+        owners: list[Turn] = []
+        if summary is not None:
+            items.append(summary_message(summary.text))
+            owners.append(summary)
+        for turn in self.turns[self.boundary(summary):]:
+            for item in turn.replay(tools):
+                items.append(item)
+                owners.append(turn)
+        return items, owners
 
     def messages(self, tools: bool = True) -> list[dict[str, Any]]:
-        """The context window: every turn as the model input it stands for."""
-        return [item for turn in self.turns for item in turn.replay(tools)]
+        """The context window: what the model is shown of this conversation."""
+        return self.window(tools)[0]
 
     def find(self, turn_id: str) -> Turn | None:
         """The turn journaled from block `turn_id`, if it is still remembered."""
@@ -1472,123 +1594,1132 @@ class Transcript:
             turns=[Turn.from_dict(t) for t in turns if isinstance(t, dict)],
         )
 
-    def overflow(self, max_turns: int, max_chars: int) -> int:
-        """How many of the oldest turns must go to fit inside the budgets.
-
-        The newest turn always survives: it is the exchange that just happened,
-        and a budget smaller than it would otherwise erase the conversation.
-        """
-        count = 0
-        turns, size = len(self.turns), self.size
-        while count < len(self.turns) - 1 and (
-            (max_turns > 0 and turns > max_turns) or (max_chars > 0 and size > max_chars)
-        ):
-            size -= self.turns[count].size
-            turns -= 1
-            count += 1
-        return count
-
 
 class ConversationMemory:
-    """Transcripts by session, persisted through a `Store`.
+    """Transcripts by session, persisted through a `Store`, one turn a record.
 
-    The policy is deliberately small: the newest turns are kept, the oldest fall
-    out of the window, and a `summarizer` (when one is given) folds what falls
-    out into a single system turn so the gist survives the trim. A consumer that
-    wants another policy subclasses this and overrides `trim`, or decides what is
-    remembered at all by overriding `Agent.remember`.
+    A transcript is only ever appended to (and a turn's `meta` updated), so a
+    write costs one record however long the conversation has grown. Nothing
+    is trimmed here: what the model is shown is decided by the context window
+    (`Transcript.window`) and its compaction. A consumer that wants another
+    policy subclasses this, or decides what is remembered at all by overriding
+    `Agent.remember`.
     """
 
+    #: One header record per session; its turns live under ``<NAMESPACE>:<session>``.
     NAMESPACE = "transcripts"
     #: Longest tool output kept in the context window, head and tail.
     TOOL_LIMIT = 8000
+    #: Version of the records; a header without it holds its turns inline.
+    FORMAT = 2
 
     def __init__(
         self,
         store: Store | None = None,
         *,
         enabled: bool = True,
-        max_turns: int = 40,
-        max_chars: int = 24000,
         tools: bool = True,
-        summarizer: Callable[[list[Turn]], Awaitable[str]] | None = None,
     ) -> None:
         self.store = store
         self.enabled = enabled
-        self.max_turns = max_turns
-        self.max_chars = max_chars
         #: Replay journaled tool calls to the model, not only the words.
         self.tools = tools
-        self.summarizer = summarizer
         self._transcripts: dict[str, Transcript] = {}
 
+    @classmethod
+    def turns_namespace(cls, session_id: str) -> str:
+        return f"{cls.NAMESPACE}:{session_id}"
+
+    @staticmethod
+    def turn_key(turn: Turn) -> str:
+        return f"{turn.seq:012d}"
+
     def transcript(self, session_id: str) -> Transcript:
-        """Return the transcript of a session, loading it from the store once."""
+        """Return the transcript of a session, loading it from the store once.
+
+        A header written before turns had records of their own holds them
+        inline; it is rewritten as one record per turn on load.
+        """
         transcript = self._transcripts.get(session_id)
-        if transcript is None:
-            record = self.store.get(self.NAMESPACE, session_id) if self.store else None
-            transcript = Transcript.from_dict(session_id, record)
+        if transcript is not None:
+            return transcript
+        header = self.store.get(self.NAMESPACE, session_id) if self.store else None
+        if isinstance(header, dict) and "turns" in header:
+            transcript = Transcript.from_dict(session_id, header)
+            for index, turn in enumerate(transcript.turns, 1):
+                turn.seq = index
+            transcript.next_seq = len(transcript.turns) + 1
             self._transcripts[session_id] = transcript
+            if self.enabled:
+                self.persist(transcript, *transcript.turns, header=True)
+            return transcript
+        rows = self.store.list(self.turns_namespace(session_id)) if self.store else []
+        turns = [Turn.from_dict(value) for _key, value in sorted(rows) if isinstance(value, dict)]
+        transcript = Transcript(session_id=session_id, turns=turns)
+        self._transcripts[session_id] = transcript
         return transcript
 
-    def history(self, session_id: str) -> list[dict[str, Any]]:
-        """The remembered turns as model input, oldest first."""
+    def window(self, session_id: str) -> tuple[list[dict[str, Any]], list[Turn]]:
+        """The context window of a session with the turn behind each item."""
         if not self.enabled:
-            return []
-        return self.transcript(session_id).messages(self.tools)
+            return [], []
+        return self.transcript(session_id).window(self.tools)
+
+    def history(self, session_id: str) -> list[dict[str, Any]]:
+        """The context window as model input, oldest first."""
+        return self.window(session_id)[0]
 
     def journal(self, session_id: str, *turns: Turn) -> Transcript:
-        """Append `turns` and persist at once, without trimming.
+        """Append `turns` and persist them at once.
 
         This is the write-ahead half of memory: a run records each step as it
-        finishes, so a crash costs at most the step in flight. Trimming (and
-        summarising, which calls a model) waits for `remember` at the end.
+        finishes, so a crash costs at most the step in flight.
         """
         transcript = self.transcript(session_id)
         if not self.enabled:
             return transcript
-        transcript.append(*turns)
-        self.persist(transcript)
+        fresh = not transcript.turns
+        self.persist(transcript, *transcript.append(*turns), header=fresh)
         return transcript
 
     def replay(self, session_id: str) -> list[dict[str, Any]]:
-        """The remembered turns as JSON for a client that (re)connects."""
+        """Every remembered turn as JSON for a client that (re)connects."""
         if not self.enabled:
             return []
         return [turn.to_dict() for turn in self.transcript(session_id).turns]
 
     async def remember(self, session_id: str, turns: Iterable[Turn]) -> Transcript:
-        """Append `turns`, trim to the budgets and persist the result."""
-        transcript = self.transcript(session_id)
-        if not self.enabled:
-            return transcript
-        transcript.append(*turns)
-        await self.trim(transcript)
-        self.persist(transcript)
-        return transcript
+        """Append `turns` and persist them (`journal` for a coroutine caller)."""
+        return self.journal(session_id, *turns)
 
-    async def trim(self, transcript: Transcript) -> None:
-        """Drop (or summarise) the oldest turns until the budgets are met."""
-        count = transcript.overflow(self.max_turns, self.max_chars)
-        if count <= 0:
+    def persist(self, transcript: Transcript, *turns: Turn, header: bool = False) -> None:
+        """Write the records of `turns` (all of them when none are named)."""
+        if self.store is None or not self.enabled:
             return
-        dropped, transcript.turns = transcript.turns[:count], transcript.turns[count:]
-        if self.summarizer is None:
-            return
-        with contextlib.suppress(Exception):
-            summary = (await self.summarizer(dropped)).strip()
-            if summary:
-                transcript.turns.insert(0, Turn("system", summary))
-
-    def persist(self, transcript: Transcript) -> None:
-        if self.store is not None and self.enabled:
-            self.store.set(self.NAMESPACE, transcript.session_id, transcript.to_dict())
+        if header or not turns:
+            self.store.set(
+                self.NAMESPACE,
+                transcript.session_id,
+                {"session": transcript.session_id, "format": self.FORMAT},
+            )
+        namespace = self.turns_namespace(transcript.session_id)
+        for turn in turns or transcript.turns:
+            self.store.set(namespace, self.turn_key(turn), turn.to_dict())
 
     def forget(self, session_id: str) -> None:
         """Erase the transcript of a session, in memory and in the store."""
         self._transcripts.pop(session_id, None)
-        if self.store is not None:
-            self.store.delete(self.NAMESPACE, session_id)
+        if self.store is None:
+            return
+        namespace = self.turns_namespace(session_id)
+        clear = getattr(self.store, "clear", None)
+        if callable(clear):
+            clear(namespace)
+        else:
+            for key, _value in self.store.list(namespace):
+                self.store.delete(namespace, key)
+        self.store.delete(self.NAMESPACE, session_id)
+
+
+# ---------------------------------------------------------------------------
+# Context
+#
+# The model sees a window onto the conversation, never necessarily all of it:
+# the newest items verbatim and a summary of everything older. Budgets are
+# tokens of the leader's context window, estimated locally and calibrated on
+# the usage the provider reports. Compaction runs in tiers, cheapest first,
+# and only past a high watermark, down to a low one, so the prefix a provider
+# caches stays put between compactions and compactions are rare. It runs
+# before every model call of a run (the SDK's `call_model_input_filter`), so a
+# long run of tool calls is compacted as it goes, and over the journal between
+# runs.
+# ---------------------------------------------------------------------------
+
+#: Window assumed when neither the config nor the provider says.
+DEFAULT_CONTEXT_WINDOW = 128_000
+
+#: Window assumed for an Ollama server that says nothing of its runtime
+#: context: it truncates a longer prompt silently, from the front.
+OLLAMA_CONTEXT_WINDOW = 8192
+
+#: Opens the message that stands in for the compacted part of a conversation.
+SUMMARY_HEADER = (
+    "[Context summary] The earlier part of this conversation was compacted to "
+    "save context. This summary replaces it; everything after it is verbatim."
+)
+
+#: Heads the copy of the request in flight that a summary keeps word for word.
+PINNED_HEADER = "## Active request (verbatim)"
+
+#: Stands in for the reasoning of an earlier step once it is cleared.
+THOUGHT_STUB = "[earlier reasoning cleared to save context]"
+
+
+def summary_message(text: str) -> dict[str, str]:
+    """The message a summary is shown to the model as.
+
+    A user message rather than a system one: several chat templates refuse a
+    system message anywhere but first.
+    """
+    return {"role": "user", "content": f"{SUMMARY_HEADER}\n\n{text.strip()}"}
+
+
+def item_kind(item: Any) -> str:
+    """What a model input item is: the role of a message, else its type."""
+    if not isinstance(item, dict):
+        return "other"
+    kind = str(item.get("type") or "")
+    if kind in ("", "message"):
+        return str(item.get("role") or "other")
+    return kind
+
+
+def is_call(kind: str) -> bool:
+    """A tool call item (``function_call``, ``custom_tool_call``, …)."""
+    return kind.endswith("_call")
+
+
+def is_output(kind: str) -> bool:
+    """The output item of a tool call."""
+    return kind.endswith("_call_output")
+
+
+def safe_cuts(items: list[Any]) -> list[int]:
+    """The indices a list of input items may be cut at, ascending.
+
+    Everything before a cut can be summarised away and everything from it on
+    kept without leaving half of a pair behind: a call stays with its output,
+    reasoning with the message or call it led to, and the calls of a response
+    with the message that announced them. Index 0 is not a cut.
+    """
+    answered = {item.get("call_id") for item in items if is_output(item_kind(item))}
+    pending: set[Any] = set()
+    cuts: list[int] = []
+    previous = ""
+    for index, item in enumerate(items):
+        kind = item_kind(item)
+        if (
+            index
+            and not pending
+            and previous != "reasoning"
+            and not is_output(kind)
+            and not (is_call(kind) and (previous == "assistant" or is_call(previous)))
+        ):
+            cuts.append(index)
+        if is_call(kind) and item.get("call_id") in answered:
+            pending.add(item.get("call_id"))
+        elif is_output(kind):
+            pending.discard(item.get("call_id"))
+        previous = kind
+    return cuts
+
+
+def part_text(part: Any) -> str:
+    """The text of one content part; media as a short placeholder."""
+    if isinstance(part, str):
+        return part
+    if not isinstance(part, dict):
+        return str(part)
+    if "text" in part:
+        return str(part.get("text") or "")
+    kind = str(part.get("type") or "")
+    if "image" in kind:
+        return "[image]"
+    if "file" in kind:
+        return f"[file {part.get('filename') or ''}]".replace(" ]", "]")
+    return json_dump(part)
+
+
+def content_text(value: Any) -> str:
+    """The text of a message content, a tool output or reasoning parts."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(text for text in (part_text(p) for p in value) if text)
+    return part_text(value)
+
+
+def item_text(item: Any) -> str:
+    """The words an input item carries, whatever its kind."""
+    if not isinstance(item, dict):
+        return str(item)
+    kind = item_kind(item)
+    if is_call(kind):
+        args = item.get("arguments") if "arguments" in item else item.get("input")
+        return f"{item.get('name') or kind}({content_text(args)})"
+    if is_output(kind):
+        return content_text(item.get("output"))
+    if kind == "reasoning":
+        return content_text([*(item.get("summary") or []), *(item.get("content") or [])])
+    return content_text(item.get("content"))
+
+
+def reasoning_replayed(model: str) -> bool:
+    """Whether the SDK sends earlier reasoning back to `model` within a run.
+
+    It mirrors the SDK's default for Chat Completions: only a DeepSeek model
+    gets its ``reasoning_content`` back (it needs it during a tool loop); any
+    other drops it, so it costs nothing and is not counted.
+    """
+    return "deepseek" in model.lower()
+
+
+class TokenCounter:
+    """Estimates what model input costs in tokens, calibrated by real usage.
+
+    Text is counted with a tiktoken encoding when it loads (its vocabulary is
+    downloaded once, then cached by tiktoken), else estimated from its UTF-8
+    size. Neither is the tokenizer of an arbitrary provider, so `ratio` scales
+    the estimate by what the provider reported for recent calls: the estimate
+    only has to be proportional, the calibration makes it right.
+    """
+
+    BYTES_PER_TOKEN = 4
+    #: Framing every message or item costs on top of its content.
+    MESSAGE_TOKENS = 4
+    #: What an image costs, whatever its size (providers differ widely).
+    IMAGE_TOKENS = 1024
+    #: Item counts remembered, by a digest of the item.
+    CACHE_SIZE = 8192
+    #: An input smaller than this is too noisy to calibrate on.
+    CALIBRATE_MIN = 256
+    #: Bounds of `ratio`: past them it is a mismatch, not a tokenizer.
+    RATIO_BOUNDS = (0.25, 4.0)
+    #: Encodings tried so far, shared by every counter (``None``: unavailable).
+    encodings: dict[str, Any] = {}
+
+    def __init__(self, encoding: str | None = None) -> None:
+        self.encoding = encoding or None
+        #: Provider tokens per estimated token.
+        self.ratio = 1.0
+        self.samples = 0
+        self._cache: dict[tuple[int, int], int] = {}
+
+    def load(self) -> Any | None:
+        """The tiktoken encoding, loaded once per process; ``None`` estimates."""
+        if self.encoding is None:
+            return None
+        if self.encoding not in self.encodings:
+            try:
+                import tiktoken
+
+                self.encodings[self.encoding] = tiktoken.get_encoding(self.encoding)
+            except Exception as exc:  # offline, or tiktoken missing: estimate
+                print(
+                    f"[context] tokenizer {self.encoding} unavailable, estimating: {exc!r}",
+                    file=sys.stderr,
+                )
+                self.encodings[self.encoding] = None
+        return self.encodings[self.encoding]
+
+    def text(self, text: str) -> int:
+        """Tokens of a text, uncalibrated."""
+        if not text:
+            return 0
+        encoding = self.load()
+        if encoding is not None:
+            with contextlib.suppress(Exception):
+                return len(encoding.encode(text, disallowed_special=()))
+        return -(-len(text.encode("utf-8", "replace")) // self.BYTES_PER_TOKEN)
+
+    @staticmethod
+    def key(item: Any) -> tuple[int, int]:
+        """A digest of an input item, stable for one process."""
+        try:
+            text = json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            text = repr(item)
+        return len(text), hash(text)
+
+    def item(self, item: Any) -> int:
+        """Tokens of one model input item, uncalibrated and cached."""
+        key = self.key(item)
+        count = self._cache.get(key)
+        if count is None:
+            count = self.MESSAGE_TOKENS + self.measure(item)
+            if len(self._cache) >= self.CACHE_SIZE:
+                self._cache.clear()
+            self._cache[key] = count
+        return count
+
+    def measure(self, item: Any) -> int:
+        if not isinstance(item, dict):
+            return self.text(str(item))
+        kind = item_kind(item)
+        if is_call(kind):
+            args = item.get("arguments") if "arguments" in item else item.get("input")
+            return self.text(str(item.get("name") or "")) + self.content(args)
+        if is_output(kind):
+            return self.content(item.get("output"))
+        if kind == "reasoning":
+            return self.content([*(item.get("summary") or []), *(item.get("content") or [])])
+        return self.content(item.get("content"))
+
+    def content(self, value: Any) -> int:
+        """Tokens of a content value: text, or a list of parts with media."""
+        if value is None:
+            return 0
+        if isinstance(value, str):
+            return self.text(value)
+        if isinstance(value, list):
+            return sum(self.part(part) for part in value)
+        return self.part(value)
+
+    def part(self, part: Any) -> int:
+        if isinstance(part, dict) and "text" not in part and "image" in str(part.get("type")):
+            return self.IMAGE_TOKENS
+        return self.text(part_text(part))
+
+    def items(self, items: Iterable[Any]) -> int:
+        return sum(self.item(item) for item in items)
+
+    def scaled(self, raw: int | float) -> int:
+        """An estimate in provider tokens."""
+        return int(raw * self.ratio + 0.5)
+
+    def raw(self, tokens: int | float) -> int:
+        """Provider tokens in estimate units (the inverse of `scaled`)."""
+        return int(tokens / self.ratio)
+
+    def calibrate(self, estimated: int, reported: int) -> float:
+        """Fold a provider's count for an input we estimated into `ratio`."""
+        if estimated < self.CALIBRATE_MIN or reported <= 0:
+            return self.ratio
+        low, high = self.RATIO_BOUNDS
+        sample = min(max(reported / estimated, low), high)
+        self.ratio = sample if not self.samples else (self.ratio + sample) / 2
+        self.samples += 1
+        return self.ratio
+
+
+@dataclass(frozen=True)
+class ContextBudget:
+    """The token budget of a context window and its two watermarks.
+
+    `usable` is what the input may take (the window minus the room reserved
+    for the reply, reasoning included); compaction starts past `high` and
+    stops at `low`, so the input grows by the gap between them before the
+    next compaction.
+    """
+
+    window: int
+    reserve: int
+    trigger: float = 0.85
+    target: float = 0.5
+
+    @classmethod
+    def of(
+        cls, window: int, reserve: int = 0, trigger: float = 0.85, target: float = 0.5
+    ) -> "ContextBudget":
+        """A budget with the defaults filled in and the values made sane.
+
+        A reserve of 0 is a fifth of the window, between 4k and 32k tokens
+        (a model that thinks a lot spends that much on one reply), and never
+        more than half of it.
+        """
+        window = max(int(window or DEFAULT_CONTEXT_WINDOW), 1024)
+        reserve = int(reserve) if reserve and reserve > 0 else min(max(window // 5, 4096), 32768)
+        reserve = min(reserve, window // 2)
+        trigger = min(max(float(trigger), 0.05), 1.0)
+        target = min(max(float(target), 0.01), trigger)
+        return cls(window, reserve, trigger, target)
+
+    @property
+    def usable(self) -> int:
+        return self.window - self.reserve
+
+    @property
+    def high(self) -> int:
+        return int(self.usable * self.trigger)
+
+    @property
+    def low(self) -> int:
+        return int(self.usable * self.target)
+
+    def usage(self, tokens: int, *, estimated: bool = True) -> dict[str, Any]:
+        """The `context.usage` payload for an input of `tokens`."""
+        return {
+            "tokens": int(tokens),
+            "window": self.window,
+            "usable": self.usable,
+            "high": self.high,
+            "low": self.low,
+            "fill": round(min(tokens / self.usable, 1.0), 4) if self.usable else 0.0,
+            "estimated": estimated,
+        }
+
+
+def compact_tokens(count: int) -> str:
+    """A token count for people: ``950``, ``12k``, ``1.2M``."""
+    if count >= 1_000_000:
+        return f"{count / 1_000_000:.1f}M"
+    if count >= 10_000:
+        return f"{count / 1000:.0f}k"
+    if count >= 1000:
+        return f"{count / 1000:.1f}k"
+    return str(count)
+
+
+@dataclass
+class Compaction:
+    """What one compaction did, for its events and its journal record."""
+
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    #: ``trigger`` (past the high watermark), ``forced`` (asked) or ``overflow``.
+    reason: str = "trigger"
+    #: Provider tokens of the input before and after.
+    before: int = 0
+    after: int = 0
+    #: Reasoning items cleared, tool outputs cleared and clipped (by call id).
+    thoughts: int = 0
+    cleared: list[str] = field(default_factory=list)
+    clipped: list[str] = field(default_factory=list)
+    #: Items folded into the summary, and the summary now standing for them.
+    summarized: int = 0
+    summary: str = ""
+    #: Index of the first item kept verbatim.
+    cut: int = 0
+
+    def describe(self) -> str:
+        """One line for people: what went and what it saved."""
+        parts = []
+        if self.summarized:
+            parts.append(f"summarised {self.summarized} items")
+        if self.cleared:
+            parts.append(f"cleared {len(self.cleared)} tool outputs")
+        if self.thoughts:
+            parts.append(f"cleared {self.thoughts} reasoning steps")
+        if self.clipped:
+            parts.append(f"clipped {len(self.clipped)} tool outputs")
+        done = ", ".join(parts) or "nothing to compact"
+        return f"Compacted {compact_tokens(self.before)} → {compact_tokens(self.after)} tokens: {done}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "reason": self.reason,
+            "tokens_before": self.before,
+            "tokens_after": self.after,
+            "thoughts": self.thoughts,
+            "cleared": len(self.cleared),
+            "clipped": len(self.clipped),
+            "summarized": self.summarized,
+        }
+
+
+@dataclass
+class ContextState:
+    """The decisions compaction made over one growing list of input items.
+
+    They are sticky: every later call applies them before deciding anything
+    new, so the model input only ever changes at a compaction and the prefix
+    a provider caches holds between compactions.
+    """
+
+    #: Stands for ``items[:cut]``; ``items[cut:]`` are sent (masked).
+    summary: str = ""
+    cut: int = 0
+    #: Digest of ``items[cut]``, to find the cut again in a list that moved.
+    anchor: tuple[int, int] | None = None
+    #: The request in flight, kept verbatim once the cut has passed it.
+    pinned: str = ""
+    #: Tool outputs replaced: by call id, the stub or the clipped text.
+    cleared: dict[str, str] = field(default_factory=dict)
+    clipped: dict[str, str] = field(default_factory=dict)
+    #: Digests of the reasoning items cleared.
+    thoughts: set[tuple[int, int]] = field(default_factory=set)
+
+    def text(self) -> str:
+        """The summary as shown to the model, the pinned request included."""
+        if not self.pinned:
+            return self.summary
+        return f"{self.summary.strip()}\n\n{PINNED_HEADER}\n\n{self.pinned.strip()}".strip()
+
+
+class Compactor:
+    """Fits a list of model input items into a `ContextBudget`, in tiers.
+
+    Past the high watermark (or when forced), cheapest first and only as far
+    as the low watermark needs:
+
+    1. reasoning before the newest response is cleared (no model call)
+    2. tool outputs are cleared, oldest first, sparing the newest `keep`
+    3. the oldest prefix is folded into the summary by `summarize`, which is
+       handed the previous summary and the segment (anchored and incremental:
+       a summary is never rebuilt from scratch); the cut is the smallest safe
+       one that fits, and the newest response is always kept
+    4. what still does not fit the usable budget — a giant output in the
+       newest response — is clipped, head and tail
+
+    A failing summarizer costs the quality of the summary, never the run: the
+    segment is then kept as an extract of its requests and calls.
+    """
+
+    #: Smallest tool output, in tokens, worth clearing (a stub costs ~40).
+    CLEAR_MIN = 200
+    #: Smallest a clipped output is cut to, in tokens, and what the note of
+    #: the cut and the framing of the item cost on top.
+    CLIP_MIN = 500
+    CLIP_MARGIN = 16
+    #: How much of an output, of call arguments and of reasoning a summarizer
+    #: is shown, in characters, head and tail.
+    RENDER_OUTPUT = 2000
+    RENDER_ARGS = 600
+    RENDER_THOUGHT = 600
+
+    def __init__(
+        self,
+        counter: TokenCounter,
+        budget: ContextBudget,
+        *,
+        summarize: Callable[[str, str, str], Awaitable[str]] | None = None,
+        keep: int = 4,
+        summary_tokens: int = 4096,
+        segment_limit: int = 0,
+        reasoning: bool = True,
+    ) -> None:
+        self.counter = counter
+        self.budget = budget
+        #: ``(previous summary, segment, focus) -> summary``; ``None`` drops.
+        self.summarize = summarize
+        self.keep = max(int(keep), 0)
+        self.summary_tokens = max(int(summary_tokens), 256)
+        #: Largest segment one summarizer call is handed, in tokens (0: any).
+        self.segment_limit = max(int(segment_limit), 0)
+        #: Whether reasoning items reach the model (see `reasoning_replayed`).
+        self.reasoning = reasoning
+
+    # -- applying the decisions --------------------------------------------
+
+    def locate(self, items: list[Any], state: ContextState) -> int:
+        """Where the cut of `state` falls in `items` (they only ever grow)."""
+        cut = min(state.cut, len(items))
+        if state.anchor is None or (cut < len(items) and self.counter.key(items[cut]) == state.anchor):
+            return cut
+        found = next(
+            (i for i, item in enumerate(items) if self.counter.key(item) == state.anchor), None
+        )
+        return cut if found is None else found
+
+    def masked(self, item: Any, state: ContextState) -> Any:
+        """An item as it is sent, the decisions of `state` applied."""
+        kind = item_kind(item)
+        if is_output(kind):
+            call_id = str(item.get("call_id") or "")
+            replaced = state.cleared.get(call_id) or state.clipped.get(call_id)
+            return {**item, "output": replaced} if replaced is not None else item
+        if kind == "reasoning" and state.thoughts and self.counter.key(item) in state.thoughts:
+            masked = {**item, "summary": [{"type": "summary_text", "text": THOUGHT_STUB}], "content": []}
+            masked.pop("encrypted_content", None)
+            return masked
+        return item
+
+    def cost(self, item: Any, state: ContextState) -> int:
+        """Tokens an item costs as sent (uncalibrated)."""
+        if item_kind(item) == "reasoning" and not self.reasoning:
+            return 0
+        return self.counter.item(self.masked(item, state))
+
+    def head_cost(self, state: ContextState) -> int:
+        text = state.text()
+        return self.counter.item(summary_message(text)) if text else 0
+
+    def view(self, items: list[Any], state: ContextState) -> list[Any]:
+        """The input sent: the summary, then the kept items, masked."""
+        cut = self.locate(items, state)
+        head = [summary_message(state.text())] if state.text() else []
+        return head + [self.masked(item, state) for item in items[cut:]]
+
+    def tokens(self, items: list[Any], state: ContextState, fixed: int = 0) -> int:
+        """Uncalibrated tokens of the input `view` would send."""
+        cut = self.locate(items, state)
+        return fixed + self.head_cost(state) + sum(self.cost(i, state) for i in items[cut:])
+
+    # -- deciding ------------------------------------------------------------
+
+    async def compact(
+        self,
+        items: list[Any],
+        state: ContextState,
+        *,
+        fixed: int = 0,
+        force: bool = False,
+        reason: str = "",
+        focus: str = "",
+        pinned_at: int = -1,
+        pinned: str = "",
+        on_summary: Callable[[Compaction], Awaitable[None]] | None = None,
+    ) -> Compaction | None:
+        """Compact `items` into `state` when past the high watermark.
+
+        `fixed` is what the input costs besides the items (instructions, tool
+        schemas). `force` compacts whatever the size: every tier, and the
+        summary reaches the newest response. `pinned` is the request in
+        flight, at `pinned_at`, kept verbatim once the cut passes it.
+        `on_summary` is awaited before the summarizer is called, which is the
+        only slow tier. Returns what was done, or ``None`` when nothing was
+        needed.
+        """
+        state.cut = self.locate(items, state)
+        costs = [self.cost(item, state) for item in items]
+        current = fixed + self.head_cost(state) + sum(costs[state.cut:])
+        high = self.counter.raw(self.budget.high)
+        goal = self.counter.raw(self.budget.low)
+        if not force and current <= high:
+            return None
+        report = Compaction(
+            reason=reason or ("forced" if force else "trigger"),
+            before=self.counter.scaled(current),
+        )
+        cuts = safe_cuts(items)
+        latest = max([state.cut, *cuts])
+
+        def settle(index: int) -> None:
+            nonlocal current
+            cost = self.cost(items[index], state)
+            current -= costs[index] - cost
+            costs[index] = cost
+
+        # 1. reasoning before the newest response
+        if self.reasoning:
+            for index in range(state.cut, latest):
+                if item_kind(items[index]) == "reasoning":
+                    key = self.counter.key(items[index])
+                    if key not in state.thoughts:
+                        state.thoughts.add(key)
+                        report.thoughts += 1
+                        settle(index)
+        # 2. tool outputs, oldest first, the newest `keep` spared
+        outputs = [i for i in range(state.cut, len(items)) if is_output(item_kind(items[i]))]
+        spared = set(outputs[-self.keep:]) if self.keep else set()
+        for index in outputs:
+            if current <= goal and not force:
+                break
+            call_id = str(items[index].get("call_id") or "")
+            if index in spared or not call_id or call_id in state.cleared:
+                continue
+            if costs[index] < self.CLEAR_MIN:
+                continue
+            state.cleared[call_id] = self.stub(items, index, costs[index])
+            report.cleared.append(call_id)
+            settle(index)
+        # 3. the oldest prefix into the summary, when it is worth a model call
+        if current > goal or force:
+            room = goal - fixed - self.summary_tokens
+            cut = latest if force else self.choose(cuts, costs, state.cut, latest, room)
+            worth = min(self.summary_tokens, goal // 4)
+            if cut > state.cut and (force or sum(costs[state.cut:cut]) >= worth):
+                if on_summary is not None:
+                    await on_summary(report)
+                segment = items[state.cut:cut]
+                state.summary = await self.fold(state.summary, segment, focus, items)
+                if pinned and 0 <= pinned_at < cut:
+                    state.pinned = self.bounded(pinned)
+                report.summarized = len(segment)
+                report.summary = state.text()
+                report.cut = state.cut = cut
+                state.anchor = self.counter.key(items[cut]) if cut < len(items) else None
+                current = fixed + self.head_cost(state) + sum(costs[cut:])
+        report.cut = state.cut
+        # 4. clip what still cannot be sent at all
+        usable = self.counter.raw(self.budget.usable)
+        if current > usable:
+            tail = [
+                i
+                for i in range(state.cut, len(items))
+                if is_output(item_kind(items[i])) and items[i].get("call_id")
+            ]
+            for index in sorted(tail, key=lambda i: -costs[i]):
+                if current <= usable:
+                    break
+                keep = max(costs[index] - (current - usable) - self.CLIP_MARGIN, self.CLIP_MIN)
+                if keep >= costs[index]:
+                    continue
+                text = content_text(self.masked(items[index], state).get("output"))
+                chars = max(int(len(text) * keep / max(costs[index], 1)), 200)
+                call_id = str(items[index]["call_id"])
+                state.cleared.pop(call_id, None)
+                state.clipped[call_id] = clip_output(text, chars)
+                report.clipped.append(call_id)
+                settle(index)
+        report.after = self.counter.scaled(current)
+        if not (report.thoughts or report.cleared or report.clipped or report.summarized):
+            return None
+        return report
+
+    def choose(self, cuts: list[int], costs: list[int], start: int, latest: int, room: int) -> int:
+        """The smallest safe cut after `start` whose tail fits in `room`.
+
+        Keeping as much as fits makes compactions rare; when nothing fits the
+        newest response alone is kept.
+        """
+        candidates = [c for c in cuts if start < c <= latest]
+        if not candidates:
+            return start
+        tail = sum(costs[candidates[0]:])
+        previous = candidates[0]
+        for cut in candidates:
+            tail -= sum(costs[previous:cut])
+            previous = cut
+            if tail <= room:
+                return cut
+        return candidates[-1]
+
+    def stub(self, items: list[Any], index: int, tokens: int) -> str:
+        """What a cleared output is replaced with: what it was, and how to get it back."""
+        call_id = items[index].get("call_id")
+        name = next(
+            (
+                str(item.get("name") or "tool")
+                for item in reversed(items[:index])
+                if is_call(item_kind(item)) and item.get("call_id") == call_id
+            ),
+            "tool",
+        )
+        return (
+            f"[{name} output cleared to save context: {self.counter.scaled(tokens):,} "
+            "tokens. Call the tool again if you need it.]"
+        )
+
+    # -- summarising ---------------------------------------------------------
+
+    async def fold(
+        self, previous: str, segment: list[Any], focus: str = "", items: list[Any] | None = None
+    ) -> str:
+        """Fold `segment` into `previous`, a chunk per summarizer call."""
+        names = {
+            item.get("call_id"): str(item.get("name") or "tool")
+            for item in items or segment
+            if is_call(item_kind(item))
+        }
+        lines = [line for line in (self.render(item, names) for item in segment) if line]
+        if self.summarize is None:
+            note = f"_{len(segment)} earlier items were dropped without a summary._"
+            return self.bounded(f"{previous.strip()}\n\n{note}".strip())
+        summary = previous
+        for chunk in self.chunks(lines):
+            text = ""
+            try:
+                text = (await self.summarize(summary, "\n\n".join(chunk), focus)).strip()
+            except Exception as exc:  # the summary is lost, never the run
+                print(f"[context] summarizer failed: {exc!r}", file=sys.stderr)
+            summary = text or self.extract(summary, chunk)
+        return summary
+
+    def render(self, item: Any, names: dict[Any, str] | None = None) -> str:
+        """One item as a line of the transcript a summarizer reads."""
+        if not isinstance(item, dict):
+            return ""
+        kind = item_kind(item)
+        if kind == "reasoning":
+            text = clip_output(item_text(item), self.RENDER_THOUGHT).strip()
+            return f"ASSISTANT (thinking): {text}" if text and text != THOUGHT_STUB else ""
+        if is_call(kind):
+            args = item.get("arguments") if "arguments" in item else item.get("input")
+            return f"TOOL CALL {item.get('name') or kind}: {clip_output(content_text(args), self.RENDER_ARGS)}"
+        if is_output(kind):
+            name = (names or {}).get(item.get("call_id"), "tool")
+            output = clip_output(content_text(item.get("output")), self.RENDER_OUTPUT)
+            return f"TOOL RESULT ({name}): {output}"
+        text = item_text(item).strip()
+        if not text or text.startswith(SUMMARY_HEADER):
+            return ""  # the previous summary is handed over on its own
+        return f"{kind.upper()}: {text}"
+
+    def chunks(self, lines: list[str]) -> list[list[str]]:
+        """`lines` grouped so no group exceeds `segment_limit` tokens."""
+        if not self.segment_limit:
+            return [lines] if lines else []
+        groups: list[list[str]] = []
+        group: list[str] = []
+        size = 0
+        for line in lines:
+            tokens = self.counter.text(line)
+            if tokens > self.segment_limit:
+                line = clip_output(line, self.segment_limit * TokenCounter.BYTES_PER_TOKEN)
+                tokens = self.segment_limit
+            if group and size + tokens > self.segment_limit:
+                groups.append(group)
+                group, size = [], 0
+            group.append(line)
+            size += tokens
+        if group:
+            groups.append(group)
+        return groups
+
+    def extract(self, previous: str, lines: list[str]) -> str:
+        """A summary without a summarizer: the requests and calls of a segment."""
+        kept = [line for line in lines if line.startswith(("USER:", "TOOL CALL"))]
+        answers = [line for line in lines if line.startswith("ASSISTANT:")]
+        kept += answers[-1:]
+        note = "\n".join(f"- {clip_output(line, 300)}" for line in kept)
+        merged = f"{previous.strip()}\n\n## Earlier segment (no summary)\n\n{note}".strip()
+        return self.bounded(merged)
+
+    def bounded(self, text: str) -> str:
+        """A summary held to `summary_tokens`, head and tail."""
+        return clip_output(text, self.summary_tokens * TokenCounter.BYTES_PER_TOKEN)
+
+
+#: What a provider says when the input does not fit its window.
+OVERFLOW_PATTERN = re.compile(
+    r"context[_ ](?:length|window)|maximum context|prompt is too long|too many tokens"
+    r"|reduce the length|input is too long|exceeds? the (?:model'?s? )?(?:maximum|max)",
+    re.IGNORECASE,
+)
+
+#: Where a provider says how large its window is.
+WINDOW_PATTERNS = (
+    re.compile(r"maximum context length is (\d[\d,]*)", re.IGNORECASE),
+    re.compile(r"(\d[\d,]*) tokens? > (\d[\d,]*)", re.IGNORECASE),
+    re.compile(r"context (?:length|window|size)\D{0,40}?(\d[\d,]{3,})", re.IGNORECASE),
+)
+
+
+def is_overflow(exc: BaseException) -> bool:
+    """A failure that says the input does not fit the model's window."""
+    status = error_status(exc)
+    if status is not None and status not in (400, 413, 422):
+        return False
+    text = f"{getattr(exc, 'code', '') or ''} {exc}"
+    return bool(OVERFLOW_PATTERN.search(text))
+
+
+def overflow_window(text: str) -> int:
+    """The window a context length error names, or 0."""
+    for pattern in WINDOW_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return int(match.groups()[-1].replace(",", ""))
+    return 0
+
+
+class ContextRun:
+    """Compaction inside one run, as the SDK's `call_model_input_filter`.
+
+    Before every model call the SDK hands the filter the whole input — what
+    the run started with and every item generated since — and sends whatever
+    it returns. The decisions of earlier calls are applied first (they are
+    sticky), and a new compaction happens only past the high watermark, so a
+    long run of tool calls is compacted as it goes, not only between runs.
+
+    `publish` posts an event for the run's session; `on_compact` is awaited
+    with every compaction and the items it was made over (the agent journals
+    it). After a call `observe` folds the tokens the provider reported into
+    the calibration.
+    """
+
+    #: Recoveries from a context length error allowed per run.
+    OVERFLOWS = 2
+
+    def __init__(
+        self,
+        compactor: Compactor,
+        *,
+        state: ContextState | None = None,
+        publish: Callable[..., Awaitable[Any]] | None = None,
+        block: Callable[[int], str] | None = None,
+        pinned_at: int = -1,
+        pinned: str = "",
+        on_compact: Callable[[Compaction, list[Any]], Awaitable[None]] | None = None,
+        on_window: Callable[[int], None] | None = None,
+    ) -> None:
+        self.compactor = compactor
+        self.state = state or ContextState()
+        self.publish = publish
+        #: The id of the marker block of the n-th compaction.
+        self.block = block or (lambda n: f"compact-{uuid.uuid4().hex[:8]}")
+        self.pinned_at = pinned_at
+        self.pinned = pinned
+        self.on_compact = on_compact
+        self.on_window = on_window
+        #: Tokens of the instructions and tool schemas, counted once.
+        self.fixed: int | None = None
+        #: The items of the newest call, before and after compaction.
+        self.items: list[Any] = []
+        self.sent: list[Any] = []
+        #: Uncalibrated tokens of the newest input sent.
+        self.estimate = 0
+        self.compactions: list[Compaction] = []
+        self.overflows = 0
+        self._lock = asyncio.Lock()
+
+    @property
+    def counter(self) -> TokenCounter:
+        return self.compactor.counter
+
+    @property
+    def budget(self) -> ContextBudget:
+        return self.compactor.budget
+
+    async def __call__(self, data: Any) -> Any:
+        from agents.run_config import ModelInputData
+
+        model_data = data.model_data
+        if self.fixed is None:
+            self.fixed = self.fixed_cost(
+                model_data.instructions, getattr(data.agent, "tools", None) or []
+            )
+        sent = await self.fit(list(model_data.input))
+        return ModelInputData(input=sent, instructions=model_data.instructions)
+
+    def fixed_cost(self, instructions: str | None, tools: list[Any]) -> int:
+        """Tokens of the instructions and of every tool schema."""
+        count = self.counter.text(instructions or "") + TokenCounter.MESSAGE_TOKENS
+        for tool in tools:
+            schema = getattr(tool, "params_json_schema", None) or {}
+            count += TokenCounter.MESSAGE_TOKENS + self.counter.text(
+                f"{getattr(tool, 'name', '')} {getattr(tool, 'description', '') or ''} "
+                f"{json_dump(schema)}"
+            )
+        return count
+
+    async def fit(
+        self, items: list[Any], *, force: bool = False, reason: str = "", focus: str = ""
+    ) -> list[Any]:
+        """The input to send for `items`: compacted when it must be."""
+        async with self._lock:
+            n = len(self.compactions)
+            started = False
+
+            async def on_summary(report: Compaction) -> None:
+                nonlocal started
+                started = True
+                await self.post(
+                    EventType.BLOCK_START, id=self.block(n), kind="compact", role="system", text=""
+                )
+
+            report = await self.compactor.compact(
+                items,
+                self.state,
+                fixed=self.fixed or 0,
+                force=force,
+                reason=reason,
+                focus=focus,
+                pinned_at=self.pinned_at,
+                pinned=self.pinned,
+                on_summary=on_summary,
+            )
+            self.items = items
+            self.sent = self.compactor.view(items, self.state)
+            self.estimate = self.compactor.tokens(items, self.state, self.fixed or 0)
+            if report is not None:
+                report.id = self.block(n)
+                self.compactions.append(report)
+                await self.announce(report, started)
+                if self.on_compact is not None:
+                    await self.on_compact(report, items)
+            await self.post(
+                EventType.CONTEXT_USAGE, **self.budget.usage(self.counter.scaled(self.estimate))
+            )
+            return self.sent
+
+    async def announce(self, report: Compaction, started: bool) -> None:
+        """Publish a compaction: its marker block and the `context.compact` event."""
+        data = report.to_dict()
+        if not started:
+            await self.post(
+                EventType.BLOCK_START, id=report.id, kind="compact", role="system", text=""
+            )
+        await self.post(
+            EventType.BLOCK_END,
+            id=report.id,
+            kind="compact",
+            text=report.summary or report.describe(),
+            message=report.describe(),
+            **{k: v for k, v in data.items() if k != "id"},
+        )
+        await self.post(EventType.CONTEXT_COMPACT, message=report.describe(), **data)
+
+    async def post(self, event_type: str, **data: Any) -> None:
+        if self.publish is not None:
+            await self.publish(event_type, **data)
+
+    def observe(self, input_tokens: int) -> dict[str, Any] | None:
+        """The provider counted the input of the newest call: calibrate on it.
+
+        Returns the `context.usage` payload to publish, or ``None`` when
+        nothing was reported.
+        """
+        if input_tokens <= 0:
+            return None
+        self.counter.calibrate(self.estimate, input_tokens)
+        return self.budget.usage(input_tokens, estimated=False)
+
+    async def overflowed(self, exc: BaseException) -> list[Any] | None:
+        """The input did not fit after all: the input to retry with, or ``None``.
+
+        The window the error names (else three quarters of the assumed one)
+        replaces the budget, and the context is compacted as hard as it goes.
+        """
+        if self.overflows >= self.OVERFLOWS or not self.items or not is_overflow(exc):
+            return None
+        self.overflows += 1
+        budget = self.budget
+        window = overflow_window(str(exc)) or int(budget.window * 0.75)
+        self.compactor.budget = ContextBudget.of(
+            min(window, budget.window), budget.reserve, budget.trigger, budget.target
+        )
+        if self.on_window is not None:
+            self.on_window(self.compactor.budget.window)
+        return await self.fit(self.items, force=True, reason="overflow")
+
+
+@functools.cache
+def context_guard_class() -> type:
+    """The SDK model wrapper that recovers from a context length error.
+
+    Built on first use, since the SDK is imported lazily.
+    """
+    from agents.models.interface import Model
+
+    class ContextGuard(Model):
+        """Wraps the leader's model: a context length error compacts and retries."""
+
+        def __init__(self, model: Any, context: ContextRun) -> None:
+            self.model = model
+            self.context = context
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.model, name)
+
+        async def get_response(self, system_instructions: Any, input: Any, *args: Any, **kwargs: Any) -> Any:
+            while True:
+                try:
+                    return await self.model.get_response(system_instructions, input, *args, **kwargs)
+                except Exception as exc:
+                    smaller = await self.context.overflowed(exc)
+                    if smaller is None:
+                        raise
+                    input = smaller
+
+        async def stream_response(
+            self, system_instructions: Any, input: Any, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[Any]:
+            while True:
+                started = False
+                try:
+                    async for event in self.model.stream_response(
+                        system_instructions, input, *args, **kwargs
+                    ):
+                        started = True
+                        yield event
+                    return
+                except Exception as exc:
+                    smaller = None if started else await self.context.overflowed(exc)
+                    if smaller is None:
+                        raise
+                    input = smaller
+
+        def get_retry_advice(self, request: Any) -> Any:
+            return self.model.get_retry_advice(request)
+
+        async def _cleanup_on_run_end(self, owner: object) -> None:
+            await self.model._cleanup_on_run_end(owner)
+
+    return ContextGuard
 
 
 # Learned rules. A vote on an answer becomes a rule: the trace behind the
@@ -1747,7 +2878,13 @@ class RuleBook:
 
     def trace(self, turns: Iterable[Turn]) -> str:
         """The turns behind an answer as text, cut to `TRACE_LIMIT`."""
-        labels = {"user": "USER", "assistant": "ASSISTANT", "tool": "TOOL", "system": "SUMMARY"}
+        labels = {
+            "user": "USER",
+            "assistant": "ASSISTANT",
+            "tool": "TOOL",
+            "system": "SUMMARY",
+            "compact": "SUMMARY",
+        }
         text = "\n\n".join(
             f"{labels.get(turn.role, turn.role.upper())}: {turn.text.strip()}" for turn in turns
         )
@@ -2203,6 +3340,8 @@ class ErrorKind:
     AUTH = "auth"
     INVALID = "invalid_request"
     MAX_TURNS = "max_turns"
+    #: The input did not fit the model's window, even compacted.
+    CONTEXT = "context_overflow"
     CANCELLED = "cancelled"
     INTERNAL = "internal"
 
@@ -2284,6 +3423,14 @@ def classify_error(exc: BaseException) -> str:
         return exc.kind
     if isinstance(exc, asyncio.CancelledError):
         return ErrorKind.CANCELLED
+    kind = classify_failure(exc)
+    if kind in (ErrorKind.INVALID, ErrorKind.INTERNAL) and is_overflow(exc):
+        return ErrorKind.CONTEXT
+    return kind
+
+
+def classify_failure(exc: BaseException) -> str:
+    """The kind of a failure by its class, its HTTP status or its nature."""
     for cls in type(exc).__mro__:
         kind = ERROR_KINDS.get(cls.__name__)
         if kind is not None:
@@ -2538,6 +3685,8 @@ class ModelPool:
         self.policy = policy or RetryPolicy()
         #: Everything this pool has spent, across runs and roles.
         self.usage = Usage()
+        #: Context windows by endpoint and model, as found or learned (0: unknown).
+        self._windows: dict[tuple[str, str], int] = {}
 
     def client(self, spec: ModelSpec) -> Any:
         """Return the shared async client for the endpoint of `spec`.
@@ -2586,6 +3735,84 @@ class ModelPool:
             )
             self._models[key] = model
         return model
+
+    #: Keys a model listing names the context window under: OpenRouter,
+    #: Together (`context_length`), vLLM (`max_model_len`), Groq
+    #: (`context_window`), Mistral, LM Studio (`max_context_length`), LiteLLM.
+    WINDOW_KEYS = (
+        "context_length",
+        "max_model_len",
+        "context_window",
+        "max_context_length",
+        "max_input_tokens",
+    )
+    #: Seconds a window lookup may take; a run never waits longer on it.
+    PROBE_TIMEOUT = 8.0
+
+    async def window(self, spec: ModelSpec) -> int:
+        """The context window of the model of `spec`, as its provider says, or 0.
+
+        Asked once per endpoint and model; a lookup that fails or stalls is
+        remembered as unknown and never fails a run.
+        """
+        key = (spec.api_url, spec.name)
+        if key not in self._windows:
+            found = 0
+            try:
+                found = int(
+                    await asyncio.wait_for(self.probe_window(spec), self.PROBE_TIMEOUT) or 0
+                )
+            except Exception as exc:
+                print(f"[context] no window found for {spec.name}: {exc!r}", file=sys.stderr)
+            self._windows[key] = found
+        return self._windows[key]
+
+    def known_window(self, spec: ModelSpec) -> int:
+        """The window of `spec` when it was found or learned already, else 0."""
+        return self._windows.get((spec.api_url, spec.name), 0)
+
+    def learn_window(self, spec: ModelSpec, window: int) -> None:
+        """Remember a window the provider revealed (in a context length error)."""
+        self._windows[(spec.api_url, spec.name)] = int(window)
+
+    async def probe_window(self, spec: ModelSpec) -> int:
+        """Ask the endpoint: its model listing, then Ollama's own API."""
+        with contextlib.suppress(Exception):
+            page = await self.client(spec).models.list()
+            for model in getattr(page, "data", None) or []:
+                data = model.model_dump() if hasattr(model, "model_dump") else dict(model)
+                if data.get("id") == spec.name:
+                    found = find_key(data, self.WINDOW_KEYS)
+                    if found:
+                        return found
+        return await self.probe_ollama(spec)
+
+    async def probe_ollama(self, spec: ModelSpec) -> int:
+        """The runtime window of an Ollama server, which its listing omits.
+
+        A loaded model reports it (`/api/ps`), a Modelfile may set it
+        (`num_ctx`); otherwise Ollama runs a small default and truncates a
+        longer prompt from the front without saying so, so a conservative
+        window is assumed. Not an Ollama server: 0.
+        """
+        import httpx
+
+        root = spec.api_url.rstrip("/").removesuffix("/v1")
+        names = {spec.name, f"{spec.name}:latest"}
+        async with httpx.AsyncClient(timeout=self.PROBE_TIMEOUT) as http:
+            listed = await http.get(f"{root}/api/ps")
+            body = listed.json() if listed.status_code == 200 else None
+            if not isinstance(body, dict) or "models" not in body:
+                return 0
+            for model in body.get("models") or []:
+                if names & {model.get("name"), model.get("model")} and model.get("context_length"):
+                    return int(model["context_length"])
+            shown = await http.post(f"{root}/api/show", json={"model": spec.name})
+            if shown.status_code == 200:
+                match = re.search(r"num_ctx\s+(\d+)", str(shown.json().get("parameters") or ""))
+                if match:
+                    return int(match.group(1))
+        return OLLAMA_CONTEXT_WINDOW
 
     async def complete(
         self,
@@ -2679,6 +3906,26 @@ IMAGE_MIME = {
 }
 
 MAX_READ_BYTES = 2 * 1024 * 1024
+
+
+def find_key(data: Any, keys: Iterable[str]) -> int:
+    """The first positive integer under one of `keys`, shallowest first."""
+    wanted = tuple(keys)
+    level = [data]
+    while level:
+        for node in level:
+            if isinstance(node, dict):
+                for key in wanted:
+                    value = node.get(key)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+                        return int(value)
+        level = [
+            child
+            for node in level
+            for child in (node.values() if isinstance(node, dict) else node if isinstance(node, list) else ())
+            if isinstance(child, (dict, list))
+        ]
+    return 0
 
 
 def clip_output(text: str, limit: int) -> str:
@@ -3585,6 +4832,8 @@ class ConsoleRenderer:
         self._frame_timer: asyncio.TimerHandle | None = None
         self._prev_kind: str | None = None
         self._trailing_newlines = 0
+        #: The newest `context.usage` of the run, printed when it ends.
+        self._usage: dict[str, Any] | None = None
 
     # -- overridable output -------------------------------------------------
 
@@ -3621,13 +4870,28 @@ class ConsoleRenderer:
             self.emit("tool", ("\n" if beats else "") + self.tool_outcome(event.data))
         elif event.type == EventType.MODEL_RETRY:
             self.emit("error", self.retry_notice(event.data))
+        elif event.type == EventType.CONTEXT_USAGE:
+            self._usage = dict(event.data)
+        elif event.type == EventType.CONTEXT_COMPACT:
+            self.emit("tool", f"~~ {event.data.get('message') or 'compacted'}\n")
         elif event.type == EventType.AGENT_ERROR:
             self.emit("error", str(event.data.get("error", "")))
         elif event.type == EventType.AGENT_END:
+            if self._usage:
+                self.emit("tool", self.usage_line(self._usage))
+                self._usage = None
             if self._trailing_newlines == 0:
                 self.write("\n")
             self._prev_kind = None
             self._trailing_newlines = 0
+
+    @staticmethod
+    def usage_line(usage: dict[str, Any]) -> str:
+        """The context gauge as a line: ``ctx 45% · 58k / 102k``."""
+        fill = float(usage.get("fill") or 0.0)
+        tokens = compact_tokens(int(usage.get("tokens") or 0))
+        usable = compact_tokens(int(usage.get("usable") or 0))
+        return f"\nctx {fill:.0%} · {tokens} / {usable}\n"
 
     @staticmethod
     def retry_notice(data: dict[str, Any]) -> str:
@@ -3958,6 +5222,8 @@ class RunResult:
     error_kind: str | None = None
     #: Tokens and cost of every model call the run made, specialists included.
     usage: Usage = field(default_factory=Usage)
+    #: The compaction of this run's context (`ContextRun`), when there is one.
+    context: Any = field(default=None, repr=False, compare=False)
     #: What the run added to the context window, step by step as each one
     #: finished: assistant messages and tool calls with their outputs, as raw
     #: model input items. An application keeping its own history appends
@@ -4053,6 +5319,8 @@ class Engine:
         #: What each open question published, so a client that (re)connects
         #: is shown the card again (`pending_questions`).
         self.asking: dict[str, dict[str, Any]] = {}
+        #: Token counters by leader model: each keeps its own calibration.
+        self.counters: dict[tuple[str, str], TokenCounter] = {}
 
     # -- configuration ------------------------------------------------------
 
@@ -4173,14 +5441,155 @@ class Engine:
         )
 
     def build_sdk_agent(self, config: AgentConfig, tools: list[Any]) -> Any:
-        from agents import Agent as SdkAgent
+        from agents import Agent as SdkAgent, ModelSettings
 
         return SdkAgent(
             name=config.name,
             instructions=config.instructions,
             model=self.build_model(config),
             tools=tools,
+            # usage on every streamed response: it prices the run and
+            # calibrates the context count (most providers omit it unasked)
+            model_settings=ModelSettings(include_usage=True),
         )
+
+    # -- context ------------------------------------------------------------
+
+    def counter(self, config: AgentConfig) -> TokenCounter:
+        """The token counter of the leader model, shared by its runs."""
+        key = (config.inference_llm, config.context_tokenizer)
+        counter = self.counters.get(key)
+        if counter is None:
+            counter = self.counters[key] = TokenCounter(config.context_tokenizer or None)
+        return counter
+
+    async def context_window(self, config: AgentConfig, role: str = LEADER_ROLE) -> int:
+        """The window of a role's model: configured, else asked, else assumed."""
+        if config.context_window > 0:
+            return int(config.context_window)
+        spec = config.model_spec(role)
+        found = await self.models.window(spec) if spec is not None else 0
+        return found or DEFAULT_CONTEXT_WINDOW
+
+    async def context_budget(self, config: AgentConfig) -> ContextBudget:
+        return ContextBudget.of(
+            await self.context_window(config),
+            config.context_reserve,
+            config.context_trigger,
+            config.context_target,
+        )
+
+    def build_summarizer(
+        self, config: AgentConfig
+    ) -> Callable[[str, str, str], Awaitable[str]] | None:
+        """The delegate compaction folds a segment into the summary with.
+
+        ``(previous summary, segment, focus) -> summary`` over the `summary`
+        role, which falls back to the leader so a second model is optional.
+        ``None`` (compaction drops instead) when `context_summary` is off.
+        """
+        if not config.context_summary:
+            return None
+        spec = config.model_spec(SUMMARY_ROLE) or config.model_spec(LEADER_ROLE)
+        if spec is None:
+            return None
+        policy = self.build_policy(config)
+        words = int(config.summary_max_tokens * 0.75)
+
+        async def summarize(previous: str, segment: str, focus: str = "") -> str:
+            instructions = f"{config.summary_instructions}\n\nStay within about {words} words."
+            if focus:
+                instructions += f"\n\nThe user asked the summary to focus on: {focus}"
+            return await self.models.complete(
+                spec,
+                [
+                    {"role": "system", "content": instructions},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"<summary>\n{previous.strip() or '(empty)'}\n</summary>\n\n"
+                            f"<segment>\n{segment}\n</segment>"
+                        ),
+                    },
+                ],
+                # room for a reasoning model to think before it writes
+                max_tokens=max(4 * config.summary_max_tokens, 8192),
+                policy=policy,
+                on_retry=self.retry_reporter(),
+            )
+
+        return summarize
+
+    async def build_compactor(self, config: AgentConfig) -> Compactor:
+        """The compactor of a run: the leader's budget and the summary role."""
+        budget = await self.context_budget(config)
+        summarizer = self.build_summarizer(config)
+        segment = 0
+        if summarizer is not None:
+            # a segment fits the summary model's own window with room to answer
+            window = await self.context_window(config, SUMMARY_ROLE) if config.model_spec(
+                SUMMARY_ROLE
+            ) else budget.window
+            segment = max(int(window * 0.6) - 2 * config.summary_max_tokens, 1024)
+        return Compactor(
+            self.counter(config),
+            budget,
+            summarize=summarizer,
+            keep=config.context_keep,
+            summary_tokens=config.summary_max_tokens,
+            segment_limit=segment,
+            reasoning=reasoning_replayed(config.inference_llm),
+        )
+
+    async def build_context(
+        self,
+        config: AgentConfig,
+        result: RunResult,
+        *,
+        state: ContextState | None = None,
+        pinned_at: int = -1,
+        pinned: str = "",
+        on_compact: Callable[[Compaction, list[Any]], Awaitable[None]] | None = None,
+    ) -> ContextRun | None:
+        """The in-run compaction of `result`, or ``None`` when it is off."""
+        if config.context_trigger <= 0:
+            return None
+        compactor = await self.build_compactor(config)
+        await asyncio.to_thread(compactor.counter.load)  # a first load may download
+        session_id = result.session_id
+        spec = config.model_spec(LEADER_ROLE)
+
+        async def publish(event_type: str, **data: Any) -> None:
+            await self.events.publish(event_type, session_id=session_id, **data)
+
+        def learned(window: int) -> None:
+            if spec is not None:
+                self.models.learn_window(spec, window)
+
+        return ContextRun(
+            compactor,
+            state=state,
+            publish=publish,
+            block=lambda n: f"{session_id}-{result.run_id}-c{n}",
+            pinned_at=pinned_at,
+            pinned=pinned,
+            on_compact=on_compact,
+            on_window=learned,
+        )
+
+    def build_run_config(self, config: AgentConfig, result: RunResult) -> Any:
+        """The SDK run config: the context filter of the run, when it has one."""
+        from agents import RunConfig
+
+        return RunConfig(call_model_input_filter=result.context, tracing_disabled=True)
+
+    def guard_model(self, sdk_agent: Any, result: RunResult) -> Any:
+        """Wrap the leader's model so a context length error compacts and retries."""
+        model = getattr(sdk_agent, "model", None)
+        if result.context is None or model is None or isinstance(model, str):
+            return sdk_agent
+        sdk_agent.model = context_guard_class()(model, result.context)
+        return sdk_agent
 
     def build_workspace(
         self, workspace: "Workspace | Path | str | None", config: AgentConfig
@@ -4321,7 +5730,11 @@ class Engine:
                 if sandbox
                 else []
             )
-        sdk_agent = self.build_sdk_agent(config, tools)
+        if result.context is None:
+            result.context = await self.build_context(
+                config, result, pinned_at=input_size(model_input) - 1, pinned=prompt_of(model_input)
+            )
+        sdk_agent = self.guard_model(self.build_sdk_agent(config, tools), result)
         return await self.build_policy(config).call(
             lambda: self.stream(sdk_agent, model_input, config, result),
             role=LEADER_ROLE,
@@ -4350,7 +5763,10 @@ class Engine:
         session_id = result.session_id
         policy = self.build_policy(config)
         streamed = Runner.run_streamed(
-            starting_agent=sdk_agent, input=model_input, max_turns=config.max_turns
+            starting_agent=sdk_agent,
+            input=model_input,
+            max_turns=config.max_turns,
+            run_config=self.build_run_config(config, result),
         )
         blocks: dict[str, Block] = {}
         current: Block | None = None
@@ -4512,6 +5928,8 @@ class Engine:
                         kind=kind,
                         text=delta,
                     )
+                elif getattr(data, "type", "") == "response.completed":
+                    await self.context_observed(result, data)
                 elif getattr(data, "type", "") == "response.function_call_arguments.delta":
                     # The call itself is published from the run item event; here
                     # the only job is to end the block the model was writing.
@@ -4801,6 +6219,17 @@ class Engine:
 
     # -- journal ------------------------------------------------------------
 
+    async def context_observed(self, result: RunResult, data: Any) -> None:
+        """A model call finished: calibrate the context count on its usage."""
+        if result.context is None:
+            return
+        usage = getattr(getattr(data, "response", None), "usage", None)
+        payload = result.context.observe(usage_value(usage, "input_tokens", "prompt_tokens"))
+        if payload is not None:
+            await self.events.publish(
+                EventType.CONTEXT_USAGE, session_id=result.session_id, **payload
+            )
+
     async def checkpoint(self, result: RunResult, turn: Turn) -> None:
         """A step of the run finished: record what it added to the context.
 
@@ -4845,6 +6274,11 @@ class Engine:
 
     async def __aexit__(self, *_exc: Any) -> None:
         await self.aclose()
+
+
+def input_size(model_input: str | list[dict[str, Any]]) -> int:
+    """How many items a model input is (a prompt string is one)."""
+    return 1 if isinstance(model_input, str) else len(model_input)
 
 
 def prompt_of(model_input: str | list[dict[str, Any]]) -> str:
@@ -4944,12 +6378,15 @@ class Agent(Engine):
         self.memory = memory or ConversationMemory(
             self.store,
             enabled=self.config.memory_enabled,
-            max_turns=self.config.memory_max_turns,
-            max_chars=self.config.memory_max_chars,
             tools=self.config.memory_tools,
         )
-        if self.memory.summarizer is None:
-            self.memory.summarizer = self.build_summarizer(self.config)
+        #: Compactions of the journal running in the background, by session.
+        self.compacting: dict[str, asyncio.Task[Any]] = {}
+        #: The newest `context.usage` of each session, for a client that joins.
+        self.context_seen: dict[str, dict[str, Any]] = {}
+        #: What the instructions and tool schemas of each session cost, last run.
+        self.context_fixed: dict[str, int] = {}
+        self.events.on(EventType.CONTEXT_USAGE, self.context_noted)
         self.rules = rules or RuleBook(
             self.store,
             enabled=self.config.rules_enabled,
@@ -4980,37 +6417,6 @@ class Agent(Engine):
 
     # -- model / sdk --------------------------------------------------------
 
-    def build_summarizer(
-        self, config: AgentConfig
-    ) -> Callable[[list[Turn]], Awaitable[str]] | None:
-        """Return a delegate that compresses forgotten turns, or ``None``.
-
-        Summarising is opt-in (`memory_summary`); the `summary` role falls back
-        to the leader so a second model is optional.
-        """
-        if not (config.memory_enabled and config.memory_summary):
-            return None
-        spec = config.model_spec(SUMMARY_ROLE) or config.model_spec(LEADER_ROLE)
-        if spec is None:
-            return None
-
-        policy = self.build_policy(config)
-
-        async def summarize(turns: list[Turn]) -> str:
-            transcript = "\n\n".join(f"{t.role}: {t.text}" for t in turns)
-            return await self.models.complete(
-                spec,
-                [
-                    {"role": "system", "content": config.summary_instructions},
-                    {"role": "user", "content": transcript},
-                ],
-                max_tokens=config.summary_max_tokens or None,
-                policy=policy,
-                on_retry=self.retry_reporter(),
-            )
-
-        return summarize
-
     # -- run ----------------------------------------------------------------
 
     async def run(
@@ -5040,8 +6446,10 @@ class Agent(Engine):
             async with self.running(resolved, result):
                 await self.publish_prompt(resolved, result)
                 result.prompt = self.build_prompt(template, resolved, **(context or {}))
+                await self.compacted(session_obj.id)
                 model_input = self.build_input(result.prompt, session_obj, resolved)
                 self.journal_prompt(session_obj, resolved, result)
+                await self.prepare_context(session_obj, resolved, result, model_input)
                 await self.turn(
                     model_input,
                     resolved,
@@ -5054,6 +6462,8 @@ class Agent(Engine):
             if self.live.get(session_obj.id, (None,))[0] is result:
                 del self.live[session_obj.id]
             self.settle(session_obj, result)
+            self.settle_context(session_obj.id, result)
+            self.schedule_compaction(session_obj.id, resolved)
         return result
 
     def acquire_session(self, session: Session | str | None) -> Session:
@@ -5090,6 +6500,240 @@ class Agent(Engine):
         if not history:
             return prompt
         return [*history, {"role": "user", "content": prompt}]
+
+    # -- context ------------------------------------------------------------
+
+    #: A compaction between runs starts this much earlier than one inside a
+    #: run: nobody waits on it, and the next run then rarely has to.
+    BACKGROUND_TRIGGER = 0.9
+
+    async def prepare_context(
+        self,
+        session: Session,
+        config: AgentConfig,
+        result: RunResult,
+        model_input: str | list[dict[str, Any]],
+    ) -> None:
+        """Seed the compaction of a run with what the journal decided.
+
+        The input opens with the journal's summary, which the run's own
+        compactions fold further; each item the run starts with is tied to the
+        turn it stands for (the prompt, journaled after `build_input`, last),
+        so a summary made mid run is journaled with the turn it keeps from. A
+        consumer's own `build_input` loses that tie, never the compaction.
+        """
+        transcript = self.memory.transcript(session.id)
+        items, owners = self.memory.window(session.id) if config.memory_enabled else ([], [])
+        if len(owners) != input_size(model_input):
+            owners = []
+        state = ContextState()
+        summary = transcript.summary() if config.memory_enabled else None
+        first = model_input[0] if isinstance(model_input, list) and model_input else None
+        if summary is not None and first == summary_message(summary.text):
+            state = ContextState(summary=summary.text, cut=1)
+
+        async def on_compact(report: Compaction, items: list[Any]) -> None:
+            self.journal_compaction(session.id, result.run_id, report, items, owners)
+
+        result.context = await self.build_context(
+            config,
+            result,
+            state=state,
+            pinned_at=input_size(model_input) - 1,
+            pinned=prompt_of(model_input),
+            on_compact=on_compact,
+        )
+
+    def journal_compaction(
+        self,
+        session_id: str,
+        run_id: str,
+        report: Compaction,
+        items: list[Any],
+        owners: list[Turn],
+    ) -> Turn | None:
+        """Journal a compaction as a ``compact`` turn: its marker, and its summary.
+
+        A summary records the turn it keeps from (`keep_ref`), which is where
+        the next window starts verbatim.
+        """
+        meta = {k: v for k, v in report.to_dict().items() if k != "id"}
+        turn = Turn("compact", report.summary or report.describe(), id=report.id, run=run_id, meta=meta)
+        if report.summarized:
+            turn.meta["summary"] = True
+            turn.meta["keep"] = self.keep_ref(items, report.cut, owners, run_id)
+        self.memory.journal(session_id, turn)
+        return turn
+
+    @staticmethod
+    def keep_ref(items: list[Any], cut: int, owners: list[Turn], run_id: str) -> dict[str, Any]:
+        """Where a summary over `items` keeps from, in journal terms.
+
+        The turn behind ``items[cut]`` when the run started with it; else the
+        calls of the response the cut keeps from, whose tool turns the run
+        journals as they finish.
+        """
+        if cut < len(owners) and owners[cut].seq:
+            return {"seq": owners[cut].seq}
+        calls: list[str] = []
+        for item in items[cut:]:
+            kind = item_kind(item)
+            if is_output(kind):
+                break
+            if is_call(kind) and item.get("call_id"):
+                calls.append(str(item["call_id"]))
+        return {"run": run_id, "calls": calls} if calls else {}
+
+    def settle_context(self, session_id: str, result: RunResult) -> None:
+        """Carry the compaction of a run into the journal once it ended.
+
+        Outputs the run cleared stay cleared for the next run (its prefix then
+        matches what the model last saw), and a summary that keeps from the
+        calls of a response keeps from their journaled turn. Never raises.
+        """
+        context = result.context
+        if context is None or not self.memory.enabled:
+            return
+        try:
+            if context.fixed:
+                self.context_fixed[session_id] = context.fixed
+            transcript = self.memory.transcript(session_id)
+            changed = self.mark_cleared(transcript.turns, context.state)
+            for turn in transcript.run_of(result.run_id):
+                keep = turn.meta.get("keep") if turn.role == "compact" else None
+                if isinstance(keep, dict) and keep.get("calls"):
+                    index = transcript.boundary(turn)
+                    if index < len(transcript.turns):
+                        turn.meta["keep"] = {"seq": transcript.turns[index].seq}
+                        changed.append(turn)
+            if changed:
+                self.memory.persist(transcript, *changed)
+        except Exception as exc:  # pragma: no cover - the run already ended
+            print(f"[context] could not settle run {result.run_id}: {exc!r}", file=sys.stderr)
+
+    @staticmethod
+    def mark_cleared(turns: Iterable[Turn], state: ContextState) -> list[Turn]:
+        """Mark the tool turns whose outputs `state` cleared; returns those changed."""
+        changed: list[Turn] = []
+        if not state.cleared:
+            return changed
+        for turn in turns:
+            stub = state.cleared.get(turn.call_id) if turn.call_id else None
+            if stub and turn.meta.get("cleared") != stub:
+                turn.meta["cleared"] = stub
+                changed.append(turn)
+        return changed
+
+    async def compacted(self, session_id: str) -> None:
+        """Wait for a compaction of the session running in the background."""
+        task = self.compacting.get(session_id)
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            await asyncio.wait({task})
+
+    def schedule_compaction(self, session_id: str, config: AgentConfig) -> asyncio.Task[Any] | None:
+        """Compact the journal of a session in the background, when it needs it."""
+        if not (config.memory_enabled and config.context_trigger > 0):
+            return None
+        if session_id in self.compacting or not len(self.memory.transcript(session_id)):
+            return None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        task = loop.create_task(self.compact(session_id, config=config, background=True))
+        self.compacting[session_id] = task
+
+        def done(finished: asyncio.Task[Any]) -> None:
+            if self.compacting.get(session_id) is finished:
+                del self.compacting[session_id]
+            if not finished.cancelled() and finished.exception() is not None:
+                print(
+                    f"[context] compaction of {session_id} failed: {finished.exception()!r}",
+                    file=sys.stderr,
+                )
+
+        task.add_done_callback(done)
+        return task
+
+    async def compact(
+        self,
+        session_id: str,
+        *,
+        config: AgentConfig | None = None,
+        force: bool = False,
+        focus: str = "",
+        background: bool = False,
+    ) -> Compaction | None:
+        """Compact the journal of a session; the next run starts from the result.
+
+        Past the high watermark (`BACKGROUND_TRIGGER` lower for a compaction
+        nobody waits on), or whatever the size when `force` (``/compact``,
+        with an optional `focus` for the summary). Returns what was done, or
+        ``None`` when nothing was needed.
+        """
+        config = config or self.config
+        if not config.memory_enabled or (config.context_trigger <= 0 and not force):
+            return None
+        transcript = self.memory.transcript(session_id)
+        items, owners = transcript.window(self.memory.tools)
+        if not items:
+            return None
+        summary = transcript.summary()
+        state = ContextState(summary=summary.text, cut=1) if summary is not None else ContextState()
+        compactor = await self.build_compactor(config)
+        await asyncio.to_thread(compactor.counter.load)
+        if background:
+            budget = compactor.budget
+            compactor.budget = ContextBudget.of(
+                budget.window, budget.reserve, budget.trigger * self.BACKGROUND_TRIGGER, budget.target
+            )
+        block = f"{session_id}-compact-{uuid.uuid4().hex[:8]}"
+
+        async def publish(event_type: str, **data: Any) -> None:
+            await self.events.publish(event_type, session_id=session_id, **data)
+
+        async def on_compact(report: Compaction, items: list[Any]) -> None:
+            changed = self.mark_cleared({id(t): t for t in owners}.values(), state)
+            if changed:
+                self.memory.persist(transcript, *changed)
+            self.journal_compaction(session_id, "", report, items, owners)
+
+        context = ContextRun(
+            compactor, state=state, publish=publish, block=lambda n: block, on_compact=on_compact
+        )
+        context.fixed = self.context_fixed.get(session_id) or context.fixed_cost(
+            self.decorate_instructions(config.instructions, config), []
+        )
+        await context.fit(items, force=force, reason="forced" if force else "", focus=focus)
+        return context.compactions[-1] if context.compactions else None
+
+    def context_noted(self, event: Event) -> None:
+        """Keep the newest `context.usage` of a session for a client that joins."""
+        if event.session_id:
+            self.context_seen[event.session_id] = dict(event.data)
+
+    async def context_usage(self, session_id: str) -> dict[str, Any] | None:
+        """The context use of a session: as last reported, else estimated.
+
+        The estimate needs the window: configured, or already known to the
+        pool; otherwise ``None`` until a run reports one.
+        """
+        seen = self.context_seen.get(session_id)
+        if seen is not None or not self.config.memory_enabled:
+            return seen
+        items = self.memory.history(session_id)
+        spec = self.config.model_spec(LEADER_ROLE)
+        window = self.config.context_window or (self.models.known_window(spec) if spec else 0)
+        if not items or not window:
+            return None  # never wait on a provider for a gauge: the next run reports it
+        counter = self.counter(self.config)
+        await asyncio.to_thread(counter.load)
+        fixed = self.context_fixed.get(session_id, 0)
+        tokens = counter.scaled(fixed + counter.items(items))
+        config = self.config
+        return ContextBudget.of(
+            window, config.context_reserve, config.context_trigger, config.context_target
+        ).usage(tokens)
 
     @staticmethod
     def prompt_id(result: RunResult) -> str:
@@ -5157,7 +6801,7 @@ class Agent(Engine):
     async def remember(
         self, session: Session, config: AgentConfig, result: RunResult
     ) -> None:
-        """Close the journal of a run that finished: its answer, then the trim.
+        """Close the journal of a run that finished with its final answer.
 
         A model whose final answer never arrived as a message item (or a stream
         that does not report them) still has it journaled here. Override to
@@ -5173,7 +6817,6 @@ class Agent(Engine):
             self.memory.journal(
                 session.id, Turn("assistant", output, id=turn_id, run=result.run_id)
             )
-        await self.memory.remember(session.id, [])
 
     def settle(self, session: Session, result: RunResult) -> None:
         """Record how a run ended on its journaled prompt. Never raises."""
@@ -5188,7 +6831,7 @@ class Agent(Engine):
                 cancelled = result.error_kind == ErrorKind.CANCELLED
                 prompt.meta["status"] = RUN_CANCELLED if cancelled else RUN_FAILED
                 prompt.meta["error"] = result.error
-            self.memory.persist(transcript)
+            self.memory.persist(transcript, prompt)
         except Exception as exc:  # pragma: no cover - the run already ended
             print(f"[journal] could not settle run {result.run_id}: {exc!r}", file=sys.stderr)
 
@@ -5218,8 +6861,17 @@ class Agent(Engine):
         run is cancelled through its own loop.
         """
         self.memory.forget(session.id)
-        live = self.live.get(session.id)
-        task = live[1] if live else None
+        self.drop_context(session.id)
+        task = self.live.get(session.id, (None, None))[1]
+        if task is not None and not task.done():
+            with contextlib.suppress(RuntimeError):
+                task.get_loop().call_soon_threadsafe(task.cancel)
+
+    def drop_context(self, session_id: str) -> None:
+        """Forget what compaction knows of a session and stop its background work."""
+        self.context_seen.pop(session_id, None)
+        self.context_fixed.pop(session_id, None)
+        task = self.compacting.get(session_id)
         if task is not None and not task.done():
             with contextlib.suppress(RuntimeError):
                 task.get_loop().call_soon_threadsafe(task.cancel)
@@ -5313,7 +6965,7 @@ class Agent(Engine):
                     raise  # cancelled: nothing was learned, nothing is claimed
                 outcome["message"] = f"Could not learn a rule: {exc}"
                 return outcome
-            self.memory.persist(transcript)
+            self.memory.persist(transcript, answer)
             verb = "added" if action == "add" else "updated"
             outcome.update(
                 ok=True,
@@ -5404,6 +7056,7 @@ class Agent(Engine):
             if not session_id:
                 return {"ok": False, "message": "No session"}
             remembered = len(self.memory.transcript(session_id))
+            self.drop_context(session_id)
             self.memory.forget(session_id)
             return {"ok": True, "message": f"Forgot {remembered} remembered turns"}
 
@@ -5532,6 +7185,17 @@ class Agent(Engine):
                 "rules": [r.to_dict() for r in rules],
             }
 
+        async def compact_command(args: str, session_id: str | None = None, **_: Any) -> dict[str, Any]:
+            if not session_id:
+                return {"ok": False, "message": "No session"}
+            if session_id in self.live:
+                return {"ok": False, "message": "A run is in progress"}
+            await self.compacted(session_id)
+            report = await self.compact(session_id, force=True, focus=args.strip())
+            if report is None:
+                return {"ok": True, "message": "Nothing to compact"}
+            return {"ok": True, "message": report.describe(), "compaction": report.to_dict()}
+
         def resume_command(_args: str, session_id: str | None = None, **_: Any) -> dict[str, Any]:
             if session_id and session_id in self.live:
                 return {"ok": False, "message": "A run is in progress"}
@@ -5551,6 +7215,9 @@ class Agent(Engine):
             "rules", "List learned rules: '/rules [drop <id> | clear]'", rules_command
         )
         self.commands.register("resume", "Continue the run that did not finish", resume_command)
+        self.commands.register(
+            "compact", "Summarise the conversation now: '/compact [focus]'", compact_command
+        )
         self.commands.register("new", "Start a new isolated session", new_session)
         self.commands.register("end", "End the current session and wipe it", end_session)
         self.commands.register("sessions", "List live sessions", list_sessions)
@@ -5586,6 +7253,9 @@ class Agent(Engine):
         A durable manager keeps its workspaces and their records instead, so the
         next start rehydrates the sessions that were still live.
         """
+        for task in list(self.compacting.values()):
+            with contextlib.suppress(RuntimeError):
+                task.get_loop().call_soon_threadsafe(task.cancel)
         self.sessions.close_all()
         self.cache.clear()
         self.store.close()
@@ -6386,6 +8056,7 @@ class WebServer:
             questions=self.agent.pending_questions(session.id),
             busy=self.active(session.id),
             unfinished=unfinished.run if unfinished is not None else None,
+            context=await self.agent.context_usage(session.id),
             warning=self.agent.rules.warning() if self.agent.config.rules_enabled else None,
             config=self.agent.config.to_dict(),
             commands=self.agent.commands.describe(),

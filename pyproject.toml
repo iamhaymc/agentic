@@ -11,6 +11,7 @@ dependencies = [
     "openai",
     "openai-agents",
     "cachetools",
+    "tiktoken",
     "transformers @ git+https://github.com/huggingface/transformers",
     "accelerate",
     "lighteval",

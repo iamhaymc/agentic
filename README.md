@@ -156,6 +156,21 @@ Votes become rules the agent keeps:
 - the model distils one do / avoid rule from the run behind the answer, editing a related rule instead of adding a twin
 - rules join the instructions of every run; past `rules_max_chars` a warning shows
 
+## ▶️ Compact (Context)
+
+Chat without end; the context is compacted as it fills:
+
+```yaml
+context: # a group flattens onto context_*
+  window: 0      # 0 asks the provider
+  trigger: 0.85  # compact past this share of the budget
+  target: 0.5    # ... down to this share
+```
+
+- **old reasoning → old tool outputs → summary of the oldest turns**, cheapest first, before every model call
+- the journal keeps every turn; the page shows a folded marker where a compaction happened
+- `/compact [focus]` summarises now; the mark's core fills with the context in use
+
 ## ▶️ Test
 
 BDD Test(s):
