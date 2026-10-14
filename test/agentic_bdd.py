@@ -28,6 +28,7 @@ from pathlib import Path
 import app.agentic as A
 
 _find_env_file = A.find_env_file
+_probe_window = A.ModelPool.probe_window
 
 
 def setUpModule():
@@ -40,6 +41,18 @@ def setUpModule():
     )
     patcher.start()
     unittest.addModuleCleanup(patcher.stop)
+    # Nothing reaches the network: the tokenizer estimates (its vocabulary is
+    # a download) and no provider is asked for its context window.
+    for patch in (
+        unittest.mock.patch.object(A.TokenCounter, "encodings", {"o200k_base": None}),
+        unittest.mock.patch.object(A.ModelPool, "probe_window", _no_window),
+    ):
+        patch.start()
+        unittest.addModuleCleanup(patch.stop)
+
+
+async def _no_window(self, spec):
+    return 0
 
 
 def run(coro):
@@ -1250,11 +1263,11 @@ class DurableSessionTest(unittest.TestCase):
 class MemoryTest(unittest.TestCase):
     def setUp(self):
         self.store = A.MemoryStore()
-        self.memory = A.ConversationMemory(self.store, max_turns=4, max_chars=0)
+        self.memory = A.ConversationMemory(self.store)
 
-    def exchange(self, asked, answered):
+    def exchange(self, asked, answered, session="s1"):
         return run(
-            self.memory.remember("s1", [A.Turn("user", asked), A.Turn("assistant", answered)])
+            self.memory.remember(session, [A.Turn("user", asked), A.Turn("assistant", answered)])
         )
 
     def test_remembered_turns_become_chat_messages(self):
@@ -1277,50 +1290,65 @@ class MemoryTest(unittest.TestCase):
         self.exchange("hello", "hi")
         self.assertEqual([t["kind"] for t in self.memory.replay("s1")], ["prompt", "output"])
 
-    def test_oldest_turns_fall_out_of_the_window(self):
+    def test_every_turn_is_kept(self):
+        """Nothing is trimmed: the window is the context's business."""
+        for n in range(30):
+            self.exchange(f"q{n}", f"a{n}")
+        self.assertEqual(len(A.ConversationMemory(self.store).transcript("s1")), 60)
+
+    def test_turns_are_numbered_and_stored_one_record_each(self):
         self.exchange("one", "1")
-        self.exchange("two", "2")
-        self.exchange("three", "3")
-        self.assertEqual(
-            [t.text for t in self.memory.transcript("s1").turns], ["two", "2", "three", "3"]
+        turns = self.memory.transcript("s1").turns
+        self.assertEqual([t.seq for t in turns], [1, 2])
+        rows = self.store.list(A.ConversationMemory.turns_namespace("s1"))
+        self.assertEqual(sorted(key for key, _ in rows), ["000000000001", "000000000002"])
+
+    def test_a_journal_write_costs_only_the_new_turns(self):
+        for n in range(20):
+            self.exchange(f"q{n}", f"a{n}")
+        writes: list[str] = []
+        store_set = self.store.set
+        self.store.set = lambda ns, key, value: (writes.append(key), store_set(ns, key, value))
+        self.memory.journal("s1", A.Turn("user", "more"))
+        self.assertEqual(writes, ["000000000041"])
+
+    def test_persist_rewrites_only_the_turns_named(self):
+        self.exchange("one", "1")
+        transcript = self.memory.transcript("s1")
+        answer = transcript.turns[1]
+        answer.meta["vote"] = "up"
+        self.memory.persist(transcript, answer)
+        reloaded = A.ConversationMemory(self.store).transcript("s1")
+        self.assertEqual(reloaded.turns[1].meta, {"vote": "up"})
+
+    def test_a_legacy_transcript_is_rewritten_one_record_per_turn(self):
+        self.store.set(
+            A.ConversationMemory.NAMESPACE,
+            "old",
+            {"session": "old", "turns": [{"role": "user", "text": "hi"}, {"role": "assistant", "text": "yo"}]},
         )
-
-    def test_a_character_budget_also_trims(self):
-        memory = A.ConversationMemory(self.store, max_turns=0, max_chars=6)
-        run(memory.remember("s2", [A.Turn("user", "aaaa"), A.Turn("assistant", "bbbb")]))
-        self.assertEqual([t.text for t in memory.transcript("s2").turns], ["bbbb"])
-
-    def test_the_newest_turn_always_survives(self):
-        memory = A.ConversationMemory(self.store, max_turns=0, max_chars=1)
-        run(memory.remember("s3", [A.Turn("user", "a long question")]))
-        self.assertEqual(len(memory.transcript("s3")), 1)
-
-    def test_a_summarizer_replaces_what_falls_out(self):
-        async def summarize(turns):
-            return "gist: " + ",".join(t.text for t in turns)
-
-        memory = A.ConversationMemory(self.store, max_turns=2, summarizer=summarize)
-        run(memory.remember("s4", [A.Turn("user", "one"), A.Turn("assistant", "1")]))
-        run(memory.remember("s4", [A.Turn("user", "two"), A.Turn("assistant", "2")]))
-        turns = memory.transcript("s4").turns
-        self.assertEqual(turns[0].role, "system")
-        self.assertEqual(turns[0].text, "gist: one,1")
-        self.assertEqual([t.text for t in turns[1:]], ["two", "2"])
-
-    def test_a_failing_summarizer_only_costs_the_summary(self):
-        async def summarize(_turns):
-            raise RuntimeError("boom")
-
-        memory = A.ConversationMemory(self.store, max_turns=2, summarizer=summarize)
-        run(memory.remember("s5", [A.Turn("user", "one"), A.Turn("assistant", "1")]))
-        run(memory.remember("s5", [A.Turn("user", "two"), A.Turn("assistant", "2")]))
-        self.assertEqual([t.text for t in memory.transcript("s5").turns], ["two", "2"])
+        transcript = self.memory.transcript("old")
+        self.assertEqual([(t.seq, t.text) for t in transcript.turns], [(1, "hi"), (2, "yo")])
+        header = self.store.get(A.ConversationMemory.NAMESPACE, "old")
+        self.assertNotIn("turns", header)
+        self.assertEqual(len(A.ConversationMemory(self.store).transcript("old")), 2)
 
     def test_forget_erases_the_transcript(self):
         self.exchange("hello", "hi")
         self.memory.forget("s1")
         self.assertEqual(self.memory.history("s1"), [])
         self.assertIsNone(self.store.get(A.ConversationMemory.NAMESPACE, "s1"))
+        self.assertEqual(self.store.list(A.ConversationMemory.turns_namespace("s1")), [])
+
+    def test_forget_works_over_a_store_without_clear(self):
+        class Plain(A.MemoryStore):
+            clear = None
+
+        store = Plain()
+        memory = A.ConversationMemory(store)
+        run(memory.remember("s1", [A.Turn("user", "a"), A.Turn("assistant", "b")]))
+        memory.forget("s1")
+        self.assertEqual(store.list(A.ConversationMemory.turns_namespace("s1")), [])
 
     def test_disabled_memory_remembers_nothing(self):
         memory = A.ConversationMemory(self.store, enabled=False)
@@ -1328,6 +1356,752 @@ class MemoryTest(unittest.TestCase):
         self.assertEqual(memory.history("s6"), [])
         self.assertEqual(memory.replay("s6"), [])
         self.assertIsNone(self.store.get(A.ConversationMemory.NAMESPACE, "s6"))
+
+
+def tool_pair(call_id, output="ok", name="read", args="{}"):
+    """The two input items of one answered tool call."""
+    return [
+        {"type": "function_call", "call_id": call_id, "name": name, "arguments": args},
+        {"type": "function_call_output", "call_id": call_id, "output": output},
+    ]
+
+
+def user(text):
+    return {"role": "user", "content": text}
+
+
+def assistant(text):
+    return {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": text}],
+    }
+
+
+def thought(text):
+    return {"type": "reasoning", "id": f"rs-{text}", "summary": [{"type": "summary_text", "text": text}]}
+
+
+class WindowTest(unittest.TestCase):
+    """The model's view of a journal: the newest summary, then the turns it keeps."""
+
+    def setUp(self):
+        self.memory = A.ConversationMemory(A.MemoryStore())
+
+    def journal(self, *turns):
+        return self.memory.journal("s", *turns)
+
+    def test_without_a_summary_every_turn_is_replayed(self):
+        transcript = self.journal(A.Turn("user", "a"), A.Turn("assistant", "b"))
+        items, owners = transcript.window()
+        self.assertEqual([i["content"] for i in items], ["a", "b"])
+        self.assertEqual(owners, transcript.turns)
+
+    def test_a_summary_opens_the_window_and_keeps_from_its_seq(self):
+        transcript = self.journal(
+            A.Turn("user", "a"), A.Turn("assistant", "b"), A.Turn("user", "c"), A.Turn("assistant", "d")
+        )
+        self.journal(A.Turn("compact", "SUM", meta={"summary": True, "keep": {"seq": 3}}))
+        items = transcript.messages()
+        self.assertEqual(items[0], A.summary_message("SUM"))
+        self.assertEqual([i["content"] for i in items[1:]], ["c", "d"])
+
+    def test_compactions_are_shown_to_clients_but_never_to_the_model(self):
+        transcript = self.journal(A.Turn("user", "a"), A.Turn("compact", "cleared 2 outputs"))
+        self.assertEqual(transcript.messages(), [{"role": "user", "content": "a"}])
+        self.assertEqual([t["kind"] for t in self.memory.replay("s")], ["prompt", "compact"])
+
+    def test_a_summary_made_mid_run_keeps_from_the_calls_of_a_response(self):
+        transcript = self.journal(
+            A.Turn("user", "go", run="r1"),
+            A.Turn("tool", "t1", run="r1", items=tool_pair("c1")),
+            A.Turn("compact", "SUM", run="r1", meta={"summary": True, "keep": {"run": "r1", "calls": ["c2", "c3"]}}),
+            A.Turn("assistant", "reading two", run="r1"),
+            A.Turn("tool", "t3", run="r1", items=tool_pair("c3")),
+            A.Turn("tool", "t2", run="r1", items=tool_pair("c2")),
+            A.Turn("assistant", "done", run="r1"),
+        )
+        self.assertEqual(transcript.boundary(), 3)
+        items = transcript.messages()
+        self.assertEqual(items[0]["content"], A.summary_message("SUM")["content"])
+        self.assertEqual(items[1]["content"], "reading two")
+        self.assertEqual([i.get("call_id") for i in items[2:6]], ["c3", "c3", "c2", "c2"])
+
+    def test_a_reference_that_resolves_to_nothing_keeps_what_follows_the_summary(self):
+        transcript = self.journal(
+            A.Turn("user", "a"),
+            A.Turn("compact", "SUM", meta={"summary": True, "keep": {"run": "x", "calls": ["gone"]}}),
+            A.Turn("user", "b"),
+        )
+        self.assertEqual([i["content"] for i in transcript.messages()[1:]], ["b"])
+
+    def test_a_cleared_output_is_replayed_as_its_stub(self):
+        transcript = self.journal(
+            A.Turn("tool", "t", items=tool_pair("c1", "x" * 500), meta={"cleared": "[stub]"})
+        )
+        self.assertEqual(transcript.messages()[1]["output"], "[stub]")
+
+    def test_the_newest_summary_wins(self):
+        transcript = self.journal(
+            A.Turn("user", "a"),
+            A.Turn("compact", "OLD", meta={"summary": True, "keep": {"seq": 1}}),
+            A.Turn("user", "b"),
+            A.Turn("compact", "NEW", meta={"summary": True, "keep": {"seq": 3}}),
+            A.Turn("user", "c"),
+        )
+        items = transcript.messages()
+        self.assertEqual(items[0], A.summary_message("NEW"))
+        self.assertEqual([i["content"] for i in items[1:]], ["b", "c"])
+
+
+class TokenCounterTest(unittest.TestCase):
+    def setUp(self):
+        self.counter = A.TokenCounter(None)
+
+    def test_text_is_estimated_from_its_utf8_size(self):
+        self.assertEqual(self.counter.text("abcdefgh"), 2)
+        self.assertEqual(self.counter.text("ab"), 1)
+        self.assertEqual(self.counter.text(""), 0)
+        self.assertEqual(self.counter.text("日本"), 2)  # 6 bytes
+
+    def test_an_item_costs_its_framing_and_its_words(self):
+        framing = A.TokenCounter.MESSAGE_TOKENS
+        self.assertEqual(self.counter.item(user("abcdefgh")), framing + 2)
+        call, output = tool_pair("c1", "x" * 40, name="abcd", args="abcd")
+        self.assertEqual(self.counter.item(call), framing + 2)
+        self.assertEqual(self.counter.item(output), framing + 10)
+        self.assertEqual(self.counter.item(thought("abcd")), framing + 1)
+
+    def test_an_image_costs_a_fixed_amount(self):
+        item = {"role": "user", "content": [{"type": "input_image", "image_url": "data:..."}]}
+        self.assertEqual(
+            self.counter.item(item), A.TokenCounter.MESSAGE_TOKENS + A.TokenCounter.IMAGE_TOKENS
+        )
+
+    def test_counts_are_cached_by_content(self):
+        calls = []
+        text = self.counter.text
+        self.counter.text = lambda s: (calls.append(s), text(s))[1]
+        self.counter.item(user("same"))
+        self.counter.item(user("same"))
+        self.assertEqual(len(calls), 1)
+
+    def test_calibration_follows_the_provider(self):
+        self.assertEqual(self.counter.calibrate(1000, 1500), 1.5)
+        self.assertEqual(self.counter.calibrate(1000, 1500), 1.5)
+        self.assertAlmostEqual(self.counter.calibrate(1000, 1000), 1.25)
+        self.assertEqual(self.counter.scaled(100), 125)
+        self.assertEqual(self.counter.raw(125), 100)
+
+    def test_calibration_ignores_noise_and_is_bounded(self):
+        self.assertEqual(self.counter.calibrate(10, 1000), 1.0)
+        self.assertEqual(self.counter.calibrate(1000, 0), 1.0)
+        self.assertEqual(self.counter.calibrate(1000, 100000), 4.0)
+
+    def test_a_missing_tokenizer_falls_back_to_the_estimate(self):
+        counter = A.TokenCounter("no-such-encoding")
+        with unittest.mock.patch.object(A.TokenCounter, "encodings", {}), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(counter.text("abcdefgh"), 2)
+
+
+class SafeCutTest(unittest.TestCase):
+    def test_a_call_is_never_parted_from_its_output(self):
+        items = [user("go"), *tool_pair("c1"), *tool_pair("c2"), assistant("done")]
+        self.assertEqual(A.safe_cuts(items), [1, 3, 5])
+
+    def test_parallel_calls_are_one_unit(self):
+        items = [user("go"), *[tool_pair("a")[0], tool_pair("b")[0]], tool_pair("a")[1], tool_pair("b")[1], assistant("x")]
+        self.assertEqual(A.safe_cuts(items), [1, 5])
+
+    def test_reasoning_stays_with_what_it_led_to(self):
+        items = [user("go"), thought("t"), *tool_pair("c1"), thought("u"), assistant("x")]
+        self.assertEqual(A.safe_cuts(items), [1, 4])
+
+    def test_calls_stay_with_the_message_that_announced_them(self):
+        items = [user("go"), assistant("reading"), *tool_pair("c1"), user("next")]
+        self.assertEqual(A.safe_cuts(items), [1, 4])
+
+    def test_a_call_without_an_output_does_not_block_later_cuts(self):
+        items = [user("go"), {"type": "web_search_call", "id": "w"}, user("next")]
+        self.assertEqual(A.safe_cuts(items), [1, 2])
+
+
+class ContextBudgetTest(unittest.TestCase):
+    def test_the_reserve_is_a_fifth_of_the_window_within_bounds(self):
+        self.assertEqual(A.ContextBudget.of(128_000).reserve, 25_600)
+        self.assertEqual(A.ContextBudget.of(1_000_000).reserve, 32_768)
+        self.assertEqual(A.ContextBudget.of(16_000).reserve, 4096)
+        self.assertEqual(A.ContextBudget.of(4096).reserve, 2048)
+
+    def test_the_watermarks_are_shares_of_the_usable_budget(self):
+        budget = A.ContextBudget.of(10_000, 2_000, 0.8, 0.5)
+        self.assertEqual((budget.usable, budget.high, budget.low), (8000, 6400, 4000))
+
+    def test_values_are_made_sane(self):
+        budget = A.ContextBudget.of(0, 0, 2.0, 3.0)
+        self.assertEqual(budget.window, A.DEFAULT_CONTEXT_WINDOW)
+        self.assertEqual((budget.trigger, budget.target), (1.0, 1.0))
+
+    def test_usage_reports_the_fill(self):
+        usage = A.ContextBudget.of(10_000, 2_000).usage(2000)
+        self.assertEqual(usage["fill"], 0.25)
+        self.assertTrue(usage["estimated"])
+
+
+class CompactorTest(unittest.TestCase):
+    """The tiers, on a budget small enough to count by hand (bytes / 4)."""
+
+    def setUp(self):
+        self.summaries: list[tuple[str, str, str]] = []
+        # usable 1000, high 800, low 500
+        self.budget = A.ContextBudget.of(2000, 1000, 0.8, 0.5)
+
+    async def summarize(self, previous, segment, focus):
+        self.summaries.append((previous, segment, focus))
+        return f"S{len(self.summaries)}"
+
+    def compactor(self, **overrides):
+        options = dict(summarize=self.summarize, keep=2, summary_tokens=256, reasoning=True)
+        options.update(overrides)
+        return A.Compactor(A.TokenCounter(None), self.budget, **options)
+
+    def big(self, tokens):
+        return "x" * (tokens * 4)
+
+    def test_nothing_happens_below_the_high_watermark(self):
+        state = A.ContextState()
+        items = [user(self.big(100)), assistant(self.big(100))]
+        self.assertIsNone(run(self.compactor().compact(items, state)))
+        self.assertEqual(self.compactor().view(items, state), items)
+
+    def test_old_reasoning_goes_first_and_the_newest_response_keeps_its_own(self):
+        items = [user("go"), thought(self.big(400) + "a"), *tool_pair("c1"), thought(self.big(400) + "b"), *tool_pair("c2"), thought("now"), *tool_pair("c3")]
+        state = A.ContextState()
+        report = run(self.compactor().compact(items, state))
+        self.assertEqual(report.thoughts, 2)
+        self.assertEqual(report.summarized, 0)
+        sent = self.compactor().view(items, state)
+        self.assertEqual(sent[1]["summary"][0]["text"], A.THOUGHT_STUB)
+        self.assertEqual(sent[7]["summary"][0]["text"], "now")
+
+    def test_reasoning_a_provider_never_sees_is_not_counted(self):
+        items = [user("go"), thought(self.big(900)), *tool_pair("c1")]
+        self.assertIsNone(run(self.compactor(reasoning=False).compact(items, A.ContextState())))
+
+    def test_old_outputs_are_cleared_oldest_first_until_the_target(self):
+        self.budget = A.ContextBudget.of(2000, 1000, 0.8, 0.6)  # high 800, low 600
+        pairs = [tool_pair(f"c{n}", self.big(210)) for n in range(6)]
+        items = [user("go"), *[i for p in pairs for i in p]]
+        state = A.ContextState()
+        report = run(self.compactor(keep=1).compact(items, state))
+        self.assertEqual(report.cleared, ["c0", "c1", "c2", "c3"])
+        self.assertEqual(report.summarized, 0)
+        self.assertLessEqual(report.after, self.budget.low)
+        sent = self.compactor().view(items, state)
+        self.assertIn("read output cleared to save context", sent[2]["output"])
+        self.assertEqual(sent[10]["output"], self.big(210))  # under the target: left alone
+        self.assertEqual(sent[12]["output"], self.big(210))  # the newest: spared
+
+    def test_the_newest_outputs_are_spared(self):
+        pairs = [tool_pair(f"c{n}", self.big(300)) for n in range(4)]
+        items = [user("go"), *[i for p in pairs for i in p]]
+        report = run(self.compactor(keep=2).compact(items, A.ContextState()))
+        self.assertNotIn("c2", report.cleared)
+        self.assertNotIn("c3", report.cleared)
+
+    def test_small_outputs_are_not_worth_clearing(self):
+        items = [user(self.big(850)), *tool_pair("c0", "tiny"), *tool_pair("c1"), *tool_pair("c2")]
+        report = run(self.compactor().compact(items, A.ContextState()))
+        self.assertEqual(report.cleared, [])
+
+    def test_the_oldest_prefix_is_folded_into_the_summary(self):
+        items = [user(self.big(200)), assistant(self.big(200)), user(self.big(200)), assistant(self.big(200)), user("last")]
+        state = A.ContextState()
+        report = run(self.compactor().compact(items, state))
+        self.assertEqual(report.summarized, 3)
+        self.assertEqual(state.cut, 3)
+        sent = self.compactor().view(items, state)
+        self.assertEqual(sent[0], A.summary_message("S1"))
+        self.assertEqual(sent[1:], items[3:])
+        previous, segment, _ = self.summaries[0]
+        self.assertEqual(previous, "")
+        self.assertTrue(segment.startswith("USER: xxx"))
+        self.assertIn("ASSISTANT: xxx", segment)
+
+    def test_a_summary_is_folded_further_never_rebuilt(self):
+        compactor = self.compactor()
+        state = A.ContextState()
+        items = [user(self.big(300)), assistant(self.big(300)), user(self.big(300)), assistant("a")]
+        run(compactor.compact(items, state))
+        items += [user(self.big(300)), assistant(self.big(300)), user(self.big(300)), assistant("b")]
+        run(compactor.compact(items, state))
+        self.assertEqual(self.summaries[1][0], "S1")
+        self.assertNotIn("USER: " + self.big(300)[:10] + "x" * 1190, self.summaries[1][1][:0])
+        self.assertEqual(compactor.view(items, state)[0], A.summary_message("S2"))
+
+    def test_decisions_hold_while_the_input_grows(self):
+        compactor = self.compactor()
+        state = A.ContextState()
+        items = [user(self.big(300)), assistant(self.big(300)), user(self.big(300)), assistant("a")]
+        run(compactor.compact(items, state))
+        before = compactor.view(items, state)
+        items.append(user("next"))
+        self.assertIsNone(run(compactor.compact(items, state)))
+        self.assertEqual(compactor.view(items, state), [*before, user("next")])
+
+    def test_the_cut_is_found_again_in_a_list_that_moved(self):
+        compactor = self.compactor()
+        state = A.ContextState()
+        items = [user(self.big(300)), assistant(self.big(300)), user(self.big(300)), assistant("a")]
+        run(compactor.compact(items, state))
+        moved = [user("prepended"), *items]
+        self.assertEqual(compactor.view(moved, state)[1:], items[state.cut:])
+
+    def test_the_request_in_flight_is_kept_verbatim_once_summarised(self):
+        items = [user("do the thing"), *[i for n in range(6) for i in tool_pair(f"c{n}", self.big(150))]]
+        state = A.ContextState()
+        report = run(self.compactor(keep=6).compact(items, state, pinned_at=0, pinned="do the thing"))
+        self.assertGreater(report.summarized, 0)
+        head = self.compactor().view(items, state)[0]["content"]
+        self.assertIn(A.PINNED_HEADER, head)
+        self.assertTrue(head.rstrip().endswith("do the thing"))
+
+    def test_a_failing_summarizer_leaves_an_extract(self):
+        async def broken(previous, segment, focus):
+            raise RuntimeError("down")
+
+        items = [user(self.big(300) + " Q"), *tool_pair("c1", self.big(300)), assistant(self.big(300)), user("last")]
+        state = A.ContextState()
+        with contextlib.redirect_stderr(io.StringIO()):
+            report = run(self.compactor(summarize=broken, keep=1).compact(items, state))
+        self.assertGreater(report.summarized, 0)
+        self.assertIn("Earlier segment (no summary)", state.summary)
+        self.assertIn("TOOL CALL read", state.summary)
+
+    def test_without_a_summarizer_the_prefix_is_dropped_with_a_note(self):
+        items = [user(self.big(300)), assistant(self.big(300)), user(self.big(300)), assistant("a")]
+        state = A.ContextState()
+        run(self.compactor(summarize=None).compact(items, state))
+        self.assertIn("earlier items were dropped", state.summary)
+
+    def test_a_large_segment_is_folded_a_chunk_at_a_time(self):
+        items = [user(self.big(300)), assistant(self.big(300)), user(self.big(300)), assistant("a")]
+        run(self.compactor(segment_limit=350).compact(items, A.ContextState()))
+        self.assertEqual(len(self.summaries), 3)
+        self.assertEqual([s[0] for s in self.summaries], ["", "S1", "S2"])
+
+    def test_forcing_folds_everything_but_the_newest_response(self):
+        items = [user("a"), assistant("b"), user("c"), assistant("d")]
+        state = A.ContextState()
+        report = run(self.compactor().compact(items, state, force=True, focus="the api"))
+        self.assertEqual(report.reason, "forced")
+        self.assertEqual(state.cut, 3)
+        self.assertEqual(self.summaries[0][2], "the api")
+
+    def test_a_giant_newest_output_is_clipped_to_fit(self):
+        items = [user("go"), *tool_pair("c1", self.big(3000))]
+        state = A.ContextState()
+        report = run(self.compactor().compact(items, state))
+        self.assertEqual(report.clipped, ["c1"])
+        self.assertLessEqual(report.after, self.budget.usable)
+        self.assertIn("chars omitted", self.compactor().view(items, state)[-1]["output"])
+
+    def test_the_marker_is_announced_before_the_slow_tier(self):
+        order: list[str] = []
+
+        async def summarize(previous, segment, focus):
+            order.append("summarize")
+            return "S"
+
+        async def on_summary(report):
+            order.append("announce")
+
+        items = [user(self.big(300)), assistant(self.big(300)), user(self.big(300)), assistant("a")]
+        run(self.compactor(summarize=summarize).compact(items, A.ContextState(), on_summary=on_summary))
+        self.assertEqual(order, ["announce", "summarize"])
+
+    def test_calibration_moves_the_watermarks(self):
+        compactor = self.compactor()
+        items = [user(self.big(350)), assistant(self.big(350))]
+        self.assertIsNone(run(compactor.compact(items, A.ContextState())))
+        compactor.counter.ratio = 2.0  # the provider counts twice what we estimate
+        self.assertIsNotNone(run(compactor.compact(items, A.ContextState())))
+
+
+class OverflowTest(unittest.TestCase):
+    class BadRequest(Exception):
+        status_code = 400
+
+    def test_context_length_errors_are_recognised(self):
+        self.assertTrue(A.is_overflow(self.BadRequest("This model's maximum context length is 8192 tokens")))
+        self.assertTrue(A.is_overflow(self.BadRequest("prompt is too long: 210000 tokens > 200000 maximum")))
+        self.assertFalse(A.is_overflow(self.BadRequest("invalid tool schema")))
+        self.assertEqual(A.classify_error(self.BadRequest("context_length_exceeded")), A.ErrorKind.CONTEXT)
+
+    def test_a_rate_limit_on_tokens_is_not_an_overflow(self):
+        class RateLimitError(Exception):
+            status_code = 429
+
+        self.assertFalse(A.is_overflow(RateLimitError("too many tokens per minute")))
+
+    def test_the_window_an_error_names_is_read(self):
+        self.assertEqual(A.overflow_window("maximum context length is 8,192 tokens"), 8192)
+        self.assertEqual(A.overflow_window("prompt is too long: 210000 tokens > 200000 maximum"), 200000)
+        self.assertEqual(A.overflow_window("context window of 32768 exceeded"), 32768)
+        self.assertEqual(A.overflow_window("nope"), 0)
+
+
+class WindowProbeTest(unittest.TestCase):
+    """What a provider says about its window (the probe is stubbed module wide)."""
+
+    def probe(self, data):
+        pool = A.ModelPool()
+
+        class Models:
+            async def list(self):
+                return types.SimpleNamespace(
+                    data=[types.SimpleNamespace(model_dump=functools.partial(dict, d)) for d in data]
+                )
+
+        pool.client = lambda spec: types.SimpleNamespace(models=Models())
+
+        async def no_ollama(spec):
+            return 0
+
+        pool.probe_ollama = no_ollama
+        return run(_probe_window(pool, A.ModelSpec("leader", "m/x", "http://url", "")))
+
+    def test_an_openrouter_listing_gives_the_context_length(self):
+        self.assertEqual(
+            self.probe([{"id": "other", "context_length": 1}, {"id": "m/x", "context_length": 163840, "top_provider": {"context_length": 64000}}]),
+            163840,
+        )
+
+    def test_a_vllm_listing_gives_the_max_model_len(self):
+        self.assertEqual(self.probe([{"id": "m/x", "max_model_len": 32768}]), 32768)
+
+    def test_a_listing_without_the_model_says_nothing(self):
+        self.assertEqual(self.probe([{"id": "other", "context_length": 1}]), 0)
+
+    def test_the_window_is_asked_once_and_failures_are_unknown(self):
+        pool = A.ModelPool()
+        calls = []
+
+        async def probe(spec):
+            calls.append(spec)
+            raise RuntimeError("offline")
+
+        pool.probe_window = probe
+        spec = A.ModelSpec("leader", "m", "http://url", "")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(run(pool.window(spec)), 0)
+            self.assertEqual(run(pool.window(spec)), 0)
+        self.assertEqual(len(calls), 1)
+        pool.learn_window(spec, 4096)
+        self.assertEqual(run(pool.window(spec)), 4096)
+
+
+class ContextRunTest(unittest.TestCase):
+    """In-run compaction through the real SDK runner, driven by a scripted model."""
+
+    def setUp(self):
+        from agents import function_tool
+
+        self.summaries: list[tuple[str, str, str]] = []
+
+        @function_tool
+        def read(path: str) -> str:
+            """Read a file."""
+            return "x" * 2400  # ~600 tokens
+
+        @function_tool
+        def write(path: str, text: str) -> str:
+            """Write a file."""
+            return "ok"
+
+        self.tool = read
+        self.writer = write
+
+    def engine(self, steps, **overrides):
+        from agents.testing import ScriptedModel
+
+        model = ScriptedModel(steps)
+        test = self
+
+        class Scripted(A.Engine):
+            def build_model(self, config, role=A.LEADER_ROLE):
+                return model
+
+            def build_summarizer(self, config):
+                async def summarize(previous, segment, focus=""):
+                    test.summaries.append((previous, segment, focus))
+                    return f"SUMMARY {len(test.summaries)}"
+
+                return summarize
+
+        options = dict(env=False, config_file=False, context_window=6000, context_reserve=1000, context_keep=2)
+        options.update(overrides)
+        engine = Scripted(**options)
+        self.addCleanup(engine.close)
+        return engine, model
+
+    def reads(self, count):
+        from agents.testing import assistant_message, function_call
+
+        steps = [[function_call("read", {"path": f"f{n}"}, call_id=f"c{n}")] for n in range(count)]
+        return steps + [[assistant_message("done")]]
+
+    def test_a_long_tool_loop_is_compacted_as_it_goes(self):
+        engine, model = self.engine(self.reads(12))
+        seen: list[A.Event] = []
+        engine.events.on(A.EventType.ALL, seen.append)
+        result = run(engine.run("read them all", tools=[self.tool]))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.output, "done")
+        budget = result.context.budget
+        sizes = [result.context.counter.items(call.input) for call in model.calls]
+        self.assertLessEqual(max(sizes), budget.high)
+        self.assertTrue(result.context.compactions)
+        kinds = [e.type for e in seen]
+        self.assertIn(A.EventType.CONTEXT_COMPACT, kinds)
+        self.assertIn(A.EventType.CONTEXT_USAGE, kinds)
+        markers = [e for e in seen if e.type == A.EventType.BLOCK_END and e.data.get("kind") == "compact"]
+        self.assertTrue(markers)
+
+    def test_the_prefix_only_changes_at_a_compaction(self):
+        engine, model = self.engine(self.reads(12))
+        result = run(engine.run("read them all", tools=[self.tool]))
+        inputs = [call.input for call in model.calls]
+        changes = sum(
+            1 for before, after in zip(inputs, inputs[1:]) if after[: len(before)] != before
+        )
+        self.assertEqual(changes, len(result.context.compactions))
+
+    def test_the_model_keeps_its_request_and_its_newest_step(self):
+        engine, model = self.engine(self.reads(12), context_keep=1, context_target=0.3)
+        run(engine.run("read them all", tools=[self.tool]))
+        last = model.calls[-1].input
+        self.assertIn("read them all", json.dumps(last))
+        self.assertEqual(last[-1]["type"], "function_call_output")
+        self.assertEqual(last[-1]["call_id"], "c11")
+
+    def writes(self, count):
+        from agents.testing import assistant_message, function_call
+
+        steps = [
+            [function_call("write", {"path": f"f{n}", "text": "z" * 2000}, call_id=f"w{n}")]
+            for n in range(count)
+        ]
+        return steps + [[assistant_message("done")]]
+
+    def test_clearing_outputs_spares_a_summary(self):
+        engine, model = self.engine(self.reads(16), context_keep=1, context_target=0.3)
+        result = run(engine.run("read them all", tools=[self.tool]))
+        self.assertTrue(result.context.compactions)
+        self.assertEqual(self.summaries, [])
+
+    def test_summaries_are_anchored_on_the_previous_one(self):
+        engine, model = self.engine(self.writes(24), context_target=0.3)
+        result = run(engine.run("write them all", tools=[self.writer]))
+        self.assertTrue(result.ok, result.error)
+        self.assertGreaterEqual(len(self.summaries), 2)
+        self.assertEqual(self.summaries[1][0], "SUMMARY 1")
+        self.assertIn("TOOL CALL write", self.summaries[0][1])
+        sizes = [result.context.counter.items(call.input) for call in model.calls]
+        self.assertLessEqual(max(sizes), result.context.budget.high)
+
+    def test_the_provider_usage_calibrates_the_count(self):
+        from agents.usage import Usage
+        from agents.testing import ModelStep, assistant_message, function_call
+
+        steps = [
+            ModelStep(output=[function_call("read", {"path": "a"}, call_id="c1")], usage=Usage(requests=1, input_tokens=5000, output_tokens=10)),
+            ModelStep(output=[assistant_message("done")], usage=Usage(requests=1, input_tokens=5000, output_tokens=10)),
+        ]
+        engine, model = self.engine(steps, context_window=200_000)
+        result = run(engine.run("read", tools=[self.tool]))
+        self.assertTrue(result.ok, result.error)
+        self.assertGreater(result.context.counter.ratio, 1.0)
+
+    def test_a_context_length_error_compacts_harder_and_retries(self):
+        from agents.testing import ModelStep, assistant_message, function_call
+
+        class BadRequest(Exception):
+            status_code = 400
+
+        steps = [[function_call("read", {"path": f"f{n}"}, call_id=f"c{n}")] for n in range(4)]
+        steps += [ModelStep.raise_error(BadRequest("This model's maximum context length is 3000 tokens")), [assistant_message("done")]]
+        engine, model = self.engine(steps, context_window=50_000)
+        result = run(engine.run("read", tools=[self.tool]))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.context.budget.window, 3000)
+        self.assertEqual(result.context.compactions[-1].reason, "overflow")
+        spec = engine.config.model_spec(A.LEADER_ROLE)
+        self.assertEqual(run(engine.models.window(spec)), 3000)
+        self.assertLess(len(model.calls[-1].input), len(model.calls[-2].input))
+
+    def test_compaction_can_be_switched_off(self):
+        engine, model = self.engine(self.reads(3), context_trigger=0)
+        result = run(engine.run("read", tools=[self.tool]))
+        self.assertIsNone(result.context)
+        self.assertEqual(len(model.calls[-1].input), 1 + 2 * 3)
+
+
+class AgentContextTest(unittest.TestCase):
+    """Compaction over the journal: an endless chat on a small window."""
+
+    def setUp(self):
+        from agents import function_tool
+
+        self.summaries: list[tuple[str, str, str]] = []
+        self.steps: list = []
+        test = self
+
+        @function_tool
+        def write(path: str, text: str) -> str:
+            """Write a file."""
+            return "ok"
+
+        class Scripted(A.Agent):
+            def build_model(self, config, role=A.LEADER_ROLE):
+                from agents.testing import ScriptedModel, assistant_message
+
+                return ScriptedModel(test.steps.pop(0) if test.steps else [[assistant_message("ok " + "y" * 800)]])
+
+            def build_tools(self, *args, **kwargs):
+                return [write]
+
+            def build_summarizer(self, config):
+                async def summarize(previous, segment, focus=""):
+                    test.summaries.append((previous, segment, focus))
+                    return f"SUMMARY {len(test.summaries)}"
+
+                return summarize
+
+        self.agent = Scripted(
+            console=False,
+            store=A.MemoryStore(),
+            config_file=False,
+            context_window=6000,
+            context_reserve=1000,
+            context_keep=2,
+        )
+        self.addCleanup(self.agent.close)
+        self.session = self.agent.sessions.create()
+
+    def chat(self, text):
+        result = run(self.agent.run("{{ config.input }}", session=self.session, input=text))
+        self.assertTrue(result.ok, result.error)
+        return result
+
+    def transcript(self):
+        return self.agent.memory.transcript(self.session.id)
+
+    def test_an_endless_chat_stays_inside_the_window(self):
+        for n in range(20):
+            self.chat(f"question {n} " + "q" * 400)
+        transcript = self.transcript()
+        self.assertEqual(sum(t.role == "user" for t in transcript.turns), 20)  # every turn kept
+        self.assertIsNotNone(transcript.summary())
+        counter = self.agent.counter(self.agent.config)
+        budget = A.ContextBudget.of(6000, 1000)
+        self.assertLessEqual(counter.items(transcript.messages()), budget.high)
+
+    def test_the_next_run_starts_from_the_summary(self):
+        for n in range(16):
+            self.chat(f"question {n} " + "q" * 400)
+        seen: list = []
+        original = self.agent.build_model
+
+        def spy(config, role=A.LEADER_ROLE):
+            model = original(config, role)
+            seen.append(model)
+            return model
+
+        self.agent.build_model = spy
+        self.chat("one more")
+        first = seen[0].calls[0].input
+        self.assertTrue(first[0]["content"].startswith(A.SUMMARY_HEADER))
+        self.assertEqual(first[-1]["content"], "one more")
+
+    def test_a_summary_made_mid_run_is_journaled_against_its_turns(self):
+        from agents.testing import assistant_message, function_call
+
+        self.steps.append(
+            [[function_call("write", {"path": f"f{n}", "text": "z" * 2000}, call_id=f"w{n}")] for n in range(16)]
+            + [[assistant_message("done")]]
+        )
+        self.chat("write everything")
+        transcript = self.transcript()
+        summaries = [t for t in transcript.turns if t.role == "compact" and t.meta.get("summary")]
+        self.assertTrue(summaries)
+        keep = summaries[-1].meta["keep"]
+        self.assertEqual(list(keep), ["seq"])  # settled from the calls it kept
+        kept = transcript.turns[transcript.boundary()]
+        self.assertEqual(kept.role, "tool")
+        items = transcript.messages()
+        self.assertTrue(items[0]["content"].startswith(A.SUMMARY_HEADER))
+        self.assertIn("write everything", items[0]["content"])  # the request, pinned
+        self.assertEqual(items[-1]["content"][0]["text"], "done")
+
+    def test_compact_command_folds_the_conversation_now(self):
+        self.chat("hello")
+        self.chat("world")
+        result = run(self.agent.commands.invoke("/compact the greetings", session_id=self.session.id))
+        self.assertTrue(result["ok"], result)
+        self.assertIn("Compacted", result["message"])
+        self.assertEqual(self.summaries[-1][2], "the greetings")
+        replayed = self.agent.memory.replay(self.session.id)
+        self.assertEqual(replayed[-1]["kind"], "compact")
+        self.assertTrue(replayed[-1]["meta"]["summary"])
+
+    def test_compact_command_with_nothing_to_compact(self):
+        empty = self.agent.sessions.create()
+        result = run(self.agent.commands.invoke("/compact", session_id=empty.id))
+        self.assertEqual(result["message"], "Nothing to compact")
+
+    def test_compact_command_when_nothing_can_be_folded(self):
+        self.agent.memory.journal(self.session.id, A.Turn("user", "only this"))
+        result = run(self.agent.commands.invoke("/compact", session_id=self.session.id))
+        self.assertEqual(result["message"], "Nothing to compact")
+        self.assertIsNone(self.transcript().summary())
+
+    def test_the_gauge_never_waits_on_a_provider(self):
+        agent = A.Agent(console=False, store=A.MemoryStore(), config_file=False)
+        self.addCleanup(agent.close)
+        session = agent.sessions.create()
+        agent.memory.journal(session.id, A.Turn("user", "remembered"))
+        probed = []
+
+        async def probe(spec):
+            probed.append(spec)
+            return 64_000
+
+        agent.models.probe_window = probe
+        self.assertIsNone(run(agent.context_usage(session.id)))
+        self.assertEqual(probed, [])
+        agent.models.learn_window(agent.config.model_spec(A.LEADER_ROLE), 64_000)
+        self.assertEqual(run(agent.context_usage(session.id))["window"], 64_000)
+
+    def test_a_compaction_between_runs_happens_in_the_background(self):
+        async def scenario():
+            for n in range(12):
+                await self.agent.run("{{ config.input }}", session=self.session, input=f"q{n} " + "q" * 600)
+            await self.agent.compacted(self.session.id)
+
+        run(scenario())
+        summary = self.transcript().summary()
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.run, "")  # made by no run: between them
+
+    def test_usage_is_kept_for_a_client_that_joins(self):
+        self.chat("hello")
+        usage = run(self.agent.context_usage(self.session.id))
+        self.assertEqual(usage["window"], 6000)
+        self.assertGreater(usage["tokens"], 0)
+        fresh = self.agent.sessions.create()
+        self.agent.memory.journal(fresh.id, A.Turn("user", "remembered"))
+        self.assertTrue(run(self.agent.context_usage(fresh.id))["estimated"])
 
 
 class WorkspaceTest(unittest.TestCase):
@@ -2489,13 +3263,10 @@ class AgentRunTest(unittest.TestCase):
         run(self.agent.commands.invoke("/end", session_id=session.id))
         self.assertEqual(self.agent.memory.history(session.id), [])
 
-    def test_a_summarizer_is_only_built_when_asked_for(self):
-        self.assertIsNone(self.agent.memory.summarizer)
-        agent = self.FakeAgent(
-            console=False, store=A.MemoryStore(), memory_summary=True, inference_llm="m"
-        )
-        self.addCleanup(agent.close)
-        self.assertIsNotNone(agent.memory.summarizer)
+    def test_a_summarizer_is_built_unless_switched_off(self):
+        self.assertIsNotNone(self.agent.build_summarizer(self.agent.config))
+        off = self.agent.config.merge(context_summary=False)
+        self.assertIsNone(self.agent.build_summarizer(off))
 
 
 class ConsoleRendererTest(unittest.TestCase):
@@ -2523,6 +3294,16 @@ class ConsoleRendererTest(unittest.TestCase):
     @staticmethod
     def delta(kind, text):
         return A.Event(type=A.EventType.BLOCK_DELTA, data={"kind": kind, "text": text})
+
+    def test_a_compaction_and_the_context_use_are_reported(self):
+        usage = A.ContextBudget.of(128_000).usage(51_200)
+        self.renderer.handle(A.Event(type=A.EventType.CONTEXT_USAGE, data=usage))
+        self.renderer.handle(
+            A.Event(type=A.EventType.CONTEXT_COMPACT, data={"message": "Compacted 90k → 40k tokens"})
+        )
+        self.renderer.handle(A.Event(type=A.EventType.AGENT_END, data={}))
+        self.assertIn("~~ Compacted 90k → 40k tokens", self.buffer.text)
+        self.assertIn("ctx 50% · 51k / 102k", self.buffer.text)
 
     def test_only_a_terminal_gathers_text_into_frames(self):
         self.assertEqual(A.ConsoleRenderer(stream=self.Buffer()).frame, 0.0)
@@ -3131,11 +3912,11 @@ class ConfigFileTest(unittest.TestCase):
             A.Engine(config_file=self.tmp / "nowhere.yaml")
 
     def test_an_agent_reads_the_same_layer(self):
-        path = self.write("agentic.yaml", "name: scribe\nmemory_max_turns: 5")
+        path = self.write("agentic.yaml", "name: scribe\nmemory_tools: false")
         agent = A.Agent(console=False, store=A.MemoryStore(), config_file=path)
         self.addCleanup(agent.close)
         self.assertEqual(agent.config.name, "scribe")
-        self.assertEqual(agent.memory.max_turns, 5)
+        self.assertFalse(agent.memory.tools)
 
 
 class EnvFileTest(unittest.TestCase):

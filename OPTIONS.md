@@ -107,6 +107,55 @@ Replay journaled tool calls (call and clipped output) to the model, not only the
 - Expected format `true` or `false`, default `true`
 - The journal keeps tool calls either way, for display and for `/resume`
 
+### `context_window`
+Tokens the leader model's context window holds.
+- Environment variable: `AGENTIC_CONTEXT_WINDOW`
+- Expected format `{{TOKENS}}` (integer), default `0`: ask the provider (OpenRouter, vLLM, Together, Groq, LM Studio, Ollama), else `128000`
+- A context length error lowers it to the window the error names, for the rest of the process
+- Ollama truncates a too long prompt silently: set it to the server's `num_ctx` when the model is not loaded yet (unknown: `8192`)
+
+### `context_reserve`
+Tokens kept free for the reply, reasoning included.
+- Environment variable: `AGENTIC_CONTEXT_RESERVE`
+- Expected format `{{TOKENS}}` (integer), default `0`: a fifth of the window, between `4096` and `32768`
+- Raise it for a model that thinks at length
+
+### `context_trigger`
+Share of the usable budget (window minus reserve) past which the context is compacted.
+- Environment variable: `AGENTIC_CONTEXT_TRIGGER`
+- Expected format `{{SHARE}}` (float), default `0.85`, `0` turns compaction off
+- Checked before every model call, so a long run of tool calls is compacted as it goes; between runs a background compaction starts at 0.9 × this
+
+### `context_target`
+Share of the usable budget a compaction brings the context down to.
+- Environment variable: `AGENTIC_CONTEXT_TARGET`
+- Expected format `{{SHARE}}` (float), default `0.5`
+- The gap to `context_trigger` is how far the context grows before the next compaction (and how long a provider's prompt cache holds)
+
+### `context_keep`
+Newest tool outputs a compaction never clears.
+- Environment variable: `AGENTIC_CONTEXT_KEEP`
+- Expected format `{{COUNT}}` (integer), default `4`
+- Older outputs are cleared first, oldest first, before anything is summarised; the call stays, its output becomes a stub
+
+### `context_summary`
+Fold what a compaction removes into a running summary (the `summary` role, falling back to the leader).
+- Environment variable: `AGENTIC_CONTEXT_SUMMARY`
+- Expected format `true` or `false`, default `true`
+- `false` drops it with a note instead: no model call, nothing remembered of it
+
+### `context_tokenizer`
+tiktoken encoding the context is counted with.
+- Environment variable: `AGENTIC_CONTEXT_TOKENIZER`
+- Expected format `{{ENCODING}}` or empty, default `o200k_base`
+- Empty (or a vocabulary that cannot be downloaded) estimates from the byte size; either way the count is calibrated on the usage the provider reports
+
+### `summary_max_tokens`
+Tokens a summary may grow to.
+- Environment variable: `AGENTIC_SUMMARY_MAX_TOKENS`
+- Expected format `{{TOKENS}}` (integer), default `4096`
+- The summarizer gets four times this (at least `8192`) to answer in, so a reasoning model has room to think
+
 ### `rules_enabled`
 Learn rules from votes (thumbs, `/good`, `/bad`) and append them to the instructions of every run.
 - Environment variable: `AGENTIC_RULES_ENABLED`

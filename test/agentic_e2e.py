@@ -74,6 +74,13 @@ TOOL_RESULT = "agentic.py — 4656 lines, 16 sections"
 #: What the scripted distiller learns from any vote.
 RULE = "Show the reasoning before the answer."
 
+#: What the scripted summarizer folds any conversation into (`/compact`).
+SUMMARY = """\
+## Goal
+Understand what `agentic.py` does.
+## Progress
+Read the module; summarised its three layers."""
+
 ANSWER_HEAD = """\
 `agentic.py` is one flat module: the agentic loop, the batteries around it and the application shell, in that order.
 
@@ -160,6 +167,15 @@ class ScriptedAgent(A.Agent):
     def build_sdk_agent(self, config: A.AgentConfig, tools: list[Any]) -> Any:
         return {"config": config, "tools": tools}
 
+    def build_summarizer(self, config: A.AgentConfig) -> Any:
+        """Fold any segment into the same summary, a moment later."""
+
+        async def summarize(previous: str, segment: str, focus: str = "") -> str:
+            await asyncio.sleep(self.pace * 10)
+            return SUMMARY
+
+        return summarize
+
     def build_distiller(self, config: A.AgentConfig) -> Any:
         """Turn every vote into the same rule, a moment later."""
 
@@ -177,6 +193,9 @@ class ScriptedAgent(A.Agent):
         result: A.RunResult,
     ) -> A.RunResult:
         """Publish the scripted reasoning, tool call and answer as the real stream would."""
+        if result.context is not None:  # the SDK filters the input of every call
+            items = [{"role": "user", "content": model_input}] if isinstance(model_input, str) else model_input
+            await result.context.fit(list(items))
         await self.think(result)
         await self.call_tool(result)
         block = A.Block(
@@ -356,6 +375,11 @@ class Server:
             port=self.port,
             workspace_root=self.workspaces,
             session_sweep_interval=0,
+            # offline and the same every time: no window lookup, no tokenizer
+            # download, and a window small enough for the gauge to show
+            context_window=4096,
+            context_reserve=1024,
+            context_tokenizer="",
         )
         server = A.WebServer(agent, host=self.host, port=self.port)
         self.loop = asyncio.get_running_loop()
@@ -639,6 +663,51 @@ def edit(browser: Any, device: Device, url: str, gate: Gate) -> None:
         context.close()
 
 
+def compact(browser: Any, device: Device, url: str, gate: Gate, out: Path) -> Path:
+    """Assert the context gauge and `/compact`: a run fills the vial, the
+    command folds the conversation into a marker block that holds the summary
+    and that a reload replays; returns a capture of it."""
+    context = browser.new_context(**device.context())
+    page = context.new_page()
+    marker = '.block[data-kind="compact"]'
+
+    def online() -> None:
+        page.wait_for_selector('#app[data-state="online"]')
+        page.wait_for_function("() => !document.getElementById('input').disabled")
+
+    def expect(ok: Any, what: str) -> None:
+        if not ok:
+            raise AssertionError(f"compact: {what}")
+
+    try:
+        page.goto(url, wait_until="load")
+        online()
+        page.fill("#input", PROMPT)
+        page.click("#send")
+        page.wait_for_function("() => document.getElementById('app').dataset.gauge")
+        page.wait_for_function("() => document.getElementById('stop').hidden")
+        fill = page.evaluate("() => document.getElementById('app').style.getPropertyValue('--fill')")
+        expect(0 < float(fill or 0) < 1, f"the gauge holds no fill ({fill!r})")
+        expect("context" in (page.get_attribute("#brand", "title") or ""), "the mark does not say the context use")
+        page.fill("#input", "/compact the module layers")
+        page.press("#input", "Enter")
+        page.wait_for_selector(f'{marker}[data-streaming="false"]')
+        label = page.text_content(f"{marker} .label") or ""
+        expect(label.startswith("compacted"), f"the marker is labelled {label!r}")
+        expect(page.get_attribute(marker, "data-collapsed") == "true", "the marker is not folded")
+        page.click(f"{marker} .block-toggle")
+        body = page.text_content(f"{marker} .block-body") or ""
+        expect("Goal" in body and "three layers" in body, "the summary is not in the marker")
+        settle(page)
+        shot = shoot(page, out, device, "compact")
+        page.reload()
+        online()
+        expect(page.locator(marker).count() == 1, "a reload did not replay the marker")
+        return shot
+    finally:
+        context.close()
+
+
 def settle(page: Any, milliseconds: int = 250) -> None:
     """Let the last paint land before the shutter."""
     page.wait_for_timeout(milliseconds)
@@ -670,6 +739,8 @@ def run(devices: Iterable[Device], out: Path, args: argparse.Namespace) -> list[
                 recover(browser, DEVICES[1], server.url, gate)
                 print("[e2e] editor: lift, highlight, draft, drop, submit")
                 edit(browser, DEVICES[1], server.url, gate)
+                print("[e2e] context: gauge, /compact, marker")
+                written.append(compact(browser, DEVICES[0], server.url, gate, out))
             finally:
                 browser.close()
     finally:
