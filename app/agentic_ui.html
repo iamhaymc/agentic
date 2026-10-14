@@ -11,7 +11,7 @@
 </head>
 
 <body>
-  <div class="app" id="app" data-state="connecting">
+  <div class="app" id="app" data-state="connecting" data-view="discussion">
     <header class="bar">
       <!-- The mark is the only status light: its ring, its core and its
              motion all change with the connection and with a live run. -->
@@ -32,7 +32,36 @@
         <p>Ask anything. Type <code>/help</code> for commands.</p>
       </div>
     </main>
+    <!-- The composer lifted into a full markdown editor. It shares the grid row
+           of the discussion and covers it, so the discussion keeps its scroll. -->
+    <section class="editor" id="editor" aria-label="Markdown editor">
+      <div class="editor-head">
+        <button class="button tiny" id="editor-copy" type="button" title="Copy" aria-label="Copy to clipboard">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="9" y="9" width="13" height="13" rx="2" />
+            <path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2" />
+          </svg>
+        </button>
+        <button class="tab drop" id="drop" type="button" title="Back to discussion" aria-label="Back to discussion">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+      </div>
+      <!-- The textarea is the input, its text transparent; the layer under it
+             paints the same characters highlighted. -->
+      <div class="editor-surface">
+        <pre class="editor-paint" aria-hidden="true"><code id="editor-paint"></code></pre>
+        <textarea id="editor-text" class="editor-text" placeholder="Message the agent…" spellcheck="false"
+          aria-label="Markdown"></textarea>
+      </div>
+    </section>
     <footer class="composer">
+      <button class="tab lift" id="lift" type="button" title="Markdown editor" aria-label="Open the markdown editor">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="m18 15-6-6-6 6" />
+        </svg>
+      </button>
       <div class="attachments" id="attachments" hidden></div>
       <div class="hints" id="hints" hidden></div>
       <form class="input-row" id="form" autocomplete="off">

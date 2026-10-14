@@ -575,6 +575,70 @@ def recover(browser: Any, device: Device, url: str, gate: Gate) -> None:
         context.close()
 
 
+#: What the editor check types: a heading, a list item to continue, emphasis and code.
+DRAFT = "# Plan\n\n- read **agentic.py** and `ui.js`"
+
+
+def edit(browser: Any, device: Device, url: str, gate: Gate) -> None:
+    """Assert the markdown editor: the lift carries the draft up, the paint
+    under the textarea holds the same characters highlighted, a list item
+    continues, the draft survives a reload, the drop carries it back down and
+    a submit from the editor sends it, clears it and drops to the discussion."""
+    context = browser.new_context(**device.context())
+    page = context.new_page()
+    view = "() => document.getElementById('app').dataset.view"
+    draft = "() => localStorage.getItem('agentic.draft')"
+
+    def online() -> None:
+        page.wait_for_selector('#app[data-state="online"]')
+        page.wait_for_function("() => !document.getElementById('input').disabled")
+
+    def expect(ok: Any, what: str) -> None:
+        if not ok:
+            raise AssertionError(f"editor: {what}")
+
+    try:
+        page.goto(url, wait_until="load")
+        online()
+        page.fill("#input", "# Plan")
+        page.click("#lift")
+        expect(page.evaluate(view) == "editor", "the lift did not open the editor")
+        expect(page.input_value("#editor-text") == "# Plan", "the box text did not move up")
+
+        page.fill("#editor-text", DRAFT)
+        paint = page.text_content("#editor-paint") or ""
+        expect(paint == DRAFT, "the painted layer does not hold the typed characters")
+        for kind in ("head", "list", "strong", "code"):
+            expect(page.locator(f"#editor-paint .md-{kind}").count(), f"no .md-{kind} span")
+        page.press("#editor-text", "End")
+        page.press("#editor-text", "Enter")
+        expect(page.input_value("#editor-text").endswith("\n- "), "the list did not continue")
+        page.press("#editor-text", "Enter")
+        expect(page.input_value("#editor-text") == DRAFT + "\n", "an empty item did not end the list")
+        expect(page.evaluate(draft) == DRAFT + "\n", "the draft was not stored")
+
+        page.reload()
+        online()
+        expect(page.input_value("#input") == DRAFT + "\n", "the draft did not survive a reload")
+        page.click("#lift")
+        page.fill("#editor-text", DRAFT)
+        page.click("#drop")
+        expect(page.evaluate(view) == "discussion", "the drop did not close the editor")
+        expect(page.input_value("#input") == DRAFT, "the editor text did not move down")
+
+        page.click("#lift")
+        gate.arm()
+        page.press("#editor-text", "Control+Enter")
+        expect(gate.wait(), "a submit from the editor did not start a run")
+        expect(page.evaluate(view) == "discussion", "a submit did not drop the editor")
+        expect(page.input_value("#input") == "", "a submit did not clear the box")
+        expect(page.evaluate(draft) is None, "a submit did not clear the stored draft")
+        gate.release()
+        page.wait_for_function("() => document.getElementById('stop').hidden")
+    finally:
+        context.close()
+
+
 def settle(page: Any, milliseconds: int = 250) -> None:
     """Let the last paint land before the shutter."""
     page.wait_for_timeout(milliseconds)
@@ -604,6 +668,8 @@ def run(devices: Iterable[Device], out: Path, args: argparse.Namespace) -> list[
                     written.extend(capture(browser, device, server.url, gate, out))
                 print("[e2e] recovery: reattach, vote, resume")
                 recover(browser, DEVICES[1], server.url, gate)
+                print("[e2e] editor: lift, highlight, draft, drop, submit")
+                edit(browser, DEVICES[1], server.url, gate)
             finally:
                 browser.close()
     finally:

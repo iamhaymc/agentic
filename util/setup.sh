@@ -127,9 +127,9 @@ install_node() {
 
 install_uv
 install_python
-install_app
 install_clang
 install_node
+install_app
 
 echo "Setup complete."
 echo "Activate the environment with: source .venv/bin/activate"

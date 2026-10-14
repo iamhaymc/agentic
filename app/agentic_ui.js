@@ -1,11 +1,13 @@
 /* Agent chat client.
  *
- * Subsystems: Icons (inline SVG set), Markdown (safe rendering), Media (inline
- * preview), Clipboard (copy with an http fallback), Blocks (content
- * subscribers, updated concurrently and out of order), Theme (VS Code theme
- * subset), Commands (slash commands), Questions (what the model asked),
- * Feedback (votes that teach rules), Resume (an unfinished run), Wait (a
- * silent model's timer), Saved (the last session) and Socket (hub client).
+ * Subsystems: Icons (inline SVG set), Markdown (safe rendering), Syntax
+ * (markdown highlighting), Media (inline preview), Clipboard (copy with an
+ * http fallback), Blocks (content subscribers, updated concurrently and out of
+ * order), Theme (VS Code theme subset), Commands (slash commands), Questions
+ * (what the model asked), Feedback (votes that teach rules), Resume (an
+ * unfinished run), Wait (a silent model's timer), Saved (the last session),
+ * Draft (the unsent text), Editor (the composer lifted into a markdown
+ * editor) and Socket (hub client).
  */
 (() => {
   "use strict";
@@ -26,6 +28,12 @@
     file: $("file"),
     attachments: $("attachments"),
     hints: $("hints"),
+    lift: $("lift"),
+    drop: $("drop"),
+    editor: $("editor"),
+    editorText: $("editor-text"),
+    editorPaint: $("editor-paint"),
+    editorCopy: $("editor-copy"),
   };
 
   // ------------------------------------------------------------------ icons
@@ -318,6 +326,102 @@
     return { render, escape, safeUrl, inline };
   })();
 
+  // ----------------------------------------------------------------- syntax
+
+  /** Markdown highlighting for the editor. Every character of the source comes
+   *  out exactly once, escaped and in order, so the painted layer lines up
+   *  glyph for glyph with the textarea over it; a span may only change colour. */
+  const Syntax = (() => {
+    const { escape } = Markdown;
+    const span = (kind, html) => `<span class="md-${kind}">${html}</span>`;
+    const mark = (text) => span("mark", escape(text));
+    const wrap = (kind, edge, inner) => mark(edge) + span(kind, inline(inner)) + mark(edge);
+
+    /** Inline rules, each tried from the same position: the earliest match
+     *  wins, a tie goes to the rule listed first. */
+    const RULES = [
+      [/\\[\\`*_{}[\]()#+\-.!|~>]/g, (m) => mark(m[0])],
+      [/(`+)([\s\S]*?)\1/g, (m) => span("code", mark(m[1]) + escape(m[2]) + mark(m[1]))],
+      [
+        /(!?\[)([^\]]*)(\]\()([^)\s]*)(\))/g,
+        (m) => mark(m[1]) + span("link", inline(m[2])) + mark(m[3]) + span("url", escape(m[4])) + mark(m[5]),
+      ],
+      [/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, (m) => wrap("strong", "**", m[1])],
+      [/(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)/g, (m) => wrap("strong", "__", m[1])],
+      [/\*(?=[^\s*])(.+?)(?<=[^\s*])\*/g, (m) => wrap("em", "*", m[1])],
+      [/(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)/g, (m) => wrap("em", "_", m[1])],
+      [/~~(?=\S)(.+?)(?<=\S)~~/g, (m) => wrap("del", "~~", m[1])],
+      [/https?:\/\/[^\s<>()]+/g, (m) => span("url", escape(m[0]))],
+    ];
+
+    const inline = (text) => {
+      let html = "";
+      let at = 0;
+      while (at < text.length) {
+        let best = null;
+        for (const [pattern, paint] of RULES) {
+          pattern.lastIndex = at;
+          const match = pattern.exec(text);
+          if (match && (!best || match.index < best.match.index)) best = { match, paint };
+        }
+        if (!best) break;
+        html += escape(text.slice(at, best.match.index)) + best.paint(best.match);
+        at = best.match.index + best.match[0].length;
+      }
+      return html + escape(text.slice(at));
+    };
+
+    /** One line outside a fence: its block marker, then its inline markup. */
+    const line = (text) => {
+      let m = /^(\s{0,3})(#{1,6})(\s.*|)$/.exec(text);
+      if (m) return escape(m[1]) + span("head", mark(m[2]) + inline(m[3]));
+      if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(text)) return mark(text);
+      m = /^(\s*(?:>\s?)+)(.*)$/.exec(text);
+      if (m) return mark(m[1]) + span("quote", inline(m[2]));
+      m = /^(\s*)([-*+]|\d{1,9}[.)])(\s+)(\[[ xX]\](?=\s|$))?(.*)$/.exec(text);
+      if (m) {
+        const task = m[4] ? span("list", escape(m[4])) : "";
+        return escape(m[1]) + span("list", escape(m[2])) + escape(m[3]) + task + inline(m[5]);
+      }
+      // A pipe table: the alignment row is all punctuation, a row has cells.
+      if (/^\s*\|/.test(text)) {
+        if (/^[\s|:-]+$/.test(text)) return mark(text);
+        return text
+          .split(/(?<!\\)(\|)/)
+          .map((piece) => (piece === "|" ? mark(piece) : inline(piece)))
+          .join("");
+      }
+      return inline(text);
+    };
+
+    /** Highlight a whole document. Fences are tracked across lines so their
+     *  bodies stay code, whatever they contain. */
+    const highlight = (source) => {
+      const out = [];
+      let fence = null;
+      String(source || "")
+        .split("\n")
+        .forEach((text) => {
+          if (fence) {
+            const closed = new RegExp(`^\\s*${fence[0]}{${fence.length},}\\s*$`).test(text);
+            out.push(span(closed ? "fence" : "code", escape(text)));
+            if (closed) fence = null;
+            return;
+          }
+          const open = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(text);
+          if (open && !(open[2][0] === "`" && open[3].includes("`"))) {
+            fence = open[2];
+            out.push(escape(open[1]) + span("fence", escape(open[2])) + span("lang", escape(open[3])));
+            return;
+          }
+          out.push(line(text));
+        });
+      return out.join("\n");
+    };
+
+    return { highlight, inline };
+  })();
+
   // ------------------------------------------------------------------ media
 
   const Media = (() => {
@@ -379,6 +483,23 @@
       return copied;
     },
   };
+
+  /** Show how a copy went on its button for a moment: a check or a cross. */
+  const flash = (() => {
+    const timers = new WeakMap();
+    return (button, copied) => {
+      button.innerHTML = Icons.markup(copied ? "check" : "close");
+      button.title = copied ? "Copied" : "Copy failed";
+      clearTimeout(timers.get(button));
+      timers.set(
+        button,
+        setTimeout(() => {
+          button.innerHTML = Icons.markup("copy");
+          button.title = "Copy";
+        }, 1400),
+      );
+    };
+  })();
 
   // ------------------------------------------------------------------ theme
 
@@ -576,14 +697,7 @@
     }
 
     async copy() {
-      const copied = await Clipboard.write(this.text);
-      this.copyButton.innerHTML = Icons.markup(copied ? "check" : "close");
-      this.copyButton.title = copied ? "Copied" : "Copy failed";
-      clearTimeout(this.copied);
-      this.copied = setTimeout(() => {
-        this.copyButton.innerHTML = Icons.markup("copy");
-        this.copyButton.title = "Copy";
-      }, 1400);
+      flash(this.copyButton, await Clipboard.write(this.text));
     }
 
     append(text) {
@@ -820,25 +934,47 @@
 
   // ------------------------------------------------------------------ saved
 
-  /** The last session of this page, so a reload resumes it while it is still
-   *  live (the server opens a fresh one when it is not). Storage may be barred
-   *  — a private window, a sandboxed frame — and the page works without it. */
-  const Saved = {
-    KEY: "agentic.session",
-    get() {
+  /** `localStorage`, which may be barred — a private window, a sandboxed
+   *  frame — and the page works without it. An empty value removes the key. */
+  const Store = {
+    get(key) {
       try {
-        return localStorage.getItem(this.KEY) || null;
+        return localStorage.getItem(key);
       } catch {
         return null;
       }
     },
-    set(id) {
+    set(key, value) {
       try {
-        if (id) localStorage.setItem(this.KEY, id);
-        else localStorage.removeItem(this.KEY);
+        if (value) localStorage.setItem(key, value);
+        else localStorage.removeItem(key);
       } catch {
-        // nothing to remember with; the next load starts a new session
+        // nothing to remember with; the next load starts without it
       }
+    },
+  };
+
+  /** The last session of this page, so a reload resumes it while it is still
+   *  live (the server opens a fresh one when it is not). */
+  const Saved = {
+    KEY: "agentic.session",
+    get() {
+      return Store.get(this.KEY) || null;
+    },
+    set(id) {
+      Store.set(this.KEY, id);
+    },
+  };
+
+  /** The text typed and not yet sent, in the box or the editor alike, so a
+   *  reload or a closed tab loses nothing; a submit clears it. */
+  const Draft = {
+    KEY: "agentic.draft",
+    get() {
+      return Store.get(this.KEY) || "";
+    },
+    set(text) {
+      Store.set(this.KEY, text);
     },
   };
 
@@ -898,7 +1034,7 @@
       Blocks.scroll();
       // A pointer user is likely to type; on touch the keyboard would hide the choices.
       if (window.matchMedia && matchMedia("(pointer: fine)").matches)
-        el.input.focus({ preventScroll: true });
+        Editor.field().focus({ preventScroll: true });
     },
     answer(id, text) {
       return Socket.send({ type: "answer", id, text });
@@ -915,7 +1051,9 @@
     update() {
       const asking = this.open.length > 0;
       el.app.dataset.asking = String(asking);
-      el.input.placeholder = asking ? "Answer the agent…" : "Message the agent…";
+      el.input.placeholder = el.editorText.placeholder = asking
+        ? "Answer the agent…"
+        : "Message the agent…";
       Socket.controls();
     },
   };
@@ -1024,7 +1162,7 @@
       const offline = state !== "online";
       el.input.disabled = offline;
       el.send.disabled = offline;
-      if (!offline) el.input.focus({ preventScroll: true });
+      if (!offline) Editor.field().focus({ preventScroll: true });
     },
     describe() {
       const state = el.app.dataset.state;
@@ -1304,6 +1442,7 @@
       const command = this.items[index === undefined ? this.index : index];
       if (!command) return;
       el.input.value = `/${command.name} `;
+      Draft.set(el.input.value);
       this.hide();
       el.input.focus();
       resize();
@@ -1315,13 +1454,142 @@
     },
   };
 
-  const submit = () => {
-    const text = el.input.value.trim();
-    if (!text) return;
-    if (Commands.run(text)) {
-      el.input.value = "";
+  // ----------------------------------------------------------------- editor
+
+  /** What one press of Tab indents by. */
+  const INDENT = "  ";
+
+  /** The composer lifted into a markdown editor over the discussion. The box
+   *  and the editor hold one draft between them: the one on screen owns it,
+   *  and hands it, with the caret, to the other on every switch. */
+  const Editor = {
+    lifted: false,
+    /** The field the draft is typed into right now. */
+    field() {
+      return this.lifted ? el.editorText : el.input;
+    },
+    lift() {
+      if (this.lifted) return;
+      this.swap(el.input, el.editorText, true);
+      hints.hide();
+      this.paint();
+    },
+    /** Back to the discussion. The box takes the focus only from a pointer:
+     *  on touch the keyboard would cover what the reader came back to see. */
+    drop() {
+      if (!this.lifted) return;
+      const fine = Boolean(window.matchMedia && matchMedia("(pointer: fine)").matches);
+      this.swap(el.editorText, el.input, fine);
+      resize();
+      edges();
+    },
+    swap(from, to, focus) {
+      const { selectionStart, selectionEnd } = from;
+      to.value = from.value;
+      this.lifted = to === el.editorText;
+      el.app.dataset.view = this.lifted ? "editor" : "discussion";
+      if (!focus) return;
+      to.focus({ preventScroll: true });
+      to.setSelectionRange(selectionStart, selectionEnd);
+    },
+    /** Empty both fields after a submit and go back to watch the answer. */
+    clear() {
+      el.input.value = el.editorText.value = "";
+      Draft.set("");
+      this.paint();
+      this.drop();
       resize();
       hints.hide();
+    },
+    /** Repaint the highlighted layer under the textarea. It is cheap enough
+     *  to do on every keystroke, and a frame late would show a blank glyph. */
+    paint() {
+      el.editorPaint.innerHTML = Syntax.highlight(el.editorText.value);
+      this.sync();
+    },
+    /** Keep the layer under the textarea scrolled with it. */
+    sync() {
+      el.editorPaint.style.transform = `translateY(${-el.editorText.scrollTop}px)`;
+    },
+    /** Replace the selection the way typing would: one undo step, one input
+     *  event. `execCommand` is deprecated but still the only way to keep the
+     *  native undo stack; `setRangeText` is the fallback. */
+    insert(text) {
+      const area = el.editorText;
+      area.focus();
+      let done = false;
+      try {
+        done = text
+          ? document.execCommand("insertText", false, text)
+          : document.execCommand("delete", false);
+      } catch {
+        done = false;
+      }
+      if (!done) {
+        area.setRangeText(text, area.selectionStart, area.selectionEnd, "end");
+        area.dispatchEvent(new Event("input"));
+      }
+    },
+    /** Enter on a list item or a quote starts the next one; on an empty one
+     *  it ends the list instead. Returns whether it handled the key. */
+    newline() {
+      const area = el.editorText;
+      const { value, selectionStart: start, selectionEnd: end } = area;
+      if (start !== end) return false;
+      const from = value.lastIndexOf("\n", start - 1) + 1;
+      const before = value.slice(from, start);
+      const item = /^(\s*)(?:([-*+])|(\d{1,9})([.)]))(\s+)(\[[ xX]\]\s+)?/.exec(before);
+      const quote = item ? null : /^\s*(?:>\s?)+/.exec(before);
+      const lead = item || quote;
+      if (!lead) return false;
+      const stop = value.indexOf("\n", start);
+      const after = value.slice(start, stop < 0 ? value.length : stop);
+      if (!before.slice(lead[0].length).trim() && !after.trim()) {
+        area.setSelectionRange(from, start);
+        this.insert("");
+        return true;
+      }
+      const next = item
+        ? item[1] + (item[2] || `${Number(item[3]) + 1}${item[4]}`) + item[5] + (item[6] ? "[ ] " : "")
+        : quote[0];
+      this.insert(`\n${next}`);
+      return true;
+    },
+    /** Tab indents the lines under the selection, Shift+Tab outdents them; a
+     *  bare caret on Tab only inserts the indent. */
+    indent(outdent) {
+      const area = el.editorText;
+      const { value, selectionStart: start, selectionEnd: end } = area;
+      if (!outdent && start === end) {
+        this.insert(INDENT);
+        return;
+      }
+      const from = value.lastIndexOf("\n", start - 1) + 1;
+      // a selection that ends at the start of a line leaves that line alone
+      const last = end > start && value[end - 1] === "\n" ? end - 1 : end;
+      const newline = value.indexOf("\n", last);
+      const stop = newline < 0 ? value.length : newline;
+      const lines = value.slice(from, stop).split("\n");
+      const shifted = lines.map((text) =>
+        outdent ? text.replace(/^( {1,2}|\t)/, "") : INDENT + text,
+      );
+      const first = shifted[0].length - lines[0].length;
+      const total = shifted.join("\n").length - (stop - from);
+      if (!total) return;
+      area.setSelectionRange(from, stop);
+      this.insert(shifted.join("\n"));
+      area.setSelectionRange(Math.max(from, start + first), Math.max(from, end + total));
+    },
+    async copy() {
+      flash(el.editorCopy, await Clipboard.write(el.editorText.value));
+    },
+  };
+
+  const submit = () => {
+    const text = Editor.field().value.trim();
+    if (!text) return;
+    if (Commands.run(text)) {
+      Editor.clear();
       return;
     }
     // While the model waits on a question, what is typed is the answer.
@@ -1330,11 +1598,7 @@
       : Questions.open.length
         ? { type: "answer", id: Questions.open[0], text }
         : { type: "prompt", text, attachments: Attachments.take() };
-    if (Socket.send(message)) {
-      el.input.value = "";
-      resize();
-      hints.hide();
-    }
+    if (Socket.send(message)) Editor.clear();
   };
 
   el.form.addEventListener("submit", (event) => {
@@ -1344,6 +1608,7 @@
 
   el.input.addEventListener("input", () => {
     resize();
+    Draft.set(el.input.value);
     const match = /^\/([a-zA-Z-]*)$/.exec(el.input.value);
     if (match) hints.show(match[1].toLowerCase());
     else hints.hide();
@@ -1376,10 +1641,40 @@
 
   el.stop.addEventListener("click", () => Socket.send({ type: "cancel" }));
 
+  el.lift.addEventListener("click", () => Editor.lift());
+  el.drop.addEventListener("click", () => Editor.drop());
+  el.editorCopy.addEventListener("click", () => Editor.copy());
+
+  el.editorText.addEventListener("input", () => {
+    Editor.paint();
+    Draft.set(el.editorText.value);
+  });
+
+  el.editorText.addEventListener("scroll", () => Editor.sync(), { passive: true });
+
+  // Enter is a newline here, so sending takes Ctrl or Cmd; Escape drops back.
+  el.editorText.addEventListener("keydown", (event) => {
+    if (event.isComposing) return;
+    const chord = event.ctrlKey || event.metaKey;
+    if (event.key === "Enter" && chord) {
+      event.preventDefault();
+      submit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      Editor.drop();
+    } else if (event.key === "Tab" && !chord && !event.altKey) {
+      event.preventDefault();
+      Editor.indent(event.shiftKey);
+    } else if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
+      if (Editor.newline()) event.preventDefault();
+    }
+  });
+
   el.discussion.addEventListener("scroll", edges, { passive: true });
   // The view shrinks when the composer grows, which moves both edges too.
   if (window.ResizeObserver) new ResizeObserver(edges).observe(el.discussion);
 
+  el.input.value = Draft.get();
   edges();
   resize();
   Socket.connect();
@@ -1389,6 +1684,7 @@
   window.agentUI = {
     Icons,
     Markdown,
+    Syntax,
     Media,
     Clipboard,
     Theme,
@@ -1399,6 +1695,8 @@
     Resume,
     Wait,
     Saved,
+    Draft,
+    Editor,
     Socket,
   };
 })();

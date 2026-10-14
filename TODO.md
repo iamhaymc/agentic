@@ -69,6 +69,11 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       run the sandbox tests on macOS (CI runner) and tune the read allow-list
       (`/private/var/folders`, Homebrew prefixes) against real commands.
 
+- [ ] **Editor, extended scope.** The markdown editor highlights, continues lists
+      and indents. Still open: formatting shortcuts (Ctrl+B / Ctrl+I / Ctrl+K over the
+      selection), a rendered preview beside or instead of the source, and pasting or
+      dropping files and images into the editor as attachments.
+
 - [ ] **Rule review.** A vote keeps whatever rule the model distils. Show the
       rule for a one click keep or discard, let a second vote undo the first,
       and list, edit and drop rules from the page rather than only `/rules`.

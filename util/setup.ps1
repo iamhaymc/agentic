@@ -149,9 +149,9 @@ function Install-Node {
 try {
     Install-Uv
     Install-Python
-    Install-App
     Install-Clang
     Install-Node
+    Install-App
     Write-Host "Setup complete."
     Write-Host "Activate the environment with: .venv\Scripts\Activate.ps1"
     Write-Host "Run the app from anywhere with: agentic"

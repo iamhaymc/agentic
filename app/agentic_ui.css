@@ -348,8 +348,10 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .block {
-    animation: none;
+  .block,
+  .discussion,
+  .editor-surface {
+    animation: none !important;
   }
 
   .mark,
@@ -841,6 +843,260 @@ body {
   width: 100%;
 }
 
+/* ---------------------------------------------------------------- editor */
+
+/* The editor covers the discussion in the same grid row rather than replacing
+   it, so the discussion keeps its scroll and its auto-scroll while blocks
+   stream in behind. */
+.discussion,
+.editor {
+  grid-row: 2;
+  grid-column: 1;
+}
+
+.composer {
+  grid-row: 3;
+}
+
+.app[data-view="editor"] .discussion {
+  visibility: hidden;
+}
+
+.app[data-view="discussion"] .discussion {
+  animation: fall 0.2s ease-out;
+}
+
+.editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  background: var(--bg);
+}
+
+.app:not([data-view="editor"]) .editor {
+  display: none;
+}
+
+/* Copy holds the left corner and the tab the middle; the third column only
+   balances the first, so the tab is centred on the page. */
+.editor-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
+  padding: 0 0.75rem;
+  color: var(--muted);
+}
+
+.editor-head > .button.tiny {
+  justify-self: start;
+  margin-top: 0.3rem;
+}
+
+/* A tab is a pull on the edge of a bar: the lift sits on the composer and
+   points up, the drop hangs from the header and points down. Each is drawn in
+   the bar's own colour and covers the bar's hairline, so it reads as part of
+   the bar rather than as a button over the page. */
+.tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 1.3rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.tab:hover {
+  color: var(--fg);
+}
+
+.tab:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--focus) 70%, transparent);
+  outline-offset: 1px;
+}
+
+/* A tab is short for a thumb; the pseudo element reaches past it, away from
+   the bar, so the target grows without covering anything on the bar. */
+.tab::after {
+  content: "";
+  position: absolute;
+}
+
+.tab .icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke-width: 2.25;
+}
+
+.lift {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  transform: translateX(-50%);
+  border-bottom: 0;
+  border-radius: 0.6rem 0.6rem 0 0;
+}
+
+.lift::after {
+  inset: -0.5rem -0.5rem 0;
+}
+
+.drop {
+  position: relative;
+  z-index: 2;
+  margin-top: -1px;
+  border-top: 0;
+  border-radius: 0 0 0.6rem 0.6rem;
+}
+
+.drop::after {
+  inset: 0 -0.5rem -0.5rem;
+}
+
+.app[data-view="editor"] .lift,
+.app[data-view="editor"] .input,
+.app[data-view="editor"] .hints {
+  display: none;
+}
+
+/* The bar shadows follow the discussion, which is not what is on screen. */
+.app[data-view="editor"] .bar,
+.app[data-view="editor"] .composer {
+  box-shadow: none;
+}
+
+.editor-surface {
+  position: relative;
+  min-height: 0;
+  animation: rise 0.2s ease-out;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(1.5rem);
+  }
+}
+
+@keyframes fall {
+  from {
+    opacity: 0;
+    transform: translateY(-0.75rem);
+  }
+}
+
+/* The textarea and the paint under it must lay out the same characters in
+   the same places, so everything that moves a glyph is pinned on both: one
+   face, one size, no ligatures, the same wrapping and the same gutter. The
+   paint may change colour and slant, never width. */
+.editor-paint,
+.editor-text {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0.6rem 0.75rem 2rem;
+  border: 0;
+  font: 0.875rem/1.65 var(--mono);
+  font-kerning: none;
+  font-variant-ligatures: none;
+  letter-spacing: normal;
+  tab-size: 4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--scroll) transparent;
+}
+
+.editor-paint {
+  overflow: hidden;
+  color: var(--fg);
+  pointer-events: none;
+}
+
+.editor-paint code {
+  display: block;
+  font: inherit;
+}
+
+.editor-text {
+  resize: none;
+  overflow-y: auto;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--fg);
+  outline: none;
+}
+
+.editor-text::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.editor-text::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: transparent;
+}
+
+/* Syntax: punctuation recedes, structure takes the accent, and each kind of
+   span keeps the colour it has in the rendered discussion. */
+.md-mark,
+.md-fence,
+.md-quote,
+.md-del {
+  color: var(--muted);
+}
+
+.md-head,
+.md-list,
+.md-lang {
+  color: var(--accent);
+}
+
+.md-head .md-mark {
+  color: color-mix(in srgb, var(--accent) 55%, var(--muted));
+}
+
+.md-strong {
+  color: var(--warn);
+}
+
+.md-em,
+.md-quote {
+  font-style: italic;
+}
+
+.md-em {
+  color: color-mix(in srgb, var(--link) 45%, var(--fg));
+}
+
+.md-del {
+  text-decoration: line-through;
+}
+
+.md-code {
+  color: color-mix(in srgb, var(--warn) 50%, var(--error));
+}
+
+.md-code .md-mark {
+  color: inherit;
+  opacity: 0.6;
+}
+
+.md-link {
+  color: var(--link);
+}
+
+.md-url {
+  color: var(--muted);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+
 /* -------------------------------------------------------------- composer */
 
 /* The inset is the same on every side, so a button sits as far from the edge
@@ -1072,7 +1328,10 @@ body {
   }
 
   .discussion,
-  .bar {
+  .bar,
+  .editor-head,
+  .editor-paint,
+  .editor-text {
     padding-left: 1rem;
     padding-right: 1rem;
   }

@@ -124,6 +124,15 @@ python app/agentic.py --serve # or run VS Code task "serve"
 
 > Default URL: `http://127.0.0.1:8765/`
 
+## ▶️ Write (Editor)
+
+Long prompts get a markdown editor with highlighting:
+
+- `⌃` tab on the composer lifts it; `⌄` tab or `Esc` drops it, the text moving with it
+- `Ctrl+Enter` sends; `Tab` / `Shift+Tab` indent; `Enter` continues a list or a quote
+- the unsent text is kept in `localStorage` across reloads and cleared on send
+- copy (top left) puts the whole draft on the clipboard
+
 ## ▶️ Resume (Session)
 
 Interactive state survives a crash:

@@ -755,6 +755,31 @@ question is a card again and Stop is live again. A prompt whose run did not
 finish is drawn dashed, and the one that can still be continued wears a resume
 button that sends `/resume`.
 
+**A long prompt gets an editor, not a taller box.** The composer box is right
+for a line and wrong for a page of markdown: it caps at 14 rem and highlights
+nothing. A tab on the composer lifts the draft into a full-height editor over
+the discussion, and a tab under the header drops it back; the two fields hand
+the text and the caret to each other on every switch, so there is one draft,
+never two. The draft lives in `localStorage` and only a submit clears it,
+because losing a page of writing to a reload is the failure worth designing
+out. A submit from the editor drops back to the discussion, since that is
+where the answer appears.
+
+**Highlighting is an overlay, not an editor dependency.** CodeMirror or Monaco
+would mean a bundle, a build step or a CDN for a page that is three static
+files. Instead the textarea stays the input — its own caret, selection, undo
+stack, IME and accessibility — with its text transparent over a `<pre>` that
+`Syntax` repaints on every keystroke. The cost is one invariant: both layers
+must place every glyph identically. So `Syntax` emits each source character
+exactly once, in order, and its spans change colour and slant but never
+weight (a synthetic bold is a pixel wider per glyph); both layers pin one mono
+face, no ligatures or kerning, the same wrapping, and a stable scrollbar gutter
+so a desktop scrollbar narrows both alike. The paint follows the textarea's
+scroll by a transform rather than its own scroll, so it never clamps short at
+the bottom. The discussion stays laid out under the editor (`visibility:
+hidden`, not `display: none`), because a hidden discussion has no height and
+its auto-scroll would park it at the top while blocks arrive.
+
 ## End to end capture
 
 `test/agentic_e2e.py` exists because the page was the one subsystem nothing looked at.
@@ -870,6 +895,17 @@ harness.
       thumbs and the resume button on the page, `/rules`, and the tests.
     - [ ] Extended scope: in [`TODO.md`](TODO.md) (a Windows sandbox, several
       processes on one state directory, Seatbelt verified on a Mac).
+31. Markdown editor, in three scopes:
+    - [x] Minimum scope: the lift and drop tabs, `data-view` on the app, the
+      text and caret handed across each switch, the `Draft` kept in
+      `localStorage` and cleared by a submit, submit reading the field on
+      screen.
+    - [x] Complete scope: `Syntax` and the textarea over its paint, copy in
+      the top left, list and quote continuation, Tab and Shift+Tab indent,
+      Ctrl/Cmd+Enter to send and Escape to drop, the rise and fall
+      transitions, and the `edit` check in `test/agentic_e2e.py`.
+    - [ ] Extended scope: in [`TODO.md`](TODO.md) (formatting shortcuts, a
+      rendered preview, paste of files and images).
 
 ## Fixes worth remembering
 

@@ -19,7 +19,7 @@ is what has been built and why, and [`TODO.md`](TODO.md) is what is left.
 | `test/agentic_e2e.py` | Browser capture of the page, scripted end to end |
 | `app/agentic_ui.html` | Chat page markup                                 |
 | `app/agentic_ui.css`  | Mobile first, theme driven styles                |
-| `app/agentic_ui.js`   | Client: blocks, markdown, media, commands, hub   |
+| `app/agentic_ui.js`   | Client: blocks, markdown, editor, commands, hub  |
 | `test/assets/`        | The screenshots this guide shows                 |
 | `pyproject.toml`      | Package metadata, dependencies, `agentic` script |
 
@@ -930,7 +930,7 @@ differs.
 
 ## 19. Web client
 
-`app/agentic_ui.js` is thirteen small subsystems over one socket, exposed on
+`app/agentic_ui.js` is sixteen small subsystems over one socket, exposed on
 `window.agentUI` so a console or a test harness can reach them without one:
 
 - **Icons** — a stroke icon set written inline with the code: no font, no
@@ -945,6 +945,13 @@ differs.
   strikethrough, links and images. URLs are allow-listed (`http(s):`,
   `mailto:`, relative paths, and `data:` for image/video/audio only), so model
   output can never inject markup or a script URL.
+- **Syntax** — `Syntax.highlight(source)` paints markdown for the editor: fences
+  tracked across lines (bodies stay code), then per line a heading, rule, quote,
+  list item with its task box, or pipe table row, then inline escapes, code
+  spans, links and images, strong, emphasis (`_` never inside a word),
+  strikethrough and bare URLs. Every source character comes out exactly once,
+  escaped and in order, wrapped in `md-*` spans that may change colour and
+  slant but never width — the invariant the editor's overlay depends on.
 - **Media** — recognizes images, video and audio by extension or data URL and
   emits `<img loading="lazy">`, `<video controls playsinline>` or
   `<audio controls>`.
@@ -992,7 +999,26 @@ differs.
   `localStorage` (`agentic.session`) and sent with the first `hello`, so a
   reload resumes the conversation while the session is live; when the server
   answers with another id, a note says the old session has ended. `/end`
-  forgets it. Storage that is barred (a private window) only costs the resume.
+  forgets it. Storage that is barred (a private window) only costs the resume:
+  every read and write goes through `Store`, which swallows the refusal.
+- **Draft** — the unsent text, from the box or the editor alike, written to
+  `localStorage` (`agentic.draft`) on every keystroke, put back in the box on
+  load and removed by a submit, so a reload or a closed tab loses nothing.
+- **Editor** — the composer lifted into a markdown editor. The `⌃` tab on the
+  composer (`Editor.lift`) and the `⌄` tab under the header (`Editor.drop`, or
+  Escape) switch `data-view` on the app between `discussion` and `editor`, and
+  each switch hands the text and the caret to the field coming on screen
+  (`Editor.field()` is whichever that is; submit reads it). The editor is a
+  transparent `<textarea>` over a `<pre>` that `Syntax` repaints on every
+  input and that is translated with the textarea's scroll, so the browser keeps
+  its own caret, selection, undo and IME (spellcheck is off). Enter
+  continues a list item (bullet, next number, a fresh `[ ]`) or a quote and
+  ends it on an empty one; Tab and Shift+Tab indent and outdent the selected
+  lines by two spaces; Ctrl/Cmd+Enter sends, which clears both fields and the
+  draft and drops back to the discussion to watch the answer. Edits go
+  through `execCommand("insertText")` so they are one native undo step each,
+  with `setRangeText` as the fallback. Copy in the top left takes the whole
+  draft.
 - **Socket** — connects to `/ws`, says `hello` with the current session, routes
   server messages, and reconnects with exponential backoff (250 ms doubling to
   8 s) while the composer disables itself. The `hello` reply reattaches: the
@@ -1057,6 +1083,21 @@ as the buttons beside it, and all three buttons wear the same neutral outline
 with only the stop icon coloured. The box grows with the text it holds up to 14 rem and takes that
 height out of the discussion above it rather than covering it, and focus is a
 hairline of accent and a soft ring rather than a heavy halo.
+
+The editor shares the discussion's grid row and covers it; the discussion is
+only `visibility: hidden` underneath, so it keeps its scroll and its
+auto-scroll while blocks stream in behind. The two tabs are pulls on the edges
+of the bars — the lift sits on the composer, the drop hangs from the header —
+drawn in the bar's colour over the bar's hairline, with a hit area that reaches
+away from the bar. In the editor the composer keeps attach and send or stop
+and gives up the box. The surface rises in, the discussion falls back in
+(both off under reduced motion). The textarea and its paint pin everything
+that moves a glyph to the same values — one mono face and size, no ligatures
+or kerning, `pre-wrap` with `overflow-wrap: anywhere`, and
+`scrollbar-gutter: stable` on both so a desktop scrollbar takes the same width
+from each. Syntax colours are mixed from the theme's own variables (accent for
+structure, `--warn` for strong, `--link` for links, a warn/error mix for code,
+muted punctuation), so a VS Code theme recolours the editor too.
 
 ### Screenshots
 
@@ -1220,7 +1261,11 @@ drives. No test needs a network or a model.
 
 `test/agentic_e2e.py` is the one that needs a browser: it is not part of the unit suite,
 it is run by hand (or in CI) to prove the page still works end to end and to
-refresh the screenshots above.
+refresh the screenshots above. Besides the captures it asserts recovery
+(reattach, vote, resume) and the editor (`edit`: the lift carries the text up,
+the paint holds the same characters with `md-*` spans, a list continues and
+ends, the draft survives a reload, the drop carries it back, and Ctrl+Enter
+sends, clears the draft and drops).
 
 ## 23. Example consumer
 
