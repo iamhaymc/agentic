@@ -216,6 +216,11 @@ genre: noir
 | `AGENTIC_CONTEXT_KEEP`, `AGENTIC_CONTEXT_SUMMARY`                             | Outputs never cleared; summarise or drop    |
 | `AGENTIC_CONTEXT_TOKENIZER`                                                   | tiktoken encoding (empty: byte estimate)    |
 | `AGENTIC_PLAN_ENABLED`, `AGENTIC_SLICE_SHARE`, `AGENTIC_SLICE_STALL`          | Plan tool + note; slice; read-time cap      |
+| `AGENTIC_PLAN_ASK_SLICES`, `AGENTIC_PLAN_ASK_MINUTES`, `AGENTIC_PLAN_ASK_COST` | Sizing question thresholds (`0` off)        |
+| `AGENTIC_DELEGATE_ENABLED`                                                    | `delegate` tool (workers)                   |
+| `AGENTIC_WORKER_MODEL`, `AGENTIC_WORKER_API_URL`, `AGENTIC_WORKER_API_KEY`    | Worker role (defaults to the leader)        |
+| `AGENTIC_WORKER_INSTRUCTIONS`, `AGENTIC_WORKER_MAX_TURNS`                     | Worker system prompt and turn limit         |
+| `AGENTIC_WORKER_MAX_TOKENS`                                                   | Worker answer cap (`0` uncapped)            |
 | `AGENTIC_RULES_ENABLED`, `AGENTIC_RULES_MAX_CHARS`                            | Learned rules; size that raises a warning   |
 | `AGENTIC_RULES_INSTRUCTIONS`, `AGENTIC_RULES_MAX_TOKENS`                      | Rule distiller prompt and answer budget     |
 | `AGENTIC_SUMMARY_MODEL`, `AGENTIC_SUMMARY_API_URL`, `AGENTIC_SUMMARY_API_KEY` | Summary role (defaults to the leader)       |
@@ -303,7 +308,9 @@ statement); `ConversationMemory.forget` uses it when present and deletes key by
 key otherwise.
 
 `Cache` is `get`/`set`/`delete`/`clear`, implemented by `LruCache` over
-`cachetools` with an optional TTL. Sessions are written to both.
+`cachetools` with an optional TTL. Sessions are written to both. `PlanBook`
+is a `Cache` written through to a store (namespace `plans`), which is how an
+`Agent` keeps its plans across a restart (see [Slicing](#slicing)).
 
 ## 8. Sessions
 
@@ -450,7 +457,7 @@ flowchart LR
 
 ### Slicing
 
-**Measure → cap → plan → recite: a step of work fits the context and the time the model takes to read it.**
+**Measure → cap → plan → ask → delegate → recite: a step of work fits the context and the time the model takes to read it.**
 
 > Why: a 27B model on a local GPU reads ~100 tokens/s; after a compaction or a cache miss a 60k context takes 10 minutes to the first token, past the 600s stall guard, and every retry starts over
 
@@ -486,15 +493,49 @@ Plan (`Planner`, the `plan` tool, `Engine.plans` by session):
 - counted exactly up to 256 KiB a file or range and 4 MiB a plan, the rest estimated from its size; a range is read 64 KiB at a time (one line may be huge)
 - a step not done that reads more than a slice is refused, with its inputs and sizes; the same steps sent back are kept with a warning (a line cannot be split)
 - the answer lists each step with its tokens, what is left to read and, past a minute, how long at the measured speed
-- `Engine.plans` is an `LruCache` of 256 sessions, cleared by `close()`
+- `Engine.plans` is an `LruCache` of 256 sessions, cleared by `close()`; an `Agent` swaps in a `PlanBook` (below)
+
+Sizing question (`Planner.consult()`, `AskLimits`, `Estimate`):
+
+- `plan(steps, question=, options=)`: the model puts one question about the split on the call instead of an `ask_user` of its own
+- `Plan.estimate()` — what the steps not done still take: tokens, slices (`ceil(left / slice)`), minutes at the measured `prefill`, cost at `cost_input`
+- `AskLimits.of(config)` — `plan_ask_slices` (8), `plan_ask_minutes` (10), `plan_ask_cost` (1.0); `0` turns one off; passed strictly
+- asked when a threshold is passed or the model has a question, through the run's `Asker` on the block of the `plan` call: `This plan is large: 3 steps, ~1.5k tokens to read in 2 slices, ~12 min at ~2 tokens/s. Go ahead?`
+- options: the model's, else `Go ahead` / `Stop`; the default `Stop` drops the plan, any other answer comes back as `The user answered: …`
+- once per plan (`Plan.asked`, carried over by every update until a plan with every step done is replaced); a refused plan asks nothing; no asker (one shot, embedded): the model is told to decide itself
+
+Plans across runs (`PlanBook`, `Agent.plans`):
+
+- a `Cache` over the store: memory first (LRU, 256), every `set` written through (namespace `plans`, key the session), a miss read back
+- `Planner.update()` and `Planner.mark()` write the whole plan, so the newest status survives a crash
+- `clear()` empties memory only (`close()`); `delete()` forgets both: on `session_closed`, `/forget`, and in `reconcile()` for sessions gone after a restart
+- the budget note of the next call, in any run or process, recites it; `Agent.resume()` appends `RESUME_PLAN` and the whole plan to `RESUME_PROMPT` while a step is open
+
+Workers (`delegate`, `Engine.build_delegate()`, `run_worker()`):
+
+- `delegate(task, inputs=[], step=0, tools=[])` runs one step in a fresh context and returns only its answer
+- inputs measured like plan inputs (a fresh `Planner`); over `worker_budget()` (`WORKER_SHARE` 0.5 of the worker's window, under its time cap) refused once with sizes, sent back runs anyway
+- `step` names a plan step: its inputs are the default; `active` while the worker runs, `done` on an answer, its old status on a failure, kept `active` when cancelled (so `/resume` picks it up)
+- `worker_config()` — the `worker` role (`worker_model`, else the leader) as the leader of a config with `worker_instructions` + `Answer within about N words.`, `worker_max_turns`, and `plan_enabled` / `ask_enabled` / `delegate_enabled` off
+- `fork(bus)` — a shallow copy of the engine on a private `EventBus`: same pool, counters, speeds and class overrides; the worker's `RunResult` has no session, so `Agent.checkpoint()` journals nothing of it
+- `build_run_tools()` builds the worker's own tools (a fresh `ReadRepeats`, its own read page); `tools` keeps only those named (an unknown name is an error listing the rest)
+- `WorkerRelay` turns the private bus into `tool.progress` on the `delegate` block: `-> call(...)`, `!! name failed: …`, `~~ compacted …` as lines, anything else a heartbeat at most once a second; each report keeps the leader's stall guard satisfied
+- answer: `worker.output`, clipped to `worker_max_tokens` (head and tail), then `[worker: N tool calls in Ss]`; a failure is `Error: the worker failed (kind) after N tool calls: …`, never raised
+- tokens: the worker's calls are recorded on the run's `Usage` through `current_usage()`, so `agent.end` prices them
 
 ```mermaid
 flowchart LR
   C[model call] --> F[first token] --> U[usage] --> T[throughput]
   T --> K[cap: prefill × stall × share] --> L[slice = limit × share]
   L --> P[plan refuses a step over a slice]
+  P --> Q{estimate past a threshold?}
+  Q -- yes --> A[ask the user once]
+  Q -- no --> B[(PlanBook)]
+  A --> B
+  B --> D[delegate a step: fresh context]
+  D --> B
   L --> N[note on the next call]
-  P --> N
+  B --> N
 ```
 
 ### Journal
@@ -744,7 +785,11 @@ reports under it; `Engine.tool_reporter(result)` is the reporter of a run, which
 stamps the call alive and publishes `tool.progress` on its block. `ask` is an
 `Asker`, `(call_id, question, options) -> answer`: when it is given the leader
 gets `ask_user`, which takes its call id the same way, drops blank options and
-returns `(the user did not answer)` for an empty answer.
+returns `(the user did not answer)` for an empty answer. `planner` adds `plan`,
+whose sizing question goes through the same `ask` on the block of its call;
+`delegate` (a `Delegator`, `(call_id, task, inputs, step, tools) -> answer`)
+adds `delegate`. `Engine.build_run_tools(workspace, config, result)` wires all
+of them to one run, for the leader and for each worker alike.
 
 | Tool                | Present when                | Effect                                    |
 | ------------------- | --------------------------- | ----------------------------------------- |
@@ -757,6 +802,7 @@ returns `(the user did not answer)` for an empty answer.
 | `run_shell_command` | `shell_enabled`, unconfined or sandboxed | Run a command in the workspace |
 | `ask_user`          | `ask_enabled` (repl, web)   | Ask the user, wait for the answer         |
 | `plan`              | `plan_enabled`              | Plan steps, each measured against a slice |
+| `delegate`          | `delegate_enabled`          | Run one step in a fresh context (a worker) |
 
 Paged reads (`read_text_file(path, offset=1, limit=0)`):
 
@@ -1406,6 +1452,11 @@ decisions, pinning, chunked and failing summaries, window lookups, overflow
 recognition; in-run compaction, prefix stability and overflow recovery through
 the real SDK runner and its `ScriptedModel`; an endless chat on a small window,
 summaries journaled against their turns, background compaction, `/compact`),
+work slicing (timing, the cap, the note, the plan and its refusals; the sizing
+question, once per plan and through a real run; plans written through, read
+back by a restarted agent, recited by `/resume`, dropped with their session;
+workers in a fresh context with their own tools, a capped answer, progress
+relayed to the leader's call, refusal, failure and tokens),
 workspace path scoping (including symlinks and
 shell timeouts), tool assembly (vision on and off, guarded errors), repository
 URL normalization, git operations against local fixture repositories, pull

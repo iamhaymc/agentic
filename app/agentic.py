@@ -56,6 +56,7 @@ import base64
 import codecs
 import contextlib
 import contextvars
+import copy
 import functools
 import glob
 import inspect
@@ -154,6 +155,9 @@ ToolReporter = Callable[[str | None, str], Awaitable[None]]
 #: Puts a question to the person behind a run: ``(call_id, question, options)``
 #: and returns their answer, empty when they gave none.
 Asker = Callable[[str | None, str, list[str]], Awaitable[str]]
+#: Runs one step in a fresh context: ``(call_id, task, inputs, step, tools)``
+#: and returns the worker's answer, capped, or an ``Error: ...`` line.
+Delegator = Callable[[str | None, str, list[str], int, list[str]], Awaitable[str]]
 
 # ---------------------------------------------------------------------------
 # Config
@@ -208,6 +212,15 @@ DEFAULT_RULES_INSTRUCTIONS = (
     '"polarity": "do" | "avoid", "rule": "<one sentence>"}'
 )
 
+DEFAULT_WORKER_INSTRUCTIONS = (
+    "You are a worker an AI agent handed one step of a larger task. You start "
+    "with a fresh context: the task below is all you are told. Do that step and "
+    "nothing more, with the tools you have; read long files a page at a time. "
+    "Files you write are the deliverable. Then answer with what the agent needs "
+    "to carry on: the result, what you wrote where, and anything that failed. "
+    "Only your answer reaches the agent, so make it dense and complete."
+)
+
 #: Seconds an idle session lives when neither the layers nor the mode say.
 DEFAULT_SESSION_TTL = 3600
 
@@ -231,6 +244,7 @@ MODE_STATE: dict[str, dict[str, Any]] = {
 LEADER_ROLE = "leader"
 VISION_ROLE = "vision"
 SUMMARY_ROLE = "summary"
+WORKER_ROLE = "worker"
 
 #: Config field naming each role's model, where it is not ``<role>_model``.
 ROLE_MODEL_FIELDS = {VISION_ROLE: "inference_vlm"}
@@ -585,6 +599,26 @@ class AgentConfig:
     plan_enabled: bool = True
     slice_share: float = 0.25
     slice_stall: float = 0.5
+    # Sizing question. A plan whose estimate passes one of these (slices to
+    # read, minutes at the measured read speed, cost at `cost_input`) asks the
+    # user once before it is kept, along with the model's own question about
+    # the split when it has one. 0 turns a threshold off; nobody is asked
+    # unless `ask_enabled`.
+    plan_ask_slices: int = 8
+    plan_ask_minutes: float = 10.0
+    plan_ask_cost: float = 1.0
+    # Workers. With `delegate_enabled` the leader gets the `delegate` tool: one
+    # step runs in a fresh context on the `worker` role (falling back to the
+    # leader) with `worker_instructions`, the workspace tools (no plan, no
+    # question, no delegate) and at most `worker_max_turns` turns, and only its
+    # answer comes back, clipped to `worker_max_tokens`.
+    delegate_enabled: bool = True
+    worker_model: str = ""
+    worker_api_url: str = ""
+    worker_api_key: str = ""
+    worker_instructions: str = DEFAULT_WORKER_INSTRUCTIONS
+    worker_max_turns: int = 30
+    worker_max_tokens: int = 1000
     summary_model: str = ""
     summary_api_url: str = ""
     summary_api_key: str = ""
@@ -4940,9 +4974,14 @@ class Workspace:
 # against the slice budget of the run (`SliceBudget`): the harness measures what
 # a step reads instead of trusting the model's guess, refuses a step larger than
 # one slice, and the budget note of every call recites the open plan, so no
-# compaction can fold it away.
+# compaction can fold it away. A plan whose estimate passes a threshold asks the
+# user once before it is kept, an `Agent` writes every change of a plan through
+# to its store (`PlanBook`), so a resumed session or a restarted process
+# continues it, and `delegate` runs one step in a fresh context (a worker).
 
 PLAN_STATUSES = ("pending", "active", "done")
+#: The choices of the sizing question when the model offers none of its own.
+ASK_GO, ASK_STOP = "Go ahead", "Stop"
 
 
 class PlanItem(TypedDict):
@@ -4976,12 +5015,108 @@ class PlanStep:
     def key(self) -> tuple[str, tuple[str, ...]]:
         return self.title, tuple(self.inputs)
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "title": self.title,
+            "inputs": list(self.inputs),
+            "status": self.status,
+            "sizes": [[name, size] for name, size in self.sizes],
+            "missing": list(self.missing),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "PlanStep | None":
+        """A step as `to_dict` wrote it, or ``None`` when it is not one."""
+        if not isinstance(data, dict) or not str(data.get("title") or "").strip():
+            return None
+        status = str(data.get("status") or "pending")
+        sizes = [
+            (str(pair[0]), int(pair[1]))
+            for pair in data.get("sizes") or []
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+            and isinstance(pair[1], (int, float))
+        ]
+        return cls(
+            str(data["title"]).strip(),
+            [str(raw) for raw in data.get("inputs") or []],
+            status if status in PLAN_STATUSES else "pending",
+            sizes,
+            [str(raw) for raw in data.get("missing") or []],
+        )
+
+
+@dataclass(frozen=True)
+class Estimate:
+    """What the steps of a plan not done yet still take to read.
+
+    `slices` is how many slices that is, `seconds` how long at the model's
+    measured read speed (`speed`, tokens a second; 0: not measured), `cost`
+    what reading it once costs at the configured price of input tokens.
+    """
+
+    tokens: int = 0
+    slices: int = 0
+    seconds: float = 0.0
+    cost: float = 0.0
+    speed: float = 0.0
+
+    def describe(self) -> str:
+        """The estimate in one line: ``~1.2M tokens to read in 48 slices, ...``."""
+        line = f"~{compact_tokens(self.tokens)} tokens to read"
+        if self.slices:
+            line += f" in {self.slices} slice{'s' if self.slices != 1 else ''}"
+        if self.seconds >= 60:
+            line += f", ~{self.seconds / 60:.0f} min at ~{self.speed:.0f} tokens/s"
+        if self.cost > 0:
+            line += f", ~{self.cost:.2f} to read once"
+        return line
+
+
+@dataclass(frozen=True)
+class AskLimits:
+    """Past which estimate a plan asks the user before it is kept (0: never).
+
+    `price` is what a million input tokens cost (`cost_input`), which the cost
+    of an `Estimate` is reckoned at.
+    """
+
+    slices: int = 0
+    minutes: float = 0.0
+    cost: float = 0.0
+    price: float = 0.0
+
+    @classmethod
+    def of(cls, config: "AgentConfig") -> "AskLimits":
+        return cls(
+            max(int(config.plan_ask_slices), 0),
+            max(float(config.plan_ask_minutes), 0.0),
+            max(float(config.plan_ask_cost), 0.0),
+            max(float(config.cost_input), 0.0),
+        )
+
+    def passed(self, estimate: Estimate) -> list[str]:
+        """The thresholds `estimate` passes, by name."""
+        passed: list[str] = []
+        if self.slices and estimate.slices > self.slices:
+            passed.append("slices")
+        if self.minutes and estimate.seconds > self.minutes * 60:
+            passed.append("minutes")
+        if self.cost and estimate.cost > self.cost:
+            passed.append("cost")
+        return passed
+
 
 @dataclass
 class Plan:
-    """The steps of a task, in order."""
+    """The steps of a task, in order.
+
+    `asked` says the sizing question of this plan was put to the user, which
+    happens once: a later update carries it over, unless every step of the
+    plan it replaces was done.
+    """
 
     steps: list[PlanStep] = field(default_factory=list)
+    asked: bool = False
 
     @property
     def done(self) -> int:
@@ -4998,6 +5133,29 @@ class Plan:
     def left(self) -> int:
         """Tokens the steps not done yet still read."""
         return sum(step.tokens for step in self.steps if not step.done)
+
+    def estimate(
+        self,
+        limits: SliceBudget | None = None,
+        throughput: Throughput | None = None,
+        price: float = 0.0,
+    ) -> Estimate:
+        """What the steps not done yet still take: tokens, slices, time, cost."""
+        left = self.left()
+        slices = -(-left // limits.slice) if limits is not None and left else 0
+        speed = throughput.prefill if throughput is not None else 0.0
+        seconds = throughput.seconds(left) if throughput is not None else 0.0
+        return Estimate(left, slices, seconds, left * price / 1_000_000, speed)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"steps": [step.to_dict() for step in self.steps], "asked": self.asked}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "Plan | None":
+        """A plan as `to_dict` wrote it, or ``None`` when it holds no step."""
+        raw = data.get("steps") if isinstance(data, dict) else None
+        steps = [step for step in map(PlanStep.from_dict, raw or []) if step is not None]
+        return cls(steps, bool(data.get("asked"))) if steps else None
 
     def brief(self) -> str:
         """The plan in one line, for the budget note."""
@@ -5037,6 +5195,44 @@ class Plan:
         return "\n".join(lines)
 
 
+class PlanBook:
+    """Plans by session: kept in memory, written through to a `Store`.
+
+    The `Cache` an `Agent` keeps its plans in (`Engine.plans`): every change
+    of a plan is written ahead (namespace `plans`, keyed by session), so a
+    resumed session, or a process restarted over the same store, continues
+    the plan where it stood. `clear` empties the memory only; `delete`
+    forgets a plan in both.
+    """
+
+    NAMESPACE = "plans"
+
+    def __init__(self, store: Store | None = None, maxsize: int = 256) -> None:
+        self.store = store
+        self.memory = LruCache(maxsize)
+
+    def get(self, key: str) -> Plan | None:
+        plan = self.memory.get(key)
+        if plan is None and self.store is not None:
+            plan = Plan.from_dict(self.store.get(self.NAMESPACE, key))
+            if plan is not None:
+                self.memory.set(key, plan)
+        return plan
+
+    def set(self, key: str, value: Plan) -> None:
+        self.memory.set(key, value)
+        if self.store is not None:
+            self.store.set(self.NAMESPACE, key, value.to_dict())
+
+    def delete(self, key: str) -> None:
+        self.memory.delete(key)
+        if self.store is not None:
+            self.store.delete(self.NAMESPACE, key)
+
+    def clear(self) -> None:
+        self.memory.clear()
+
+
 class Planner:
     """Sizes the plan of one session against the slice budget, and keeps it.
 
@@ -5044,6 +5240,8 @@ class Planner:
     refused); `store` keeps plans by session (`key`), so the budget note of a
     later call, or run, recites the same plan. An input is a path, a glob or a
     line range (``notes.md:1-400``), resolved by the workspace as a read.
+    `ask` holds the thresholds past which a plan asks the user once before it
+    is kept (the sizing question, see `update`).
     """
 
     #: Files a glob or a directory is measured over, at most.
@@ -5064,6 +5262,7 @@ class Planner:
         store: Cache,
         key: str,
         throughput: Throughput | None = None,
+        ask: AskLimits | None = None,
     ) -> None:
         self.workspace = workspace
         self.counter = counter
@@ -5071,6 +5270,7 @@ class Planner:
         self.store = store
         self.key = key
         self.throughput = throughput
+        self.ask = ask or AskLimits()
         #: The oversized steps refused last: the same steps sent back are kept
         #: with a warning, not refused for ever (a line cannot be split).
         self.refused: tuple[Any, ...] = ()
@@ -5081,15 +5281,30 @@ class Planner:
     def plan(self) -> Plan | None:
         return self.store.get(self.key)
 
-    async def update(self, items: Iterable[dict[str, Any]]) -> str:
-        """Measure, check and keep a plan; the answer for the model."""
+    async def update(
+        self,
+        items: Iterable[dict[str, Any]],
+        *,
+        question: str = "",
+        options: Iterable[str] = (),
+        ask: Callable[[str, list[str]], Awaitable[str]] | None = None,
+    ) -> str:
+        """Measure, check and keep a plan; the answer for the model.
+
+        A plan that passes the refusal is put to the user once (`ask`, a
+        ``(question, options) -> answer`` delegate) when its estimate passes a
+        threshold of `self.ask` or the model has a `question` about the split;
+        the answer comes back with the plan, and the default ``Stop`` drops it.
+        """
         steps = [step for step in map(self.step_of, items) if step is not None]
         if not steps:
             self.store.delete(self.key)
             self.refused = ()
             return "Plan cleared."
         await asyncio.to_thread(self.size, steps)
-        plan = Plan(steps)
+        previous = self.plan  # a plan with every step done is finished: the next is new
+        asked = previous is not None and previous.asked and previous.current() is not None
+        plan = Plan(steps, asked=asked)
         limits = self.limits() if self.limits is not None else None
         over = [
             step for step in steps
@@ -5100,6 +5315,13 @@ class Planner:
             self.refused = keys
             return self.refusal(plan, over, limits)
         self.refused = ()
+        choices = [str(o).strip() for o in options if str(o).strip()]
+        answer = await self.consult(plan, limits, question.strip(), choices, ask)
+        if answer is not None:
+            plan.asked = True
+            if not choices and answer.lower() == ASK_STOP.lower():
+                self.store.delete(self.key)
+                return "Plan dropped: the user said stop. Ask them what they want instead."
         self.store.set(self.key, plan)
         text = plan.render(limits, self.throughput)
         if over:
@@ -5108,7 +5330,52 @@ class Planner:
                 f"\nKept as sent, though step {numbers} reads more than one slice: "
                 "read it a page at a time."
             )
+        if answer is not None:
+            text += f"\nThe user answered: {answer}"
+        elif question:
+            text += (
+                "\nThe user was not asked (asked once already, or nobody can answer): "
+                "decide the split yourself."
+            )
         return text
+
+    async def consult(
+        self,
+        plan: Plan,
+        limits: SliceBudget | None,
+        question: str,
+        options: list[str],
+        ask: Callable[[str, list[str]], Awaitable[str]] | None,
+    ) -> str | None:
+        """The sizing question: put once per plan, when its estimate passes a
+        threshold or the model asks about the split. The answer, or ``None``
+        when nobody was asked."""
+        if ask is None or plan.asked:
+            return None
+        estimate = plan.estimate(limits, self.throughput, self.ask.price)
+        passed = self.ask.passed(estimate)
+        if not passed and not question:
+            return None
+        head = "This plan is large" if passed else "Plan"
+        count = len(plan.steps)
+        text = f"{head}: {count} step{'s' if count != 1 else ''}, {estimate.describe()}."
+        text += f"\n\n{question}" if question else " Go ahead?"
+        answer = (await ask(text, options or [ASK_GO, ASK_STOP])).strip()
+        return answer or "(the user did not answer)"
+
+    def mark(self, number: int, status: str, title: str = "") -> PlanStep | None:
+        """Set the status of step `number` (1-based) of the kept plan; the
+        change is written through like any other. ``None``: no such step, or
+        (with `title`) the plan was replaced and step `number` is another."""
+        plan = self.plan
+        if plan is None or not 1 <= number <= len(plan.steps) or status not in PLAN_STATUSES:
+            return None
+        step = plan.steps[number - 1]
+        if title and step.title != title:
+            return None
+        step.status = status
+        self.store.set(self.key, plan)
+        return step
 
     @staticmethod
     def step_of(item: Any) -> PlanStep | None:
@@ -5124,14 +5391,24 @@ class Planner:
         """Measure the inputs of every step not done yet."""
         self.spare = self.COUNT_TOTAL
         for step in steps:
-            if step.done:
-                continue
-            for spec in step.inputs:
-                tokens = self.measure(spec)
-                if tokens is None:
-                    step.missing.append(spec)
-                else:
-                    step.sizes.append((spec, tokens))
+            if not step.done:
+                step.sizes, step.missing = self.measure_all(step.inputs)
+
+    def sizes(self, inputs: Iterable[str]) -> tuple[list[tuple[str, int]], list[str]]:
+        """Measure `inputs` afresh: the tokens of each found, and those not found."""
+        self.spare = self.COUNT_TOTAL
+        return self.measure_all(inputs)
+
+    def measure_all(self, inputs: Iterable[str]) -> tuple[list[tuple[str, int]], list[str]]:
+        found: list[tuple[str, int]] = []
+        missing: list[str] = []
+        for spec in inputs:
+            tokens = self.measure(spec)
+            if tokens is None:
+                missing.append(spec)
+            else:
+                found.append((spec, tokens))
+        return found, missing
 
     def refusal(self, plan: Plan, over: list[PlanStep], limits: SliceBudget) -> str:
         lines = [
@@ -5277,6 +5554,7 @@ class ToolRegistry:
         ask: Asker | None = None,
         read_limit: int | Callable[[], int] = 0,
         planner: "Planner | None" = None,
+        delegate: Delegator | None = None,
     ) -> list[Any]:
         """Build the tools for `workspace`.
 
@@ -5290,7 +5568,9 @@ class ToolRegistry:
         leader gets `ask_user`. `read_limit` is the characters one
         `read_text_file` call returns (0: whole files), or a callable asked
         on every read when the budget moves during a run. `planner` sizes the
-        plan of the session; when it is given the leader gets `plan`.
+        plan of the session; when it is given the leader gets `plan`, which
+        puts its sizing question through `ask`. `delegate` runs one step in a
+        fresh context; when it is given the leader gets `delegate`.
         """
         tools = (
             list(self._build_defaults(workspace, vision, progress, read_limit))
@@ -5302,7 +5582,9 @@ class ToolRegistry:
         if ask is not None:
             tools.append(self._build_ask_tool(ask))
         if planner is not None:
-            tools.append(self._build_plan_tool(planner))
+            tools.append(self._build_plan_tool(planner, ask))
+        if delegate is not None:
+            tools.append(self._build_delegate_tool(delegate))
         tools.extend(factory(workspace) for factory in self._factories.values())
         return tools
 
@@ -5387,11 +5669,25 @@ class ToolRegistry:
 
         return [git_status, git_commit, git_push, open_pull_request, publish_work]
 
-    def _build_plan_tool(self, planner: "Planner") -> Any:
-        """The tool that lets the leader plan work too large for one pass."""
-        from agents import function_tool
+    def _build_plan_tool(self, planner: "Planner", ask: Asker | None = None) -> Any:
+        """The tool that lets the leader plan work too large for one pass.
 
-        @function_tool(
+        With `ask` the plan may put its sizing question to the user, on the
+        block of its own call.
+        """
+        from agents import function_tool
+        from agents.tool_context import ToolContext
+
+        @self.guard
+        async def plan(
+            ctx: Any, steps: list[PlanItem], question: str = "", options: list[str] | None = None
+        ) -> str:
+            asking = functools.partial(ask, ctx.tool_call_id) if ask is not None else None
+            return await planner.update(steps, question=question, options=options or [], ask=asking)
+
+        plan.__annotations__["ctx"] = ToolContext  # as for the shell: context, not schema
+        tool = function_tool(
+            plan,
             name_override="plan",
             description_override=(
                 "Plan work too large for one pass: reading many files or a long "
@@ -5401,19 +5697,52 @@ class ToolRegistry:
                 "harness measures each step and refuses one that reads more than "
                 "one slice (the [budget] note says how much); split it by file or "
                 "by line range. Call it again with the whole list to mark progress; "
-                "an empty list clears the plan."
+                "an empty list clears the plan. When the split depends on what the "
+                "user wants, put one 'question' (and 'options') on the call instead "
+                "of calling ask_user; a large plan asks the user on its own, once."
             ),
         )
-        @self.guard
-        async def plan(steps: list[PlanItem]) -> str:
-            return await planner.update(steps)
-
         # inlined: some local servers and small models do not follow `$ref`
-        schema = plan.params_json_schema
+        schema = tool.params_json_schema
         item = schema.pop("$defs", {}).get("PlanItem")
         if item is not None:
             schema["properties"]["steps"]["items"] = item
-        return plan
+        return tool
+
+    def _build_delegate_tool(self, delegate: Delegator) -> Any:
+        """The tool that runs one step of the work in a fresh context."""
+        from agents import function_tool
+        from agents.tool_context import ToolContext
+
+        @self.guard
+        async def delegate_step(
+            ctx: Any,
+            task: str,
+            inputs: list[str] | None = None,
+            step: int = 0,
+            tools: list[str] | None = None,
+        ) -> str:
+            return await delegate(
+                ctx.tool_call_id, task, list(inputs or []), int(step or 0), list(tools or [])
+            )
+
+        delegate_step.__annotations__["ctx"] = ToolContext
+        return function_tool(
+            delegate_step,
+            name_override="delegate",
+            description_override=(
+                "Hand one step of the work to a worker that runs it in a fresh "
+                "context with the workspace tools and returns only its answer, "
+                "capped, so what it reads never fills your context. Use it for a "
+                "step that reads a lot and answers briefly: summarise, search, "
+                "review or transform files. 'task' must say everything the worker "
+                "needs: it sees nothing else. 'inputs' are what it reads (paths, "
+                "globs or line ranges, measured like plan inputs). 'step' is the "
+                "number of a plan step: its inputs are used when you give none, and "
+                "it is marked done when the worker finishes. 'tools' names the only "
+                "tools the worker gets (default: all workspace tools)."
+            ),
+        )
 
     def _build_ask_tool(self, ask: Asker) -> Any:
         """The tool that lets the leader ask the person behind the run."""
@@ -6066,6 +6395,68 @@ class RunResult:
         return "".join(b.text for b in self.blocks if b.kind == kind)
 
 
+class WorkerRelay:
+    """Relays what a worker streams as progress of the call that delegated it.
+
+    A tool call of the worker becomes a line (``-> read_text_file(...)``), so
+    does a failed one (``!!``) and a compaction (``~~``); anything else it
+    streams (text, waits, tool heartbeats) becomes a heartbeat, at most one
+    every `BEAT` seconds. Each report keeps the delegating call alive for the
+    leader's stall guard, as a busy shell command does.
+    """
+
+    #: Seconds between heartbeats relayed for a worker that streams.
+    BEAT = 1.0
+    #: Characters of one relayed line, at most.
+    LINE = 160
+    #: What a worker streams that only says it is alive.
+    BEATS = (
+        EventType.BLOCK_START,
+        EventType.BLOCK_DELTA,
+        EventType.BLOCK_END,
+        EventType.TOOL_PROGRESS,
+        EventType.TOOL_END,
+        EventType.MODEL_WAIT,
+        EventType.MODEL_RETRY,
+        EventType.CONTEXT_USAGE,
+    )
+
+    def __init__(
+        self,
+        report: ToolReporter,
+        call_id: str | None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.report = report
+        self.call_id = call_id
+        self.clock = clock
+        self.beat_at: float | None = None
+
+    def line(self, prefix: str, text: str) -> str:
+        text = " ".join(text.split())
+        if len(text) > self.LINE:
+            text = text[: self.LINE - 3] + "..."
+        return f"{prefix} {text}\n"
+
+    async def __call__(self, event: Event) -> None:
+        data = event.data
+        if event.type == EventType.TOOL_START:
+            text = self.line("->", str(data.get("text") or data.get("name") or "tool"))
+        elif event.type == EventType.TOOL_END and not data.get("ok", True):
+            failed = f"{data.get('name') or 'tool'} failed: {data.get('result') or ''}"
+            text = self.line("!!", failed)
+        elif event.type == EventType.CONTEXT_COMPACT:
+            text = self.line("~~", str(data.get("message") or "compacted"))
+        elif event.type in self.BEATS:
+            if self.beat_at is not None and self.clock() - self.beat_at < self.BEAT:
+                return
+            text = ""
+        else:
+            return
+        self.beat_at = self.clock()
+        await self.report(self.call_id, text)
+
+
 class Engine:
     """The agentic loop on its own: a model, its tools and a block stream.
 
@@ -6256,6 +6647,7 @@ class Engine:
         ask: Asker | None = None,
         read_limit: int | Callable[[], int] = 0,
         planner: Planner | None = None,
+        delegate: Delegator | None = None,
     ) -> list[Any]:
         resolved = config or self.config
         vision = self.build_vision(resolved, usage=usage, session_id=session_id)
@@ -6267,6 +6659,31 @@ class Engine:
             ask=ask,
             read_limit=read_limit,
             planner=planner,
+            delegate=delegate,
+        )
+
+    async def build_run_tools(
+        self,
+        workspace: Workspace,
+        config: AgentConfig,
+        result: RunResult,
+        checkout: "Checkout | None" = None,
+    ) -> list[Any]:
+        """The built-in tools of one run over `workspace`, wired to the run:
+        its progress reporter, its asker, its read page, its planner and its
+        delegate (each only when the config enables it)."""
+        planner = self.build_planner(config, result, workspace)
+        return self.build_tools(
+            workspace,
+            config,
+            checkout,
+            usage=result.usage,
+            session_id=result.session_id,
+            progress=self.tool_reporter(result),
+            ask=self.build_asker(config, result),
+            read_limit=self.page_limit(config, result, await self.read_limit(config)),
+            planner=planner,
+            delegate=self.build_delegate(config, result, workspace, planner),
         )
 
     def build_sdk_agent(self, config: AgentConfig, tools: list[Any]) -> Any:
@@ -6316,6 +6733,7 @@ class Engine:
             self.plans,
             result.session_id or result.run_id,
             self.throughput(config),
+            AskLimits.of(config),
         )
 
     async def context_window(self, config: AgentConfig, role: str = LEADER_ROLE) -> int:
@@ -6608,21 +7026,7 @@ class Engine:
         """
         sandbox = self.build_workspace(workspace, config)
         if tools is None:
-            tools = (
-                self.build_tools(
-                    sandbox,
-                    config,
-                    checkout,
-                    usage=result.usage,
-                    session_id=result.session_id,
-                    progress=self.tool_reporter(result),
-                    ask=self.build_asker(config, result),
-                    read_limit=self.page_limit(config, result, await self.read_limit(config)),
-                    planner=self.build_planner(config, result, sandbox),
-                )
-                if sandbox
-                else []
-            )
+            tools = await self.build_run_tools(sandbox, config, result, checkout) if sandbox else []
         if result.context is None:
             result.context = await self.build_context(
                 config, result, pinned_at=input_size(model_input) - 1, pinned=prompt_of(model_input)
@@ -7067,6 +7471,181 @@ class Engine:
             if owner == session_id and not future.done() and question_id in self.asking
         ]
 
+    # -- workers ------------------------------------------------------------
+
+    #: Share of a worker's fresh budget its inputs may take: the rest is room
+    #: for its pages, its calls and its answer.
+    WORKER_SHARE = 0.5
+
+    def worker_config(self, config: AgentConfig) -> AgentConfig:
+        """The config a worker runs with: the `worker` role (else the leader)
+        as its model, the slim `worker_instructions` with the size of its
+        answer, `worker_max_turns`, and no plan, question or delegate."""
+        spec = config.model_spec(WORKER_ROLE) or config.model_spec(LEADER_ROLE)
+        assert spec is not None  # the leader always resolves
+        instructions = config.worker_instructions
+        if config.worker_max_tokens > 0:
+            words = max(int(config.worker_max_tokens * 0.75), 1)
+            instructions += f"\n\nAnswer within about {words} words."
+        return config.merge(
+            inference_llm=spec.name,
+            inference_url=spec.api_url,
+            inference_key=spec.api_key,
+            instructions=instructions,
+            max_turns=max(int(config.worker_max_turns), 1),
+            plan_enabled=False,
+            ask_enabled=False,
+            delegate_enabled=False,
+        )
+
+    def fork(self, events: EventBus) -> "Engine":
+        """A shallow copy of this engine that publishes on `events` instead.
+
+        It shares the model pool, the counters, speeds and plans, and keeps
+        every override of the class, so a worker runs the way the leader does
+        while what it streams stays off the leader's bus.
+        """
+        twin = copy.copy(self)
+        twin.events = events
+        return twin
+
+    async def worker_budget(self, config: AgentConfig) -> int:
+        """Tokens the inputs of a worker may take: `WORKER_SHARE` of a fresh
+        context, under the time cap once its model's read speed is measured."""
+        budget = await self.context_budget(config)
+        timed = 0
+        if config.slice_stall > 0:
+            timed = self.throughput(config).tokens(config.stream_timeout * config.slice_stall)
+            timed = max(timed, ContextRun.TIMED_FLOOR) if timed else 0
+        return SliceBudget(budget.usable, timed, self.WORKER_SHARE).slice
+
+    def build_delegate(
+        self,
+        config: AgentConfig,
+        result: RunResult,
+        workspace: Workspace,
+        planner: Planner | None = None,
+    ) -> Delegator | None:
+        """The `delegate` of a run, or ``None`` unless `delegate_enabled`.
+
+        The inputs of a step are measured; more than a worker may read
+        (`worker_budget`) is refused once with their sizes, and the same step
+        sent back runs anyway (a line cannot be split). With a `planner`,
+        `step` names a step of the plan: its inputs are the default, it is
+        marked active while the worker runs and done once it answers.
+        """
+        if not config.delegate_enabled:
+            return None
+        refused: list[Any] = [None]
+
+        async def delegate(
+            call_id: str | None, task: str, inputs: list[str], step: int, tools: list[str]
+        ) -> str:
+            task = task.strip()
+            if not task:
+                return "Error: delegate needs a task"
+            numbered: PlanStep | None = None
+            if step:
+                plan = planner.plan if planner is not None else None
+                if plan is None or not 1 <= step <= len(plan.steps):
+                    return f"Error: there is no plan step {step}"
+                numbered = plan.steps[step - 1]
+                inputs = inputs or list(numbered.inputs)
+            worker = self.worker_config(config)
+            measure = Planner(workspace, self.counter(worker), None, LruCache(1), "")
+            sizes, missing = await asyncio.to_thread(measure.sizes, inputs)
+            tokens, limit = sum(size for _, size in sizes), await self.worker_budget(worker)
+            key = (task, tuple(inputs))
+            if tokens > limit and refused[0] != key:
+                refused[0] = key
+                parts = ", ".join(f"{name} {compact_tokens(size)}" for name, size in sizes)
+                return (
+                    f"Not delegated: the inputs take ~{compact_tokens(tokens)} tokens ({parts}), "
+                    f"more than the {compact_tokens(limit)} a worker may read. Split the step "
+                    "by file or by line range ('path:1-400'), or send it again to run it anyway."
+                )
+            refused[0] = None
+            before = numbered.status if numbered is not None else ""
+            if planner is not None and numbered is not None:
+                planner.mark(step, "active", numbered.title)
+            reply, ok = await self.run_worker(
+                worker, result, workspace, task, sizes, missing, call_id=call_id, tools=tools
+            )
+            if planner is not None and numbered is not None:
+                marked = planner.mark(step, "done" if ok else before, numbered.title)
+                if ok and marked is not None:
+                    reply += f"\n[plan] step {step} marked done"
+            return reply
+
+        return delegate
+
+    @staticmethod
+    def worker_prompt(
+        task: str, sizes: Iterable[tuple[str, int]] = (), missing: Iterable[str] = ()
+    ) -> str:
+        """What a worker is told: the task, and the inputs the harness measured."""
+        lines = [f"- {name}: ~{compact_tokens(size)} tokens" for name, size in sizes]
+        lines += [f"- {name}: not found" for name in missing]
+        if not lines:
+            return task
+        return f"{task}\n\nInputs (read long ones a page at a time):\n" + "\n".join(lines)
+
+    async def run_worker(
+        self,
+        config: AgentConfig,
+        result: RunResult,
+        workspace: Workspace,
+        task: str,
+        sizes: Iterable[tuple[str, int]] = (),
+        missing: Iterable[str] = (),
+        *,
+        call_id: str | None = None,
+        tools: Iterable[str] = (),
+    ) -> tuple[str, bool]:
+        """Run `task` in a fresh context: the worker's answer, and whether it finished.
+
+        `config` is the worker's (`worker_config`). It streams onto a bus of
+        its own, relayed as progress of the call that delegated it
+        (`WorkerRelay`), so the page shows what it does and the leader's stall
+        guard sees it alive. It journals nothing; its tokens count to the run
+        (`current_usage`). The answer is clipped to `worker_max_tokens`.
+        """
+        bus = EventBus()
+        bus.on(EventType.ALL, WorkerRelay(self.tool_reporter(result), call_id))
+        twin = self.fork(bus)
+        worker = RunResult(run_id=f"{result.run_id}w{uuid.uuid4().hex[:4]}")
+        built = await twin.build_run_tools(workspace, config, worker)
+        wanted = {str(name).strip() for name in tools if str(name).strip()}
+        if wanted:
+            names = [tool.name for tool in built]
+            unknown = sorted(wanted - set(names))
+            if unknown:
+                return (
+                    f"Error: no worker tool named {', '.join(unknown)} "
+                    f"(there are {', '.join(names)})", False
+                )
+            built = [tool for tool in built if tool.name in wanted]
+        started = time.monotonic()
+        try:
+            await twin.turn(
+                self.worker_prompt(task, sizes, missing), config, worker,
+                tools=built, workspace=workspace,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            kind = classify_error(exc)
+            return (
+                f"Error: the worker failed ({kind}) after {len(worker.tools)} tool calls: "
+                f"{str(exc) or type(exc).__name__}", False
+            )
+        reply = worker.output.strip() or "(the worker answered nothing)"
+        limit = int(config.worker_max_tokens)
+        if limit > 0 and self.counter(config).text(reply) > limit:
+            reply = clip_output(reply, limit * TokenCounter.BYTES_PER_TOKEN)
+        seconds = time.monotonic() - started
+        return f"{reply}\n[worker: {len(worker.tools)} tool calls in {seconds:.0f}s]", True
+
     @staticmethod
     def cancel_stream(streamed: Any) -> None:
         """Stop an SDK stream that will not be read any further."""
@@ -7268,6 +7847,9 @@ class Agent(Engine):
         self.config = self.config.state_paths()
         self.store = store or SqliteStore(self.config.db_path)
         self.cache = cache or LruCache(self.config.cache_size)
+        #: Plans by session, written through to the store: a resumed session,
+        #: or a restarted process, continues the plan where it stood.
+        self.plans = PlanBook(self.store)
         self.sessions = sessions or SessionManager(
             root=self.config.workspace_root,
             ttl=self.config.session_ttl or DEFAULT_SESSION_TTL,
@@ -7762,11 +8344,21 @@ class Agent(Engine):
             return None
         return last
 
+    #: Follows `RESUME_PROMPT` when the session has a plan with steps open.
+    RESUME_PLAN = "The plan of that task, as last recorded:"
+
     async def resume(self, session: Session | str | None, **overrides: Any) -> RunResult:
-        """Continue the unfinished run of a session from its journal."""
-        return await self.run(
-            PASSTHROUGH_TEMPLATE, session=session, input=self.RESUME_PROMPT, **overrides
-        )
+        """Continue the unfinished run of a session from its journal.
+
+        A plan with steps still open is recited whole after the prompt (the
+        budget note of every call only names the current step).
+        """
+        session_id = session.id if isinstance(session, Session) else session
+        prompt = self.RESUME_PROMPT
+        plan = self.plans.get(session_id) if session_id else None
+        if plan is not None and plan.current() is not None:
+            prompt += f"\n\n{self.RESUME_PLAN}\n{plan.render()}"
+        return await self.run(PASSTHROUGH_TEMPLATE, session=session, input=prompt, **overrides)
 
     def session_closed(self, session: Session) -> None:
         """A session went away: its journal goes, and so does a run still in it.
@@ -7775,6 +8367,7 @@ class Agent(Engine):
         run is cancelled through its own loop.
         """
         self.memory.forget(session.id)
+        self.plans.delete(session.id)
         self.drop_context(session.id)
         task = self.live.get(session.id, (None, None))[1]
         if task is not None and not task.done():
@@ -7791,13 +8384,16 @@ class Agent(Engine):
                 task.get_loop().call_soon_threadsafe(task.cancel)
 
     def reconcile(self) -> None:
-        """Forget the journals of sessions that did not survive a restart."""
+        """Forget the journals and plans of sessions that did not survive a restart."""
         if self.sessions.store is not self.store:
             return
         live = {session.id for session in self.sessions.list()}
         for session_id, _record in self.store.list(ConversationMemory.NAMESPACE):
             if session_id not in live:
                 self.memory.forget(session_id)
+        for session_id, _record in self.store.list(PlanBook.NAMESPACE):
+            if session_id not in live:
+                self.plans.delete(session_id)
 
     # -- rules --------------------------------------------------------------
 
@@ -7972,6 +8568,7 @@ class Agent(Engine):
             remembered = len(self.memory.transcript(session_id))
             self.drop_context(session_id)
             self.memory.forget(session_id)
+            self.plans.delete(session_id)
             return {"ok": True, "message": f"Forgot {remembered} remembered turns"}
 
         def list_sessions(_args: str, **_: Any) -> dict[str, Any]:

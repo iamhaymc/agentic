@@ -13,20 +13,17 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 - [ ] Redesign the context usage meter so it is communicated through the main icon (maybe a ring around the icon that fills up like in vscode) 
 
-- [ ] **Work slicing, complete and extended scope.** Each call is timed, the
-      budget is capped to what the model reads in time, `plan` measures and
-      refuses oversized steps, and a note recites budget and plan (see
-      CHANGES.md). Still open:
-  - [ ] Complete scope: isolated workers and a sizing question
-    - [ ] `delegate` tool: a step runs in a fresh context with slim instructions, its own tools and a capped reply
-    - [ ] Sizing question: one `ask_user` when the split depends on intent or the estimate (slices, minutes, cost) passes a threshold
-    - [ ] Plan progress journaled, so a resumed session (or a restarted process) continues the plan
-  - [ ] Extended scope: deterministic batches, folding and evals
-    - [ ] `map` tool: the harness chunks files by tokens and runs one worker per chunk
-    - [ ] Context folding: `branch` / `return` fold a finished sub-task into its summary
-    - [ ] Evals: peak context, success and wall time on long tasks, local and hosted models
-    - [ ] Decode speed in the cap: reserve time for a long reply, not only for the read
-    - [ ] Show the plan and the measured speed on the page and in the repl
+- [ ] **Work slicing, extended scope.** Each call is timed, the budget is
+      capped to what the model reads in time, `plan` measures and refuses
+      oversized steps, asks the user once about a large plan and is written
+      through to the store, `delegate` runs a step in a fresh context, and a
+      note recites budget and plan (see CHANGES.md). Still open:
+  - [ ] `map` tool: the harness chunks files by tokens and runs one worker per chunk
+  - [ ] Context folding: `branch` / `return` fold a finished sub-task into its summary
+  - [ ] Evals: peak context, success and wall time on long tasks, local and hosted models
+  - [ ] Decode speed in the cap: reserve time for a long reply, not only for the read
+  - [ ] Show the plan and the measured speed on the page and in the repl
+  - [ ] Show a worker's steps as nested blocks on the page and in the repl (today: progress lines on the `delegate` block)
 
 - [ ] **Context compaction, extended scope.** Compaction is token aware,
       tiered and runs before every model call (see CHANGES.md). Still open:

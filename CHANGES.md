@@ -411,6 +411,33 @@ miss) took longer than the guard allowed. The constraints that shaped it:
   end of the input it costs the provider's cache only the newest response.
 - **Off with one switch.** `plan_enabled: false` restores the input byte for
   byte, which is what the compaction tests run under.
+- **A worker reads so the leader does not.** Slicing bounds what one step
+  brings in, but every step still lands in the leader's context and stays there
+  until a compaction folds it. `delegate` runs the step in a fresh context
+  instead: the worker gets slim instructions (`worker_instructions`), the
+  workspace tools built for it alone, its own compaction, and none of plan,
+  `ask_user` or `delegate` (no recursion, no question nobody routes); only its
+  answer comes back, clipped to `worker_max_tokens`. A cheaper model can do the
+  reading (`worker_model`); the leader's context grows by the answer alone.
+- **A worker is visible and alive.** It streams onto a private bus, so its
+  blocks never interleave with the leader's or end the run on the page; a relay
+  turns its calls into `tool.progress` lines on the `delegate` block, which is
+  also what keeps the leader's stall guard from failing a long worker. A
+  shallow copy of the engine (`fork`) runs it, so class overrides (a scripted
+  model, a tool set) apply to the worker as they do to the leader, and its
+  tokens land on the run through the same context variable as any specialist.
+- **Asked once, with numbers.** A plan can outgrow what the user expected: 48
+  slices, 35 minutes, a cost. Past `plan_ask_*` the plan asks before it is
+  kept, with the estimate in the question, and the model's own question about
+  the split rides on the same card, so the user answers one question, not two.
+  Once per plan, since a question on every progress update would be a nag;
+  `Stop` drops the plan rather than leaving it recited on every call.
+- **Written ahead, like the journal.** Plans lived in memory, so a crash or
+  `/resume` lost where the work stood and the model re-planned from the
+  transcript. An `Agent` keeps them in a `PlanBook`, written through to the
+  store on every change (a plan call, a delegated step marked), so the note of
+  the next call in any process recites it, `/resume` appends it whole, and a
+  step cut off mid worker is still `active`.
 
 ## Learned rules
 
@@ -1017,8 +1044,13 @@ harness.
       budget note on every call, `Planner` and the `plan` tool (paths, confined
       lazy globs, bounded line ranges; refuse once, then keep), `plan_enabled`,
       the `SliceTest` suite and the docs.
-    - [ ] Complete scope: in [`TODO.md`](TODO.md) (`delegate` workers, the
-      sizing question, plan progress journaled).
+    - [x] Complete scope: `delegate` (`build_delegate`, `worker_config`,
+      `fork`, `run_worker`, `WorkerRelay`, the worker role and `worker_*`
+      options, inputs measured and refused once, plan steps lent and marked),
+      the sizing question (`Plan.estimate`, `AskLimits`, `plan_ask_*`, the
+      `question` / `options` of `plan`), `PlanBook` written through to the
+      store and recited by `/resume`, `SizingTest`, `PlanJournalTest`,
+      `WorkerTest` and the docs.
     - [ ] Extended scope: in [`TODO.md`](TODO.md) (`map`, context folding,
       evals).
 
