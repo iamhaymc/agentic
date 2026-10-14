@@ -2354,6 +2354,471 @@ class SliceTest(unittest.TestCase):
         self.assertEqual(engine.plans.get("s1").steps[1].title, "Write b")
 
 
+class SizingTest(unittest.TestCase):
+    """The sizing question: a large plan, or a split that depends on intent, asks once."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.ws = A.Workspace(self.root, shell_timeout=10)
+        self.store = A.LruCache()
+        self.questions: list[tuple[str, list[str]]] = []
+        self.answers: list[str] = []
+
+    async def ask(self, question, options):
+        self.questions.append((question, options))
+        return self.answers.pop(0) if self.answers else "Go ahead"
+
+    def planner(self, slices=1, minutes=0.0, cost=0.0, price=0.0, slice_budget=4000):
+        limits = A.AskLimits(slices, minutes, cost, price)
+        budget = A.SliceBudget(slice_budget)  # one slice: 1k tokens
+        return A.Planner(self.ws, A.TokenCounter(None), lambda: budget, self.store, "s", ask=limits)
+
+    def steps(self, count=3, size=2000):
+        for n in range(count):
+            (self.root / f"p{n}.md").write_text("x" * size, encoding="utf-8")
+        return [{"title": f"Read {n}", "inputs": [f"p{n}.md"], "status": "pending"} for n in range(count)]
+
+    def test_an_estimate_says_slices_minutes_and_cost(self):
+        plan = A.Plan([
+            A.PlanStep("Read", sizes=[("a.md", 3000)]),
+            A.PlanStep("Done", status="done", sizes=[("b.md", 9000)]),
+        ])
+        estimate = plan.estimate(A.SliceBudget(4000), A.Throughput(prefill=10.0), price=2.0)
+        self.assertEqual((estimate.tokens, estimate.slices, estimate.seconds), (3000, 3, 300.0))
+        self.assertAlmostEqual(estimate.cost, 0.006)
+        self.assertEqual(
+            estimate.describe(),
+            "~3.0k tokens to read in 3 slices, ~5 min at ~10 tokens/s, ~0.01 to read once",
+        )
+        self.assertEqual(A.Plan([A.PlanStep("Read", sizes=[("a.md", 50)])]).estimate().describe(), "~50 tokens to read")
+
+    def test_thresholds_are_passed_strictly_and_zero_is_off(self):
+        estimate = A.Estimate(tokens=9000, slices=9, seconds=700, cost=2.0)
+        self.assertEqual(A.AskLimits(8, 10, 1.0).passed(estimate), ["slices", "minutes", "cost"])
+        self.assertEqual(A.AskLimits(9, 0, 0).passed(estimate), [])
+        limits = A.AskLimits.of(A.AgentConfig(cost_input=3.0))
+        self.assertEqual(limits, A.AskLimits(8, 10.0, 1.0, 3.0))
+
+    def test_a_large_plan_asks_once_and_the_answer_comes_back(self):
+        planner = self.planner()
+        steps = self.steps()  # 1.5k tokens: two slices of 1k
+        text = run(planner.update(steps, ask=self.ask))
+        self.assertEqual(len(self.questions), 1)
+        question, options = self.questions[0]
+        self.assertTrue(question.startswith("This plan is large: 3 steps, ~1.5k tokens to read in 2 slices"), question)
+        self.assertTrue(question.endswith("Go ahead?"))
+        self.assertEqual(options, [A.ASK_GO, A.ASK_STOP])
+        self.assertIn("The user answered: Go ahead", text)
+        self.assertTrue(self.store.get("s").asked)
+        steps[0]["status"] = "done"
+        again = run(planner.update(steps, ask=self.ask))  # progress: never asked twice
+        self.assertEqual(len(self.questions), 1)
+        self.assertNotIn("The user", again)
+        for step in steps:
+            step["status"] = "done"
+        run(planner.update(steps, ask=self.ask))
+        run(planner.update(self.steps(count=4), ask=self.ask))  # finished: the next plan is new
+        self.assertEqual(len(self.questions), 2)
+
+    def test_stop_drops_the_plan(self):
+        self.answers.append("stop")
+        text = run(self.planner().update(self.steps(), ask=self.ask))
+        self.assertTrue(text.startswith("Plan dropped"), text)
+        self.assertIsNone(self.store.get("s"))
+
+    def test_the_models_question_is_put_with_the_estimate(self):
+        self.answers.append("Stop")  # one of the model's own options: not a stop
+        planner = self.planner(slices=0)
+        text = run(planner.update(
+            self.steps(count=1), question="By chapter or by topic?", options=["chapter", "Stop"], ask=self.ask
+        ))
+        question, options = self.questions[0]
+        self.assertEqual(question, "Plan: 1 step, ~500 tokens to read in 1 slice.\n\nBy chapter or by topic?")
+        self.assertEqual(options, ["chapter", "Stop"])
+        self.assertIn("The user answered: Stop", text)
+        self.assertIsNotNone(self.store.get("s"))
+
+    def test_a_small_plan_asks_nothing(self):
+        text = run(self.planner(slices=8).update(self.steps(), ask=self.ask))
+        self.assertEqual(self.questions, [])
+        self.assertFalse(self.store.get("s").asked)
+        self.assertNotIn("The user", text)
+
+    def test_nobody_to_ask_leaves_the_split_to_the_model(self):
+        text = run(self.planner().update(self.steps(), question="By chapter?"))
+        self.assertIn("The user was not asked", text)
+        self.assertFalse(self.store.get("s").asked)
+
+    def test_a_refused_plan_asks_nothing(self):
+        steps = self.steps(count=1, size=8000)  # 2k tokens, over the 1k slice
+        text = run(self.planner().update(steps, ask=self.ask))
+        self.assertIn("Plan not kept", text)
+        self.assertEqual(self.questions, [])
+
+    def test_the_question_takes_over_the_block_of_the_plan_call(self):
+        from agents.testing import assistant_message, function_call
+
+        for n in range(3):
+            (self.root / f"p{n}.md").write_text("x" * 4000, encoding="utf-8")  # 1k tokens each
+        plan = {"steps": [{"title": f"Read {n}", "inputs": [f"p{n}.md"], "status": "pending"} for n in range(3)]}
+        engine, model = SliceTest.scripted(
+            self, [[function_call("plan", plan, call_id="p1")], [assistant_message("done")]],
+            ask_enabled=True, plan_ask_slices=1,
+        )
+        seen = []
+
+        def answer(event):
+            seen.append(event)
+            engine.answer(event.data["id"], "Go ahead", session_id=event.session_id)
+
+        engine.events.on(A.EventType.QUESTION_START, answer)
+        result = run(engine.run("plan it", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(seen[0].data["id"], result.tools[0].id)
+        self.assertIn("This plan is large", seen[0].data["question"])
+        output = next(i for i in model.calls[1].input if i.get("type") == "function_call_output")
+        self.assertIn("The user answered: Go ahead", output["output"])
+
+
+class PlanJournalTest(unittest.TestCase):
+    """A plan is written through to the store: resumed or restarted, it goes on."""
+
+    def plan(self):
+        return A.Plan(
+            [
+                A.PlanStep("Read", ["a.md"], "done", [("a.md", 500)]),
+                A.PlanStep("Write", ["b.md"], "active", [], ["b.md"]),
+            ],
+            asked=True,
+        )
+
+    def test_a_plan_round_trips(self):
+        plan = self.plan()
+        self.assertEqual(A.Plan.from_dict(json.loads(json.dumps(plan.to_dict()))), plan)
+        self.assertIsNone(A.Plan.from_dict({"steps": [{"title": ""}, "junk"]}))
+        self.assertIsNone(A.Plan.from_dict(None))
+        odd = A.Plan.from_dict({"steps": [{"title": "x", "status": "weird", "sizes": [["a", "b"]]}]})
+        self.assertEqual((odd.steps[0].status, odd.steps[0].sizes), ("pending", []))
+
+    def test_a_plan_book_writes_through(self):
+        store = A.MemoryStore()
+        book = A.PlanBook(store)
+        book.set("s", self.plan())
+        self.assertEqual(A.PlanBook(store).get("s"), self.plan())  # another process
+        book.clear()  # memory only
+        self.assertEqual(book.get("s"), self.plan())
+        book.delete("s")
+        self.assertIsNone(book.get("s"))
+        self.assertIsNone(store.get(A.PlanBook.NAMESPACE, "s"))
+
+    def test_marking_a_step_is_written_through(self):
+        store = A.MemoryStore()
+        book = A.PlanBook(store)
+        book.set("s", self.plan())
+        planner = A.Planner(A.Workspace(tempfile.gettempdir()), A.TokenCounter(None), None, book, "s")
+        self.assertIsNotNone(planner.mark(2, "done", "Write"))
+        self.assertEqual(store.get(A.PlanBook.NAMESPACE, "s")["steps"][1]["status"], "done")
+        self.assertIsNone(planner.mark(2, "pending", "Another"))  # replaced meanwhile
+        self.assertIsNone(planner.mark(3, "done"))
+        self.assertIsNone(planner.mark(1, "finished"))
+
+    def test_a_restarted_agent_continues_the_plan(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root, True))
+        options = dict(console=False, config_file=False, env=False, workspace_root=root, session_durable=True)
+        first = A.Agent(store=A.SqliteStore(root / "agent.db"), **options)
+        session = first.sessions.create()
+        first.plans.set(session.id, self.plan())
+        first.close()
+        second = A.Agent(store=A.SqliteStore(root / "agent.db"), **options)
+        self.addCleanup(lambda: (second.sessions.close_all(destroy=True), second.close()))
+        self.assertEqual(second.plans.get(session.id), self.plan())
+        context = run(second.build_context(second.config, A.RunResult(session_id=session.id)))
+        self.assertIn("[plan] 1/2 done; now 2. Write", context.note_text())
+
+    def test_a_closed_or_forgotten_session_drops_its_plan(self):
+        agent = quiet_agent()
+        self.addCleanup(agent.close)
+        closed, forgotten = agent.sessions.create(), agent.sessions.create()
+        for session in (closed, forgotten):
+            agent.plans.set(session.id, self.plan())
+        agent.sessions.close(closed.id)
+        run(agent.commands.invoke("/forget", session_id=forgotten.id))
+        self.assertEqual(agent.store.list(A.PlanBook.NAMESPACE), [])
+
+    def test_a_restart_forgets_plans_without_a_session(self):
+        store = A.MemoryStore()
+        store.set(A.PlanBook.NAMESPACE, "ghost", self.plan().to_dict())
+        agent = quiet_agent(store=store)
+        self.addCleanup(agent.close)
+        self.assertIsNone(store.get(A.PlanBook.NAMESPACE, "ghost"))
+
+    def test_resume_recites_the_open_plan(self):
+        class Capture(A.Agent):
+            async def run(self, template, **kwargs):
+                self.asked = kwargs["input"]
+                return A.RunResult()
+
+        agent = quiet_agent(Capture)
+        self.addCleanup(agent.close)
+        session = agent.sessions.create()
+        run(agent.resume(session))
+        self.assertEqual(agent.asked, A.Agent.RESUME_PROMPT)  # no plan: the prompt alone
+        agent.plans.set(session.id, self.plan())
+        run(agent.resume(session.id))
+        self.assertTrue(agent.asked.startswith(A.Agent.RESUME_PROMPT))
+        self.assertIn(f"{A.Agent.RESUME_PLAN}\nPlan: 1 of 2 done", agent.asked)
+        self.assertIn("2. [>] Write (not found yet: b.md)", agent.asked)
+
+
+class WorkerTest(unittest.TestCase):
+    """`delegate`: one step in a fresh context, its own tools, a capped answer."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "a.md").write_text("x" * 2000, encoding="utf-8")  # 500 tokens
+
+    def scripted(self, steps, **overrides):
+        return SliceTest.scripted(self, steps, **overrides)
+
+    @staticmethod
+    def outputs(call):
+        """The tool outputs in the input of a model call, by call id."""
+        return {i["call_id"]: i["output"] for i in call.input if i.get("type") == "function_call_output"}
+
+    def test_a_step_runs_in_a_fresh_context_and_only_its_answer_returns(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted([
+            [function_call("delegate", {"task": "Summarise a.md", "inputs": ["a.md"]}, call_id="d1")],
+            [function_call("read_text_file", {"path": "a.md"}, call_id="r1")],
+            [assistant_message("A is all x.")],
+            [assistant_message("done")],
+        ])
+        result = run(engine.run("summarise everything", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        leader, worker, _, last = model.calls
+        self.assertEqual(len(worker.input), 1)  # fresh: the task alone
+        self.assertEqual(worker.input[0]["content"], "Summarise a.md\n\nInputs (read long ones a page at a time):\n- a.md: ~500 tokens")
+        self.assertNotIn("summarise everything", json.dumps(worker.input))
+        self.assertTrue(worker.system_instructions.startswith(A.DEFAULT_WORKER_INSTRUCTIONS))
+        self.assertIn("Answer within about 750 words.", worker.system_instructions)
+        self.assertEqual(leader.system_instructions, A.DEFAULT_INSTRUCTIONS)
+        names = {tool.name for tool in worker.tools}
+        self.assertIn("read_text_file", names)
+        self.assertFalse(names & {"delegate", "plan", "ask_user"})
+        self.assertTrue({"delegate", "plan"} <= {tool.name for tool in leader.tools})
+        outputs = self.outputs(last)
+        self.assertEqual(list(outputs), ["d1"])  # the worker's own read never reaches the leader
+        self.assertTrue(outputs["d1"].startswith("A is all x.\n[worker: 1 tool calls in "), outputs["d1"])
+        self.assertEqual([call.name for call in result.tools], ["delegate"])
+
+    def test_the_worker_is_shown_as_progress_of_its_call(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, _ = self.scripted([
+            [function_call("delegate", {"task": "Summarise a.md"}, call_id="d1")],
+            [function_call("read_text_file", {"path": "a.md"}, call_id="r1")],
+            [assistant_message("A is all x.")],
+            [assistant_message("done")],
+        ])
+        seen: list[A.Event] = []
+        engine.events.on(A.EventType.ALL, seen.append)
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        lines = [e.data["text"] for e in seen if e.type == A.EventType.TOOL_PROGRESS]
+        self.assertTrue(lines, "nothing relayed")
+        self.assertTrue(all(e.data["id"] == result.tools[0].id for e in seen if e.type == A.EventType.TOOL_PROGRESS))
+        self.assertIn('-> read_text_file(path="a.md")\n', lines)
+        started = [e.data["name"] for e in seen if e.type == A.EventType.TOOL_START]
+        self.assertEqual(started, ["delegate"])  # the worker's calls stay off the leader's bus
+        self.assertEqual(sum(e.type == A.EventType.AGENT_END for e in seen), 1)
+
+    def test_a_long_answer_is_clipped(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted(
+            [
+                [function_call("delegate", {"task": "Say a lot"}, call_id="d1")],
+                [assistant_message("word " * 400)],
+                [assistant_message("done")],
+            ],
+            worker_max_tokens=50,
+        )
+        run(engine.run("go", workspace=self.root, session_id="s1"))
+        output = self.outputs(model.calls[-1])["d1"]
+        self.assertIn("chars omitted", output)
+        self.assertLess(len(output), 400)
+
+    def test_a_plan_step_lends_its_inputs_and_is_marked_done(self):
+        from agents.testing import assistant_message, function_call
+
+        plan = {"steps": [
+            {"title": "Summarise a", "inputs": ["a.md"], "status": "pending"},
+            {"title": "Write", "inputs": [], "status": "pending"},
+        ]}
+        engine, model = self.scripted([
+            [function_call("plan", plan, call_id="p1")],
+            [function_call("delegate", {"task": "Summarise it", "step": 1}, call_id="d1")],
+            [assistant_message("A is all x.")],
+            [assistant_message("done")],
+        ])
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        self.assertIn("- a.md: ~500 tokens", model.calls[2].input[0]["content"])
+        self.assertTrue(self.outputs(model.calls[-1])["d1"].endswith("[plan] step 1 marked done"))
+        self.assertEqual([s.status for s in engine.plans.get("s1").steps], ["done", "pending"])
+        self.assertIn("[plan] 1/2 done; now 2. Write", model.calls[-1].input[-1]["content"])
+
+    def test_a_missing_step_is_an_error(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted([
+            [function_call("delegate", {"task": "Do it", "step": 3}, call_id="d1")],
+            [assistant_message("done")],
+        ])
+        run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertEqual(self.outputs(model.calls[-1])["d1"], "Error: there is no plan step 3")
+
+    def test_inputs_over_a_worker_budget_are_refused_once(self):
+        from agents.testing import assistant_message, function_call
+
+        (self.root / "big.md").write_text("x" * 12_000, encoding="utf-8")  # 3k tokens, over 2.5k
+        args = {"task": "Summarise big.md", "inputs": ["big.md"]}
+        engine, model = self.scripted([
+            [function_call("delegate", args, call_id="d1")],
+            [function_call("delegate", args, call_id="d2")],
+            [assistant_message("Big is all x.")],
+            [assistant_message("done")],
+        ])
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        outputs = self.outputs(model.calls[-1])
+        self.assertTrue(outputs["d1"].startswith("Not delegated: the inputs take ~3.0k tokens (big.md 3.0k), more than the 2.5k"), outputs["d1"])
+        self.assertTrue(outputs["d2"].startswith("Big is all x."))
+
+    def test_a_failing_worker_is_reported_not_raised(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted(
+            [
+                [function_call("delegate", {"task": "Loop"}, call_id="d1")],
+                [function_call("list_directory", {"path": "."}, call_id="l1")],
+                [assistant_message("done")],
+            ],
+            worker_max_turns=1,
+        )
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        output = self.outputs(model.calls[-1])["d1"]
+        self.assertTrue(output.startswith("Error: the worker failed ("), output)
+        self.assertIn("after 1 tool calls", output)
+        self.assertFalse(result.tools[0].ok)
+
+    def test_tools_names_the_only_tools_the_worker_gets(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted([
+            [function_call("delegate", {"task": "Read", "tools": ["read_text_file"]}, call_id="d1")],
+            [assistant_message("ok")],
+            [function_call("delegate", {"task": "Read", "tools": ["fly"]}, call_id="d2")],
+            [assistant_message("done")],
+        ])
+        run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertEqual([tool.name for tool in model.calls[1].tools], ["read_text_file"])
+        self.assertTrue(self.outputs(model.calls[-1])["d2"].startswith("Error: no worker tool named fly (there are "))
+
+    def test_the_worker_tokens_count_to_the_run(self):
+        from agents.testing import assistant_message, function_call
+        from agents.usage import Usage
+
+        engine, model = self.scripted([
+            [function_call("delegate", {"task": "Do it"}, call_id="d1")],
+            [assistant_message("ok")],
+            [assistant_message("done")],
+        ])
+        model.set_default_usage(Usage(requests=1, input_tokens=100, output_tokens=10, total_tokens=110))
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertEqual((result.usage.requests, result.usage.input_tokens), (3, 300))
+
+    def test_an_agent_journals_the_delegate_call_not_the_workers_steps(self):
+        from agents.testing import ScriptedModel, assistant_message, function_call
+
+        model = ScriptedModel([
+            [function_call("delegate", {"task": "Summarise a.md", "inputs": ["a.md"]}, call_id="d1")],
+            [function_call("read_text_file", {"path": "a.md"}, call_id="r1")],
+            [assistant_message("A is all x.")],
+            [assistant_message("done")],
+        ])
+
+        class Scripted(A.Agent):
+            def build_model(self, config, role=A.LEADER_ROLE):
+                return model
+
+        agent = quiet_agent(Scripted, shell_enabled=False, workspace_root=self.root / "ws")
+        self.addCleanup(agent.close)
+        session = agent.sessions.create()
+        (session.workspace / "a.md").write_text("x" * 2000, encoding="utf-8")
+        result = run(agent.run("{{ config.input }}", session=session, input="go"))
+        self.assertTrue(result.ok, result.error)
+        turns = agent.memory.transcript(session.id).turns
+        self.assertEqual([t.meta.get("name") for t in turns if t.role == "tool"], ["delegate"])
+        self.assertEqual([t.role for t in turns], ["user", "tool", "assistant"])
+        self.assertNotIn("r1", json.dumps([t.items for t in turns]))
+
+    def test_the_worker_role_falls_back_to_the_leader(self):
+        engine = A.Engine(env=False, config_file=False, inference_llm="big", worker_max_turns=7)
+        self.addCleanup(engine.close)
+        worker = engine.worker_config(engine.config)
+        self.assertEqual((worker.inference_llm, worker.max_turns), ("big", 7))
+        self.assertFalse(worker.plan_enabled or worker.ask_enabled or worker.delegate_enabled)
+        small = engine.worker_config(engine.config.merge(worker_model="small", worker_api_url="http://w"))
+        self.assertEqual((small.inference_llm, small.inference_url), ("small", "http://w"))
+        bare = engine.worker_config(engine.config.merge(worker_max_tokens=0))
+        self.assertEqual(bare.instructions, A.DEFAULT_WORKER_INSTRUCTIONS)
+
+    def test_the_delegate_tool_is_built_only_when_enabled(self):
+        ws = A.Workspace(self.root)
+        engine = A.Engine(env=False, config_file=False, delegate_enabled=False, shell_enabled=False)
+        self.addCleanup(engine.close)
+        self.assertIsNone(engine.build_delegate(engine.config, A.RunResult(), ws))
+        names = {tool.name for tool in run(engine.build_run_tools(ws, engine.config, A.RunResult()))}
+        self.assertNotIn("delegate", names)
+        self.assertIn("plan", names)
+
+    def test_the_relay_turns_events_into_lines_and_paced_beats(self):
+        reports: list[tuple[str, str]] = []
+        clock = [0.0]
+
+        async def report(call_id, text):
+            reports.append((call_id, text))
+
+        relay = A.WorkerRelay(report, "c1", clock=lambda: clock[0])
+
+        async def drive():
+            await relay(A.Event(A.EventType.TOOL_START, {"text": 'read_text_file(path="a.md")'}))
+            await relay(A.Event(A.EventType.BLOCK_DELTA, {"text": "x"}))  # within a beat of the line
+            clock[0] = 2.0
+            await relay(A.Event(A.EventType.BLOCK_DELTA, {"text": "x"}))
+            await relay(A.Event(A.EventType.BLOCK_DELTA, {"text": "x"}))
+            await relay(A.Event(A.EventType.TOOL_END, {"name": "run", "ok": False, "result": "boom\nagain"}))
+            await relay(A.Event(A.EventType.CONTEXT_COMPACT, {"message": "Compacted 9k -> 2k"}))
+            await relay(A.Event(A.EventType.AGENT_START, {}))  # nothing a worker publishes
+            await relay(A.Event(A.EventType.TOOL_START, {"text": "y" * 500}))
+
+        run(drive())
+        texts = [text for _, text in reports]
+        self.assertEqual(texts[:5], [
+            '-> read_text_file(path="a.md")\n', "", "!! run failed: boom again\n", "~~ Compacted 9k -> 2k\n",
+            "-> " + "y" * 157 + "...\n",
+        ])
+        self.assertTrue(all(call_id == "c1" for call_id, _ in reports))
+
+
 class AgentContextTest(unittest.TestCase):
     """Compaction over the journal: an endless chat on a small window."""
 
