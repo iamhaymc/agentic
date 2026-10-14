@@ -34,6 +34,8 @@ Thumbs.db
 # -----------------------------
 # Other
 
+.agentic/
+
 *.log
 .hf-cache/
 **/*erotic*

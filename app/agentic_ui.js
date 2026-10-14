@@ -4,8 +4,8 @@
  * preview), Clipboard (copy with an http fallback), Blocks (content
  * subscribers, updated concurrently and out of order), Theme (VS Code theme
  * subset), Commands (slash commands), Questions (what the model asked),
- * Wait (a silent model's timer), Saved (the last session) and Socket (hub
- * client).
+ * Feedback (votes that teach rules), Resume (an unfinished run), Wait (a
+ * silent model's timer), Saved (the last session) and Socket (hub client).
  */
 (() => {
   "use strict";
@@ -57,6 +57,13 @@
       alert:
         '<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/>' +
         '<path d="M12 9v4"/><path d="M12 17h.01"/>',
+      "thumbs-up":
+        '<path d="M7 10v12"/><path d="M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.3 8A2 2 0 0 1 17.5 22H4' +
+        'a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.8a2 2 0 0 0 1.8-1.1L12 2a3.1 3.1 0 0 1 3 3.9Z"/>',
+      "thumbs-down":
+        '<path d="M17 14V2"/><path d="M9 18.1 10 14H4.2a2 2 0 0 1-1.9-2.6l2.3-8A2 2 0 0 1 6.5 2H20' +
+        'a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.8a2 2 0 0 0-1.8 1.1L12 22a3.1 3.1 0 0 1-3-3.9Z"/>',
+      play: '<path d="M6 3.5v17a1 1 0 0 0 1.5.9l13-8.5a1 1 0 0 0 0-1.8l-13-8.5A1 1 0 0 0 6 3.5Z"/>',
     },
     /** Icon markup for a static template. The set is ours, so it is safe HTML. */
     markup(name, className) {
@@ -76,6 +83,7 @@
     tool: "wrench",
     question: "help",
     log: "info",
+    warning: "alert",
     error: "alert",
   };
 
@@ -414,6 +422,7 @@
       "disabledForeground",
     ],
     "--error": ["errorForeground", "editorError.foreground", "inputValidation.errorBorder"],
+    "--warn": ["editorWarning.foreground", "list.warningForeground", "inputValidation.warningBorder"],
     "--link": ["textLink.foreground", "textLink.activeForeground"],
     "--code-bg": ["textCodeBlock.background", "editorWidget.background"],
     "--badge-bg": ["badge.background"],
@@ -520,6 +529,38 @@
       this.copyButton = this.node.querySelector(".copy");
       this.toggle.addEventListener("click", () => this.collapse());
       this.copyButton.addEventListener("click", () => this.copy());
+      if (this.kind === "output") this.votes();
+    }
+
+    /** Thumbs on an answer: a vote teaches the agent a rule (see `/rules`). */
+    votes() {
+      this.voteButtons = {};
+      [
+        ["up", "thumbs-up", "Good answer"],
+        ["down", "thumbs-down", "Bad answer"],
+      ].forEach(([vote, icon, title]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "button tiny vote";
+        button.dataset.vote = vote;
+        button.title = title;
+        button.setAttribute("aria-label", title);
+        button.setAttribute("aria-pressed", "false");
+        button.innerHTML = Icons.markup(icon);
+        button.addEventListener("click", () => Feedback.send(this, vote));
+        this.copyButton.before(button);
+        this.voteButtons[vote] = button;
+      });
+    }
+
+    /** Show a vote: pending while its rule is learned, then pressed; none clears it. */
+    voted(vote, pending) {
+      this.node.dataset.vote = vote || "";
+      this.node.dataset.voting = String(Boolean(pending));
+      Object.entries(this.voteButtons || {}).forEach(([name, button]) => {
+        button.setAttribute("aria-pressed", String(name === vote));
+        button.disabled = Boolean(vote);
+      });
     }
 
     label(text) {
@@ -879,6 +920,63 @@
     },
   };
 
+  // --------------------------------------------------------------- feedback
+
+  /** Votes on answers. The server distils a rule from the run behind the
+   *  answer and tells every client of the session how it went (`feedback`);
+   *  while a rule is being learned the mark turns its core. */
+  const Feedback = {
+    pending: new Set(),
+    send(block, vote) {
+      if (block.node.dataset.vote) return;
+      if (!Socket.send({ type: "feedback", id: block.id, vote })) return;
+      block.voted(vote, true);
+      this.pending.add(block.id);
+      this.update();
+    },
+    receive(message) {
+      this.pending.delete(message.id);
+      this.update();
+      const block = Blocks.map.get(message.id);
+      const rated = /^Already rated (up|down)/.exec(message.message || "");
+      if (block) block.voted(message.ok ? message.vote : rated ? rated[1] : "");
+      const warning = message.warning || "";
+      const text = String(message.message || "").replace(`\n${warning}`, "");
+      Blocks.note(message.ok ? "log" : "error", text || "feedback failed");
+      if (warning) Blocks.note("warning", warning);
+    },
+    update() {
+      el.app.dataset.learning = String(this.pending.size > 0);
+      Socket.describe();
+    },
+  };
+
+  // ----------------------------------------------------------------- resume
+
+  /** The run that did not finish (a crash, a failure, a stop) offers to carry
+   *  on from its prompt; the journal on the server holds what it had done. */
+  const Resume = {
+    button: null,
+    offer(block) {
+      this.withdraw();
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "button tiny resume";
+      button.title = "Resume this run";
+      button.setAttribute("aria-label", "Resume this run");
+      button.innerHTML = Icons.markup("play");
+      button.addEventListener("click", () => {
+        if (Socket.send({ type: "command", text: "/resume" })) this.withdraw();
+      });
+      block.node.querySelector(".block-actions").prepend(button);
+      this.button = button;
+    },
+    withdraw() {
+      if (this.button) this.button.remove();
+      this.button = null;
+    },
+  };
+
   // ----------------------------------------------------------------- socket
 
   const Socket = {
@@ -937,7 +1035,9 @@
             ? ", model writing"
             : el.app.dataset.busy === "true"
               ? ", working"
-              : "";
+              : el.app.dataset.learning === "true"
+                ? ", learning a rule"
+                : "";
       const words = {
         online: "connected",
         offline: "disconnected",
@@ -985,12 +1085,20 @@
           this.describe();
           Commands.server = message.commands || [];
           Theme.apply(message.theme);
-          this.replay(message.history);
+          // The journal, then the run in flight where it is now, then what it asked.
+          this.replay(message.history, message.unfinished);
+          (message.live || []).forEach((live) => this.revive(live));
+          (message.questions || []).forEach((question) => Questions.ask(question));
+          this.busy(Boolean(message.busy));
           if (asked && asked !== this.session)
             Blocks.note("log", `Session \`#${asked}\` has ended; this is a new one.`);
+          // once per page: a flaky connection must not stack the same warning
+          if (message.warning && !this.warned) Blocks.note("warning", message.warning);
+          this.warned = this.warned || Boolean(message.warning);
           break;
         }
         case "block.start":
+          if (message.kind === "prompt") Resume.withdraw();
           Blocks.ensure(message.id, message.kind, message.role).set(message.text || "");
           if (message.attachments && message.attachments.length) {
             Blocks.map
@@ -1046,6 +1154,9 @@
         case "question.end":
           Questions.close(message);
           break;
+        case "feedback":
+          Feedback.receive(message);
+          break;
         case "model.retry":
           Blocks.note(
             "error",
@@ -1076,23 +1187,47 @@
           break;
       }
     },
-    /** Render the transcript the server remembers, replacing what is shown. */
-    replay(history) {
+    /** Render the journal the server keeps, replacing what is shown. A turn
+     *  keeps the id of the block it was journaled from, its vote and, on a
+     *  prompt, how its run ended; the run that did not finish offers resume. */
+    replay(history, unfinished) {
       if (!Array.isArray(history) || !history.length) return;
       Blocks.clear();
+      Resume.withdraw();
       history.forEach((turn, index) => {
+        const meta = turn.meta || {};
         const block = Blocks.ensure(
-          `memory-${index}`,
+          turn.id || `memory-${index}`,
           turn.kind || "output",
           turn.role || "assistant",
         );
+        if (turn.kind === "tool") {
+          block.label(meta.name || "tool");
+          block.node.dataset.status = meta.ok === false ? "failed" : "ok";
+        }
         block.set(turn.text || "");
         block.end();
+        if (meta.vote) block.voted(meta.vote);
+        // a run still journaled as running is either live (left plain) or unfinished
+        const stopped = meta.status && meta.status !== "ok" && meta.status !== "running";
+        if (turn.kind === "prompt" && (stopped || (unfinished && turn.run === unfinished)))
+          block.node.dataset.status = meta.status;
+        if (unfinished && turn.run === unfinished && turn.kind === "prompt") Resume.offer(block);
       });
+      Blocks.scroll();
+    },
+    /** A block of the run in flight, as it stands when this client joins. */
+    revive(live) {
+      const block = Blocks.ensure(live.id, live.kind, live.role);
+      if (live.kind === "tool") block.label(live.name || "tool");
+      block.set(live.text || "");
+      if (live.done) block.end();
       Blocks.scroll();
     },
     applyCommand(result) {
       if (!result) return;
+      // a vote is reported by its `feedback` message, to every client
+      if (result.vote) return;
       if (result.session && result.session.id) {
         this.session = result.session.id;
         Saved.set(this.session);
@@ -1260,6 +1395,8 @@
     Blocks,
     Commands,
     Questions,
+    Feedback,
+    Resume,
     Wait,
     Saved,
     Socket,

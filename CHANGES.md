@@ -195,7 +195,7 @@ The model can also ask. `ask_user` puts a question with optional choices to the
 person and waits; the engine only brokers it (`question.start`, `answer()`,
 `question.end`) and a front end shows and answers it, which keeps the core free
 of any terminal or browser. Whether the tool exists is a mode decision
-(`ask_enabled`, settled like `read_outside`): the repl and the web server have
+(`ask_enabled`, settled like `outside_read`): the repl and the web server have
 someone at the other end, an embedded engine and a one shot run do not, and a
 question nobody can answer would hold the run forever. Waiting on
 a person is not a stall, so an asking call reports itself alive (`ToolCall.asking`)
@@ -248,9 +248,23 @@ changes closed that gap:
   a session, and access renews the lease so a busy session is not expired under
   a client while an abandoned one still runs out.
 
-Durability is opt-in (`session_durable`) because the default promise of the
-harness is that a crash leaves no content on the host: with it set a shutdown
-keeps the workspaces and their records, without it a shutdown still wipes them.
+Durability is a mode decision (`session_durable`, tri-state like the tool
+flags): the repl and the web server are durable, because a person comes back to
+them; a one shot run and an embedded engine are not, because the default
+promise of a library is that a crash leaves no content on the host. Durability
+was useless while the default store was an in-memory SQLite database, so
+`state_dir` (``.agentic`` in the current directory for both interactive modes)
+now gives the database and the workspace root a home, and the idle lease of an
+interactive session is a day rather than an hour. The mode has to be known
+before the store opens, which is why it is `Agent(mode=)` — passed by `cli()` —
+rather than something `Repl` or `WebServer` can settle after the fact.
+
+Two leaks closed with it: a transcript outlived the session it belonged to (an
+expired session left its journal in the store forever), and a run longer than
+the lease could have its workspace swept from under it. `SessionManager.listeners`
+now hears every destruction, so the journal goes and a run still in the session
+is cancelled; a run renews its lease at every checkpoint; and a restart forgets
+journals whose session did not come back.
 
 ## Memory
 
@@ -268,8 +282,7 @@ Three decisions shaped it:
   template on every turn would repeat the consumer's instructions verbatim and
   spend the context window on them, so the default records the input the user
   wrote and the output of the model. `Agent.remember()` is the hook for a
-  consumer that wants another rule, and a failed or empty run is not recorded at
-  all so an error cannot poison the next turn.
+  consumer that wants another rule.
 - **A budget with a fallback, not a token count.** Trimming is by turn count and
   character count because the harness talks to many providers and has no
   trustworthy tokenizer for them; both budgets are configurable, `0` disables
@@ -283,6 +296,68 @@ The web layer replays the transcript in the `hello` reply, which is what makes a
 reload or a reconnect restore the discussion instead of showing an empty page
 attached to a model that remembers. `/forget` clears a transcript, and closing a
 session forgets it along with its workspace.
+
+### The journal
+
+The transcript used to be written once, after a run succeeded: a crash, a
+failure or a stop lost the prompt and every step of the run, and the next run
+saw only words, never the tool calls behind them. Recovery needs both the
+message history and the context window back, so the transcript became a
+write-ahead journal:
+
+- **Each step lands as it finishes.** The prompt is journaled (marked
+  `running`) before the model is called; the stream hands every assistant
+  message and every whole tool call to `Engine.checkpoint()`, which `Agent`
+  persists at once. A crash costs at most the step in flight. Trimming and
+  summarising (a model call) still wait for the end of the run.
+- **Raw items, not prose.** A step keeps the model input items the SDK reports
+  (`to_input_item()`): an assistant message as a `ResponseOutputMessage`, a tool
+  call as its `function_call` plus `function_call_output`. Plain
+  `{"role": "assistant"}` messages would not do — the Chat Completions
+  converter merges a tool call into a preceding output message but not into a
+  plain one — and a call without its output is never journaled, since a
+  request without its answer is input the next model call would reject. Tool
+  output is clipped to `ConversationMemory.TOOL_LIMIT` for the journal, the run
+  itself having seen it whole; `memory_tools: false` keeps tool calls out of the
+  replay while still journaling them for display.
+- **Runs carry a status.** `settle()` records `ok`, `failed` or `cancelled` on
+  the prompt; one still `running` with nothing live behind it was interrupted.
+  `unfinished()` finds such a run and `/resume` continues it: a passthrough
+  prompt asking the model to carry on, over a context that already holds what
+  was done. Failed and stopped runs keep their steps too, which reverses the old
+  rule that a failed run left nothing — losing finished work was the larger harm.
+- **Ids that survive.** A journaled turn keeps the id of the block it came from
+  and the id of its run, so a client that reconnects replays the same blocks it
+  showed, and a vote can name the answer it is about.
+
+`RunResult.turns` exposes the same steps to an embedded `Engine`, so an
+application with its own history appends `items` after its prompt and gets the
+same context window back.
+
+## Learned rules
+
+Feedback on an answer used to go nowhere. A thumb (or `/good`, `/bad` in the
+repl or the composer) now teaches the agent a rule it keeps:
+
+- **Distilled, not recorded.** The trace of the run behind the answer — prompt,
+  tool calls, the answer, cut to `RuleBook.TRACE_LIMIT` — goes to the `summary`
+  role (falling back to the leader) with the vote, an optional note and every
+  existing rule. The model answers with JSON: add a rule, or edit the one that
+  covers the same behaviour, which keeps the book from filling with near
+  duplicates. A reply that is not JSON is taken as the rule itself.
+- **A standing system message.** `Agent.decorate_instructions()` appends the
+  rules (`Do: …` / `Avoid: …`) to the instructions of every run.
+- **Serialized and claimed.** Learning holds a lock, so two votes in a row
+  cannot both add what one should have edited, and an answer is claimed before
+  the model call, so a double click learns once; a failed distillation releases
+  the claim and costs the rule, never the session.
+- **A budget that warns.** Every run pays for the rules, so past
+  `rules_max_chars` a warning is shown — after the vote, on `hello` and when the
+  repl starts — rather than anything being dropped silently; `/rules` lists,
+  `/rules drop <id>` and `/rules clear` prune.
+
+Rules live in the store (namespace `rules`), so they persist wherever the store
+does; with the interactive modes durable by default, that is across restarts.
 
 ## Resilience
 
@@ -385,13 +460,36 @@ before they become malformed data URLs, and shell commands run with an explicit
 timeout and are killed when they exceed it, because an unbounded subprocess is
 an unbounded hang of the whole event loop.
 
-`read_outside` relaxes the boundary for reads only. A terminal user is on their
-own machine and expects the agent to look at files they point it at, so the repl
-allows it by default; a web client is whoever reaches the port, so the web
-server does not. The default is a mode decision rather than a dataclass default,
-hence `None` plus `AgentConfig.with_defaults()`, which settles only what the
-config layers left unset. Writes stay confined in every mode, and the shell tool
-was never confined, so `shell_enabled: false` remains the only hard boundary.
+`outside_read` and `outside_write` relax the boundary, for reads and for writes.
+A terminal user is on their own machine and expects the agent to reach files
+they point it at, so the repl allows both by default; a web client is whoever
+reaches the port, so the web server allows neither, and nor does a one shot run
+or an embedded engine. The defaults are a mode decision rather than dataclass
+defaults, hence `None` plus `AgentConfig.with_defaults()`, which settles only
+what the config layers left unset. (`read_outside` was renamed into the pair;
+there are no releases to stay compatible with.)
+
+The shell was never confined, so the old flag guarded the door while the shell
+stood open. It is now held to the same pair by an OS sandbox, picked by
+`shell_sandbox`:
+
+- **Linux: Landlock.** A launcher (`python -I -S -c`, stdlib `ctypes`) applies a
+  ruleset to itself and execs `/bin/sh`, so the restriction is inherited by
+  everything the command starts: full access to the workspace, read and execute
+  to the system directories, the interpreter and the `PATH` entries (or
+  everywhere with `outside_read`), and writes outside only with
+  `outside_write`. Any failure exits 126 before the command runs.
+- **Linux without Landlock: bubblewrap**, when installed and allowed to make a
+  namespace; coarser, since a writable root is readable.
+- **macOS: Seatbelt**, a generated `sandbox-exec` profile denying on top of the
+  default policy.
+- **Elsewhere (Windows): none**, and the shell is withheld rather than run
+  unconfined — the boundary the flags promise is either enforced or not offered.
+
+What a confined command cannot write it cannot use, so its temp directory (and,
+when reads are confined, its home) points into `.sandbox/` in the workspace;
+otherwise `git` dies on an unreadable `~/.gitconfig`. The shell's description
+tells the model the boundary. `shell_enabled: false` remains the off switch.
 
 Every tool is wrapped by one shared guard that turns workspace and repository
 errors into text the model can read and act on. A tool that raises ends the run;
@@ -540,6 +638,20 @@ that sends it, because a question id is visible to every client on the channel
 and must not be answerable from another session. A connection that never said
 `hello` has no session and answers nothing.
 
+A run used to belong to the socket that started it, so a phone that slept or a
+network that blinked cancelled the work. A run now belongs to its session
+(`WebServer.runs`): a dropped socket leaves it running, Stop cancels it from any
+client of the session, and one run per session is enforced across connections.
+`hello` became a reattach: besides the journal it carries the blocks of the run
+in flight that are not journaled yet (whole, with `done`), the open questions
+(`Engine.pending_questions()`), whether a run is busy, the run that did not
+finish and the rules warning. The prompt block is published by the run itself
+under its journal id, so every client of the session — not only the sender —
+shows it, and a replay shows the same block.
+
+A vote travels as `feedback` and learns off the read loop, since it calls a
+model; the outcome reaches every client of the session as a `feedback` event.
+
 ## Web client
 
 Blocks are content subscribers, not a transcript: a block is created on first
@@ -628,6 +740,20 @@ ring stops and the halo ripples outward while the run waits on the reader.
 the timer beside the mark starts from what it reports and ticks on its own in
 between, so it reads as a clock rather than jumping five seconds at a time, and
 any sign of the stream stops it.
+
+**A vote is two icons and a quarter turn.** Each finished answer carries a
+thumb up and a thumb down beside copy, hidden while it streams. A vote presses
+its thumb and hides the other, pulses while the rule is learned — the mark's
+core turns a quarter and back meanwhile (`data-learning`) — and comes back
+pressed after a reload, since the vote lives in the journal. The rule learned
+arrives as a note, an oversized book as a `warning` note in the theme's
+`--warn`.
+
+**A reconnect picks up where it was.** The replay keeps the ids of the journal,
+the blocks of a run in flight are revived whole and then streamed into, an open
+question is a card again and Stop is live again. A prompt whose run did not
+finish is drawn dashed, and the one that can still be continued wears a resume
+button that sends `/resume`.
 
 ## End to end capture
 
@@ -731,6 +857,19 @@ harness.
       answers, cancellation that closes questions everywhere, and the tests.
     - [ ] Extended scope: in [`TODO.md`](TODO.md) (pending questions in
       `hello`, structured answers, `ask_timeout`, stdin for one shot runs).
+30. Resume, boundaries and rules, in three scopes:
+    - [x] Minimum scope: the write-ahead journal (prompt, tool pairs, assistant
+      messages as raw items; run status; `RunResult.turns`), `outside_read` /
+      `outside_write` with the Landlock sandbox and a fail closed shell, durable
+      interactive state (`state_dir`, `Agent(mode=)`, `MODE_TOOLS` /
+      `MODE_STATE`), and `RuleBook` with `/good`, `/bad` and the size warning.
+    - [x] Complete scope: bubblewrap and Seatbelt backends, `/resume` in the
+      repl and the page, runs owned by sessions that survive a dropped socket,
+      `hello` as a reattach (live blocks, open questions — closing that item of
+      29 — busy, unfinished, warning), the repl resuming its last session,
+      thumbs and the resume button on the page, `/rules`, and the tests.
+    - [ ] Extended scope: in [`TODO.md`](TODO.md) (a Windows sandbox, several
+      processes on one state directory, Seatbelt verified on a Mac).
 
 ## Fixes worth remembering
 
@@ -746,6 +885,19 @@ harness.
 - **Shell timeouts that did not kill.** A leader running a nested agent (`python app\agentic.py --input …`) failed with `leader model timeout: the model sent nothing for 240s` although `shell_timeout` was 120s. On Windows the shell is `cmd.exe /c …`, `process.kill()` reached only `cmd.exe`, and the grandchild `python.exe` kept stdout/stderr open; on Python 3.12 `Process.wait()` waits for those pipes, so the tool hung until the child ended and the stall guard (`request_timeout` + `shell_timeout`) fired first, leaving the child orphaned. A 2s timeout on an 8s sleep returned after 8.1s. `Workspace.kill_tree()` now kills the whole tree (`taskkill /F /T`, or `os.killpg` on the new session the shell starts in), on cancellation as well as on timeout, and the wait for the pipes afterwards is bounded by `KILL_GRACE`; stdin is closed so a prompt cannot hang a command either. The same fix streams output and heartbeats as `tool.progress`, so a slow command is visibly alive in the console (dots) and the web UI (tailed output, seconds in the label, a pulse of the mark). The default `shell_timeout` went from 120s to 900s, since a timeout that now really kills would otherwise cut a nested agent run short.
 - **Stall guard shorter than a tool call.** A leader on Ollama asked for a 1,000 line story said `I'll write a 1000-line … story …` and then failed with `leader model timeout: the model sent nothing for 120s`. Ollama's OpenAI endpoint parses tool calls out of the model's output and sends each one whole once it is complete, so while the model writes the `content` argument of a `write_file` the stream carries no bytes at all: a direct probe of `satgeze/qwenpaw-9b-heretic-1m` (Ollama 0.34.0) was 17.2s of silence for a 3.4K char call, then one chunk with every argument; a story of 1,000 lines is ~15× that. `request_timeout` (120s) was both the stall guard and the read timeout of the shared `httpx` client, so either would have cut it. The stall guard is now its own setting, `stream_timeout` (default 600s, `RetryPolicy.stall`), and `ModelPool.client()` gives the transport a read timeout of the longer of the two while connect, write and pool stay at `request_timeout`; a specialist call is still bounded by `request_timeout` as a whole.
 - **Unbounded shell output.** A recursive listing (`dir /s /b` over a project with a `.venv`, ~350K chars) went whole into the leader's context and the next model turn stalled past the 120s guard, so the web UI sat frozen on the tool block. `Workspace.run_shell()` now clips output to `shell_output_limit` characters (default 32,000, `0` disables), keeping the head and tail around an `[... N chars omitted ...]` marker, and logs each clip to stderr.
+- **A boundary the shell walked around.** With `read_outside` off and writes
+  confined, `run_shell_command` could still `cat ~/.ssh/id_rsa` or write
+  anywhere the process could. The outside flags now hold the shell too (an OS
+  sandbox), and where no sandbox exists the shell is withheld; a
+  Landlock-confined `cat` of a file outside the workspace now reads
+  `Permission denied`.
+- **Transcripts that outlived their sessions.** Expiry removed a session's
+  workspace and record but left its transcript in the store for good; with a
+  durable store that is a slow leak of every conversation. Destruction now
+  notifies `SessionManager.listeners`, and the journal goes with it.
+- **A run that a sweep could orphan.** A run never renewed its session's lease,
+  so a run longer than `session_ttl` could have its workspace removed mid-run.
+  Each checkpoint renews it, and closing a session cancels its run.
 - **Path handling duplicated per tool.** Each tool resolved and validated its own
   paths, so escapes depended on which tool was called. `Workspace.resolve()` is
   now the only path gate.

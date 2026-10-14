@@ -10,11 +10,12 @@ each be replaced by a consumer:
 | prompt    | `PromptRenderer`                                 |
 | storage   | `Store`, `SqliteStore`, `Cache`, `LruCache`      |
 | sessions  | `Session`, `SessionManager`                      |
-| memory    | `Turn`, `Transcript`, `ConversationMemory`       |
+| memory    | `Turn`, `Transcript`, `ConversationMemory`,      |
+|           | `Rule`, `RuleBook`                               |
 | repository| `RepoSpec`, `RepoManager`, `Checkout`            |
 | resilience| `ErrorKind`, `RetryPolicy`, `Usage`              |
 | models    | `ModelSpec`, `ModelPool`                         |
-| tools     | `Workspace`, `ToolRegistry`                      |
+| tools     | `Workspace`, `ToolRegistry`, `Sandbox`           |
 | console   | `ConsoleRenderer`                                |
 | commands  | `CommandRegistry`                                |
 | core      | `Engine`, `Agent`, `RunResult`                   |
@@ -88,6 +89,7 @@ __all__ = [
     "Agent",
     "AgentConfig",
     "Block",
+    "BubblewrapSandbox",
     "Cache",
     "Checkout",
     "CommandRegistry",
@@ -99,6 +101,7 @@ __all__ = [
     "EventBus",
     "EventType",
     "Hub",
+    "LandlockSandbox",
     "LruCache",
     "ModelError",
     "ModelPool",
@@ -109,7 +112,11 @@ __all__ = [
     "RepoSpec",
     "Repl",
     "RetryPolicy",
+    "Rule",
+    "RuleBook",
     "RunResult",
+    "Sandbox",
+    "SeatbeltSandbox",
     "Session",
     "SessionManager",
     "SqliteStore",
@@ -125,6 +132,7 @@ __all__ = [
     "find_env_file",
     "load_env_file",
     "main",
+    "pick_sandbox",
     "read_config_file",
     "read_env_file",
 ]
@@ -166,6 +174,36 @@ DEFAULT_SUMMARY_INSTRUCTIONS = (
     "Rewrite the exchange below as a compact, factual briefing in the third "
     "person: decisions, facts, names, files, open questions. No preamble."
 )
+
+DEFAULT_RULES_INSTRUCTIONS = (
+    "You turn a user's feedback on an agent's answer into one durable rule for "
+    "that agent. You are given the rules it already follows, the trace that led "
+    "to the answer and whether the user liked it. Work out what the agent did "
+    "well (liked) or badly (disliked) that is likely to matter again, and state "
+    "it as one short, general, imperative rule. When an existing rule covers the "
+    "same behaviour, edit it instead of adding one: merge, sharpen or correct "
+    "it. Answer with JSON only: "
+    '{"action": "add" | "edit", "id": "<rule id, edit only>", '
+    '"polarity": "do" | "avoid", "rule": "<one sentence>"}'
+)
+
+#: Seconds an idle session lives when neither the layers nor the mode say.
+DEFAULT_SESSION_TTL = 3600
+
+#: Tool flags each front end settles when the layers left them unset: a
+#: terminal user is on their own machine and at the keyboard; a web client may
+#: be anyone who reaches the port, though the page answers questions too.
+MODE_TOOLS: dict[str, dict[str, Any]] = {
+    "repl": {"outside_read": True, "outside_write": True, "ask_enabled": True},
+    "web": {"outside_read": False, "outside_write": False, "ask_enabled": True},
+}
+
+#: Durable state each front end settles when it builds its agent (`Agent(mode=)`),
+#: so an interactive session outlives a crash; a one shot run keeps nothing.
+MODE_STATE: dict[str, dict[str, Any]] = {
+    "repl": {"state_dir": Path(f".{STEM}"), "session_durable": True, "session_ttl": 86400},
+    "web": {"state_dir": Path(f".{STEM}"), "session_durable": True, "session_ttl": 86400},
+}
 
 #: Model roles the harness knows about. `leader` drives the agentic loop; the
 #: others are specialists delegated to from tools or from the harness itself.
@@ -502,6 +540,17 @@ class AgentConfig:
     summary_api_key: str = ""
     summary_instructions: str = DEFAULT_SUMMARY_INSTRUCTIONS
     summary_max_tokens: int = 512
+    # Replay the tool calls of earlier runs (call and clipped output) to the
+    # model, not only the words exchanged; the journal keeps them either way.
+    memory_tools: bool = True
+    # Learned rules. A thumb on an answer (or `/good`, `/bad`) asks the
+    # `summary` role to distil a do / avoid rule from the trace behind it, which
+    # is appended to the instructions of every later run. A warning is shown
+    # once the rules exceed `rules_max_chars` (0 disables it).
+    rules_enabled: bool = True
+    rules_max_chars: int = 4000
+    rules_instructions: str = DEFAULT_RULES_INSTRUCTIONS
+    rules_max_tokens: int = 400
     # Input as given on the command line (a file path or raw text) and the raw
     # text it resolves to. Templates read `config.input`.
     input_source: str = ""
@@ -509,18 +558,26 @@ class AgentConfig:
     # Prompt template used by the data driven application: a file path or the
     # template itself. Left empty, `load_template` looks for `agentic_prompt.md`.
     template: str = ""
+    # Durable state. When set, `db_path` and `workspace_root` default to
+    # ``<state_dir>/agentic.db`` and ``<state_dir>/workspaces``. ``None`` leaves
+    # it to the mode: the repl and the web server keep ``.agentic`` in the
+    # current directory, a one shot run and an embedded engine keep nothing.
+    state_dir: Path | None = None
     # Workspaces / sessions
     workspace_root: Path | None = None
     # Directory copied into every new session workspace (application content).
     workspace_seed: Path | None = None
-    session_ttl: int = 3600
+    # Seconds an idle session lives. ``None`` leaves it to the mode: a day for
+    # the repl and the web server, `DEFAULT_SESSION_TTL` otherwise.
+    session_ttl: int | None = None
     # How often (in seconds) live sessions are swept for expiry and the
     # workspace root for directories without an owner. ``0`` disables the timer
     # and leaves expiry to be noticed on access.
     session_sweep_interval: int = 60
     # Durable sessions: workspaces and store records survive a shutdown and are
     # rehydrated on the next start instead of being wiped with the process.
-    session_durable: bool = False
+    # ``None`` leaves it to the mode: the repl and the web server are durable.
+    session_durable: bool | None = None
     keep_workspace: bool = False
     # Default git repository. When `repo_url` is set every new session clones it
     # into the workspace and checks out a session branch, and the agent can
@@ -549,10 +606,19 @@ class AgentConfig:
     # kept) before the model sees it; 0 disables the cap.
     shell_output_limit: int = 32_000
     shell_enabled: bool = True
-    # Let the read tools (list, read, image) take paths outside the workspace;
-    # writes stay confined to it. ``None`` leaves it to the mode: the repl
-    # allows it, the web server and an embedded engine do not.
-    read_outside: bool | None = None
+    # Reach beyond the session workspace. `outside_read` lets the read tools
+    # (list, read, image) take outside paths, `outside_write` the write tools
+    # (write, patch). The shell is held to the same pair: unless both are set
+    # it runs inside an OS sandbox (`shell_sandbox`), and where none is
+    # available it is withheld. ``None`` leaves each to the mode: the repl
+    # allows both, the web server, a one shot run and an embedded engine
+    # neither.
+    outside_read: bool | None = None
+    outside_write: bool | None = None
+    # Which sandbox confines the shell: ``auto`` (Landlock, else bubblewrap,
+    # on Linux; Seatbelt on macOS), one of those by name (``landlock``,
+    # ``bwrap``, ``seatbelt``), or ``none`` to withhold a confined shell.
+    shell_sandbox: str = "auto"
     # Give the leader the `ask_user` tool, which puts a question to the person
     # and waits for the answer. ``None`` leaves it to the mode: the repl and the
     # web server have someone to answer, an embedded engine and a one shot run
@@ -690,6 +756,21 @@ class AgentConfig:
         items.append(("Input", self.input_source or "(inline)"))
         return items
 
+    def state_paths(self) -> "AgentConfig":
+        """Return a copy with `db_path` and `workspace_root` under `state_dir`.
+
+        Only fields left unset are filled, and a relative `state_dir` is
+        anchored at the current directory, so the paths survive a ``chdir``.
+        """
+        if self.state_dir is None:
+            return self
+        state = Path(self.state_dir).expanduser().resolve()
+        return self.merge(
+            state_dir=state,
+            db_path=self.db_path or state / f"{STEM}.db",
+            workspace_root=self.workspace_root or state / "workspaces",
+        )
+
 
 def resolve_input(raw: str | os.PathLike[str]) -> str:
     """Return input text, reading it from a file when `raw` is a file path."""
@@ -729,6 +810,7 @@ class EventType:
     MODEL_WAIT = "model.wait"
     QUESTION_START = "question.start"
     QUESTION_END = "question.end"
+    FEEDBACK = "feedback"
     SESSION_OPEN = "session.open"
     SESSION_CLOSE = "session.close"
     LOG = "log"
@@ -1038,6 +1120,9 @@ class SessionManager:
         self.keep_workspace = keep_workspace
         self.durable = durable
         self.sweep_interval = sweep_interval
+        #: Called with every session as it is destroyed (closed, expired or
+        #: reconciled away), so what belongs to it can go with it.
+        self.listeners: list[Callable[[Session], None]] = []
         self._sessions: dict[str, Session] = {}
         self._sweeper: "asyncio.Task[None] | None" = None
         if restore:
@@ -1091,6 +1176,18 @@ class SessionManager:
 
     def list(self) -> list[Session]:
         return sorted(self._sessions.values(), key=lambda s: s.created_at)
+
+    def latest(self, **meta: Any) -> Session | None:
+        """The most recently used live session whose meta matches `meta`.
+
+        Every use renews a lease, so the latest expiry is the latest use.
+        """
+        live = [
+            s for s in self._sessions.values()
+            if not s.expired and all(s.meta.get(k) == v for k, v in meta.items())
+        ]
+        latest = max(live, key=lambda s: s.expires_at, default=None)
+        return self.get(latest.id) if latest is not None else None
 
     def close(self, session_id: str) -> bool:
         session = self._sessions.pop(session_id, None)
@@ -1218,6 +1315,11 @@ class SessionManager:
             self.cache.set(session.id, session.to_dict())
 
     def _destroy(self, session: Session) -> None:
+        for listener in list(self.listeners):
+            try:
+                listener(session)
+            except Exception as exc:  # a listener never keeps a session alive
+                print(f"[sessions] close listener failed: {exc!r}", file=sys.stderr)
         if not self.keep_workspace:
             shutil.rmtree(session.workspace, ignore_errors=True)
         if self.store is not None:
@@ -1236,40 +1338,85 @@ class SessionManager:
 # ---------------------------------------------------------------------------
 
 #: Roles a remembered turn may carry, mapped onto the block kind of the UI.
-TURN_KINDS = {"user": "prompt", "assistant": "output", "system": "log"}
+TURN_KINDS = {"user": "prompt", "assistant": "output", "system": "log", "tool": "tool"}
+
+#: Run states a journaled prompt carries in `Turn.meta["status"]`.
+RUN_RUNNING, RUN_OK, RUN_FAILED, RUN_CANCELLED = "running", "ok", "failed", "cancelled"
 
 
 @dataclass
 class Turn:
-    """One remembered message of a conversation."""
+    """One remembered message of a conversation.
+
+    A turn journaled from a run also carries the id of the block it came from
+    (so a client that reconnects keeps the ids it shows), the id of the run,
+    and the raw model input `items` it stands for in the context window — a
+    tool call with its output, an assistant message — which are replayed to
+    the model instead of the plain ``{role, content}`` message. `meta` holds
+    the status of a run on its prompt and the vote on an answer.
+    """
 
     role: str
     text: str
     created_at: float = field(default_factory=time.time)
+    id: str = ""
+    run: str = ""
+    items: list[dict[str, Any]] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
 
     @property
     def kind(self) -> str:
         return TURN_KINDS.get(self.role, "output")
 
+    @property
+    def size(self) -> int:
+        """Characters this turn costs the context window."""
+        if not self.items:
+            return len(self.text)
+        return len(json.dumps(self.items, ensure_ascii=False, default=str))
+
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "role": self.role,
             "text": self.text,
             "kind": self.kind,
             "created_at": self.created_at,
         }
+        for key in ("id", "run", "items", "meta"):
+            if getattr(self, key):
+                out[key] = getattr(self, key)
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Turn":
+        items = data.get("items")
+        meta = data.get("meta")
         return cls(
             role=str(data.get("role") or "user"),
             text=str(data.get("text") or ""),
             created_at=float(data.get("created_at") or time.time()),
+            id=str(data.get("id") or ""),
+            run=str(data.get("run") or ""),
+            items=[i for i in items if isinstance(i, dict)] if isinstance(items, list) else [],
+            meta=dict(meta) if isinstance(meta, dict) else {},
         )
 
     def as_message(self) -> dict[str, str]:
         """The turn as a chat message the model understands."""
         return {"role": self.role, "content": self.text}
+
+    def replay(self, tools: bool = True) -> list[dict[str, Any]]:
+        """What this turn puts in the context window of a later run.
+
+        Raw items when the run journaled them, else the plain message; a tool
+        turn is left out when `tools` is false, and so is one without items,
+        since a tool result means nothing without the call that asked for it.
+        """
+        if self.role == "tool":
+            return list(self.items) if tools else []
+        if self.items:
+            return list(self.items)
+        return [self.as_message()] if self.role in ("user", "assistant", "system") else []
 
 
 @dataclass
@@ -1285,14 +1432,31 @@ class Transcript:
     @property
     def size(self) -> int:
         """Total number of characters remembered."""
-        return sum(len(turn.text) for turn in self.turns)
+        return sum(turn.size for turn in self.turns)
 
     def append(self, *turns: Turn) -> "Transcript":
-        self.turns.extend(t for t in turns if t.text.strip())
+        self.turns.extend(t for t in turns if t.text.strip() or t.items)
         return self
 
-    def messages(self) -> list[dict[str, str]]:
-        return [turn.as_message() for turn in self.turns]
+    def messages(self, tools: bool = True) -> list[dict[str, Any]]:
+        """The context window: every turn as the model input it stands for."""
+        return [item for turn in self.turns for item in turn.replay(tools)]
+
+    def find(self, turn_id: str) -> Turn | None:
+        """The turn journaled from block `turn_id`, if it is still remembered."""
+        return next((t for t in self.turns if turn_id and t.id == turn_id), None)
+
+    def run_of(self, run_id: str) -> list[Turn]:
+        """The turns of one run, oldest first."""
+        return [t for t in self.turns if run_id and t.run == run_id]
+
+    def prompt_of(self, run_id: str) -> Turn | None:
+        """The journaled prompt of a run, which carries its status."""
+        return next((t for t in self.run_of(run_id) if t.role == "user"), None)
+
+    def last_run(self) -> Turn | None:
+        """The prompt of the newest journaled run."""
+        return next((t for t in reversed(self.turns) if t.role == "user" and t.run), None)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1319,7 +1483,7 @@ class Transcript:
         while count < len(self.turns) - 1 and (
             (max_turns > 0 and turns > max_turns) or (max_chars > 0 and size > max_chars)
         ):
-            size -= len(self.turns[count].text)
+            size -= self.turns[count].size
             turns -= 1
             count += 1
         return count
@@ -1336,6 +1500,8 @@ class ConversationMemory:
     """
 
     NAMESPACE = "transcripts"
+    #: Longest tool output kept in the context window, head and tail.
+    TOOL_LIMIT = 8000
 
     def __init__(
         self,
@@ -1344,12 +1510,15 @@ class ConversationMemory:
         enabled: bool = True,
         max_turns: int = 40,
         max_chars: int = 24000,
+        tools: bool = True,
         summarizer: Callable[[list[Turn]], Awaitable[str]] | None = None,
     ) -> None:
         self.store = store
         self.enabled = enabled
         self.max_turns = max_turns
         self.max_chars = max_chars
+        #: Replay journaled tool calls to the model, not only the words.
+        self.tools = tools
         self.summarizer = summarizer
         self._transcripts: dict[str, Transcript] = {}
 
@@ -1362,11 +1531,25 @@ class ConversationMemory:
             self._transcripts[session_id] = transcript
         return transcript
 
-    def history(self, session_id: str) -> list[dict[str, str]]:
-        """The remembered turns as chat messages, oldest first."""
+    def history(self, session_id: str) -> list[dict[str, Any]]:
+        """The remembered turns as model input, oldest first."""
         if not self.enabled:
             return []
-        return self.transcript(session_id).messages()
+        return self.transcript(session_id).messages(self.tools)
+
+    def journal(self, session_id: str, *turns: Turn) -> Transcript:
+        """Append `turns` and persist at once, without trimming.
+
+        This is the write-ahead half of memory: a run records each step as it
+        finishes, so a crash costs at most the step in flight. Trimming (and
+        summarising, which calls a model) waits for `remember` at the end.
+        """
+        transcript = self.transcript(session_id)
+        if not self.enabled:
+            return transcript
+        transcript.append(*turns)
+        self.persist(transcript)
+        return transcript
 
     def replay(self, session_id: str) -> list[dict[str, Any]]:
         """The remembered turns as JSON for a client that (re)connects."""
@@ -1398,7 +1581,7 @@ class ConversationMemory:
                 transcript.turns.insert(0, Turn("system", summary))
 
     def persist(self, transcript: Transcript) -> None:
-        if self.store is not None:
+        if self.store is not None and self.enabled:
             self.store.set(self.NAMESPACE, transcript.session_id, transcript.to_dict())
 
     def forget(self, session_id: str) -> None:
@@ -1406,6 +1589,246 @@ class ConversationMemory:
         self._transcripts.pop(session_id, None)
         if self.store is not None:
             self.store.delete(self.NAMESPACE, session_id)
+
+
+# Learned rules. A vote on an answer becomes a rule: the trace behind the
+# answer goes to a model together with the rules that already exist, and it
+# either adds a rule or edits the one covering the same behaviour. The rules
+# are appended to the instructions of every run, like a standing system
+# message, and a warning is raised once they outgrow their budget.
+
+#: What a rule asks for: keep doing it, or stop.
+RULE_POLARITIES = ("do", "avoid")
+#: Votes and the polarity each one defaults to.
+RULE_VOTES = {"up": "do", "down": "avoid"}
+
+
+@dataclass
+class Rule:
+    """One learned rule."""
+
+    id: str
+    polarity: str
+    text: str
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    #: How many votes shaped it: an edit is one more.
+    votes: int = 1
+
+    def line(self) -> str:
+        return f"{'Do' if self.polarity == 'do' else 'Avoid'}: {self.text}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "polarity": self.polarity,
+            "text": self.text,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "votes": self.votes,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Rule":
+        polarity = str(data.get("polarity") or "do")
+        return cls(
+            id=str(data["id"]),
+            polarity=polarity if polarity in RULE_POLARITIES else "do",
+            text=str(data.get("text") or ""),
+            created_at=float(data.get("created_at") or time.time()),
+            updated_at=float(data.get("updated_at") or time.time()),
+            votes=int(data.get("votes") or 1),
+        )
+
+
+class RuleBook:
+    """Rules learned from feedback, persisted through a `Store`.
+
+    `learn` is the whole loop: the trace and the existing rules go to a
+    `distill` delegate (a model), its JSON answer adds or edits one rule, and
+    learning is serialized so two votes in a row cannot both add what one of
+    them should have edited. `decorate` appends the rules to instructions.
+    """
+
+    NAMESPACE = "rules"
+    HEADING = "## Learned rules"
+    #: Longest trace a distillation is shown: the prompt's head and the tail.
+    TRACE_LIMIT = 12000
+
+    def __init__(
+        self, store: Store | None = None, *, enabled: bool = True, max_chars: int = 4000
+    ) -> None:
+        self.store = store
+        self.enabled = enabled
+        self.max_chars = max_chars
+        self._rules: dict[str, Rule] | None = None
+        self._lock: asyncio.Lock | None = None
+
+    # -- the book -----------------------------------------------------------
+
+    def rules(self) -> list[Rule]:
+        """Every rule, oldest first."""
+        if self._rules is None:
+            self._rules = {}
+            for key, record in self.store.list(self.NAMESPACE) if self.store else []:
+                with contextlib.suppress(AttributeError, KeyError, TypeError, ValueError):
+                    self._rules[key] = Rule.from_dict(record)
+        return sorted(self._rules.values(), key=lambda rule: rule.created_at)
+
+    def get(self, rule_id: str) -> Rule | None:
+        return next((r for r in self.rules() if r.id == str(rule_id).strip()), None)
+
+    @property
+    def size(self) -> int:
+        """Characters the rules add to every run's instructions."""
+        rendered = self.render()
+        return len(rendered)
+
+    def warning(self) -> str | None:
+        """A warning once the rules outgrow `max_chars`, else ``None``."""
+        size = self.size
+        if self.max_chars <= 0 or size <= self.max_chars:
+            return None
+        return (
+            f"Learned rules are {size:,} chars, over the {self.max_chars:,} budget: "
+            f"every run pays for them. Merge or drop some with /rules."
+        )
+
+    def render(self) -> str:
+        """The rules as a section of the instructions, or empty."""
+        rules = self.rules() if self.enabled else []
+        if not rules:
+            return ""
+        lines = "\n".join(f"- {rule.line()}" for rule in rules)
+        return f"{self.HEADING}\n\nThe user taught you these through feedback:\n\n{lines}"
+
+    def decorate(self, instructions: str) -> str:
+        """`instructions` with the rules appended."""
+        rendered = self.render()
+        return f"{instructions.rstrip()}\n\n{rendered}" if rendered else instructions
+
+    def save(self, rule: Rule) -> Rule:
+        self.rules()
+        assert self._rules is not None
+        self._rules[rule.id] = rule
+        if self.store is not None:
+            self.store.set(self.NAMESPACE, rule.id, rule.to_dict())
+        return rule
+
+    def add(self, polarity: str, text: str) -> Rule:
+        return self.save(Rule(f"r{uuid.uuid4().hex[:6]}", polarity, text.strip()))
+
+    def edit(self, rule_id: str, polarity: str, text: str) -> Rule:
+        rule = self.get(rule_id)
+        if rule is None:
+            raise KeyError(rule_id)
+        rule.polarity, rule.text = polarity, text.strip()
+        rule.votes += 1
+        rule.updated_at = time.time()
+        return self.save(rule)
+
+    def drop(self, rule_id: str) -> bool:
+        rule = self.get(rule_id)
+        if rule is None:
+            return False
+        assert self._rules is not None
+        self._rules.pop(rule.id, None)
+        if self.store is not None:
+            self.store.delete(self.NAMESPACE, rule.id)
+        return True
+
+    def clear(self) -> int:
+        rules = self.rules()
+        for rule in rules:
+            self.drop(rule.id)
+        return len(rules)
+
+    # -- learning -----------------------------------------------------------
+
+    def trace(self, turns: Iterable[Turn]) -> str:
+        """The turns behind an answer as text, cut to `TRACE_LIMIT`."""
+        labels = {"user": "USER", "assistant": "ASSISTANT", "tool": "TOOL", "system": "SUMMARY"}
+        text = "\n\n".join(
+            f"{labels.get(turn.role, turn.role.upper())}: {turn.text.strip()}" for turn in turns
+        )
+        if len(text) <= self.TRACE_LIMIT:
+            return text
+        head = self.TRACE_LIMIT // 4
+        tail = self.TRACE_LIMIT - head
+        return f"{text[:head]}\n[... trace cut ...]\n{text[-tail:]}"
+
+    def messages(
+        self, vote: str, turns: Iterable[Turn], note: str = "", instructions: str = ""
+    ) -> list[dict[str, str]]:
+        """The distillation request: the rules, the trace, the vote."""
+        existing = "\n".join(f"- {r.id} ({r.polarity}): {r.text}" for r in self.rules())
+        verdict = "LIKED" if vote == "up" else "DISLIKED"
+        parts = [
+            f"Existing rules:\n{existing or '(none)'}",
+            f"Trace:\n{self.trace(turns)}",
+            f"The user {verdict} the final ASSISTANT answer.",
+        ]
+        if note.strip():
+            parts.append(f"The user said: {note.strip()}")
+        return [
+            {"role": "system", "content": instructions or DEFAULT_RULES_INSTRUCTIONS},
+            {"role": "user", "content": "\n\n".join(parts)},
+        ]
+
+    def parse(self, text: str, vote: str) -> dict[str, str]:
+        """Read the model's decision: ``{action, id, polarity, rule}``.
+
+        JSON is expected; a reply that is not is taken as the rule itself, so a
+        model that ignores the format still teaches something. An edit of a
+        rule that does not exist becomes an add.
+        """
+        default = RULE_VOTES.get(vote, "do")
+        decision: dict[str, Any] | None = None
+        match = re.search(r"\{.*\}", text or "", re.DOTALL)
+        if match:
+            with contextlib.suppress(ValueError):
+                loaded = json.loads(match.group(0))
+                decision = loaded if isinstance(loaded, dict) else None
+        if decision is None:  # not JSON: the reply is the rule
+            decision = {"rule": (text or "").strip().splitlines()[0][:300] if (text or "").strip() else ""}
+        rule = str(decision.get("rule") or decision.get("text") or "").strip()
+        if not rule:
+            raise ValueError("the model proposed no rule")
+        polarity = str(decision.get("polarity") or default).lower()
+        rule_id = str(decision.get("id") or "").strip()
+        action = "edit" if decision.get("action") == "edit" and self.get(rule_id) else "add"
+        return {
+            "action": action,
+            "id": rule_id if action == "edit" else "",
+            "polarity": polarity if polarity in RULE_POLARITIES else default,
+            "rule": rule,
+        }
+
+    async def learn(
+        self,
+        vote: str,
+        turns: Iterable[Turn],
+        distill: Callable[[list[dict[str, str]]], Awaitable[str]],
+        *,
+        note: str = "",
+        instructions: str = "",
+    ) -> tuple[str, Rule]:
+        """Distil one rule from a vote on the answer that ends `turns`.
+
+        Returns ``("add" | "edit", rule)``; raises `ValueError` when the model
+        proposed nothing and lets a failed model call through.
+        """
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            reply = await distill(self.messages(vote, list(turns), note, instructions))
+            decision = self.parse(reply, vote)
+            if decision["action"] == "edit":
+                rule = self.edit(decision["id"], decision["polarity"], decision["rule"])
+            else:
+                rule = self.add(decision["polarity"], decision["rule"])
+            print(f"[rules] {decision['action']} {rule.id}: {rule.line()}", file=sys.stderr)
+            return decision["action"], rule
 
 
 # ---------------------------------------------------------------------------
@@ -2281,6 +2704,284 @@ def guess_mime(path: Path | str) -> str:
     return mimetypes.guess_type(str(path))[0] or "application/octet-stream"
 
 
+# Sandboxes. A confined shell runs under an OS mechanism that holds it to the
+# reach of the file tools: full access to the workspace, read and execute
+# access to the system directories (everywhere with `outside_read`) and writes
+# beyond the workspace only with `outside_write`. A backend turns a command
+# into the argv that runs it confined; where the platform offers no boundary
+# none is picked, and the shell is withheld rather than run unconfined.
+
+#: Directories a confined shell may always read and execute from: what any
+#: command needs to start at all. Missing ones are skipped.
+SYSTEM_PATHS = {
+    "linux": (
+        "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc",
+        "/opt", "/nix", "/snap", "/run", "/proc", "/sys", "/dev",
+    ),
+    "darwin": (
+        "/usr", "/bin", "/sbin", "/System", "/Library", "/Applications", "/opt",
+        "/private/etc", "/private/var/db", "/dev",
+    ),
+}
+
+#: Device files a confined shell may also write to (Linux; Seatbelt has its own).
+DEVICE_PATHS = (
+    "/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom",
+    "/dev/tty", "/dev/ptmx", "/dev/pts", "/dev/shm",
+)
+
+#: Applies Landlock to itself, then becomes the shell; the restriction is
+#: inherited by everything the shell starts. Run with ``python -I -S -c`` and
+#: the policy as JSON in ``argv[1]``. Any failure exits 126 before the command
+#: runs: a sandbox that cannot be applied never degrades to no sandbox.
+LANDLOCK_LAUNCHER = r"""
+import ctypes, json, os, sys
+policy = json.loads(sys.argv[1])
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+L = ctypes.c_long
+def fail(what):
+    sys.stderr.write("sandbox: %s failed: %s\n" % (what, os.strerror(ctypes.get_errno())))
+    sys.exit(126)
+abi = libc.syscall(L(444), ctypes.c_void_p(None), L(0), L(1))
+if abi < 1:
+    fail("landlock")
+handled = (1 << 13) - 1
+files = (1 << 0) | (1 << 1) | (1 << 2)
+if abi >= 2:
+    handled |= 1 << 13
+if abi >= 3:
+    handled |= 1 << 14
+    files |= 1 << 14
+if abi >= 5:
+    handled |= 1 << 15
+    files |= 1 << 15
+read = (1 << 0) | (1 << 2) | (1 << 3)
+class Ruleset(ctypes.Structure):
+    _fields_ = [("handled_access_fs", ctypes.c_uint64)]
+class Beneath(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [("allowed_access", ctypes.c_uint64), ("parent_fd", ctypes.c_int32)]
+attr = Ruleset(handled)
+ruleset = libc.syscall(L(444), ctypes.c_void_p(ctypes.addressof(attr)), L(ctypes.sizeof(attr)), L(0))
+if ruleset < 0:
+    fail("landlock_create_ruleset")
+def allow(path, access):
+    try:
+        fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
+    except OSError:
+        return
+    if not os.path.isdir(path):
+        access &= files
+    rule = Beneath(access & handled, fd)
+    if libc.syscall(L(445), L(ruleset), L(1), ctypes.c_void_p(ctypes.addressof(rule)), L(0)):
+        fail("landlock_add_rule %s" % path)
+    os.close(fd)
+for path in policy["read"]:
+    allow(path, read)
+for path in policy["write"]:
+    allow(path, handled & ~read)
+for path in policy["full"]:
+    allow(path, handled)
+if libc.prctl(ctypes.c_int(38), ctypes.c_ulong(1), ctypes.c_ulong(0), ctypes.c_ulong(0), ctypes.c_ulong(0)):
+    fail("prctl")
+if libc.syscall(L(446), L(ruleset), L(0)):
+    fail("landlock_restrict_self")
+os.close(ruleset)
+os.execv(policy["shell"], [policy["shell"], "-c", policy["command"]])
+"""
+
+
+def system_paths() -> list[str]:
+    """What a confined shell may read and execute: the system, the running
+    interpreter and every absolute ``PATH`` entry but the home directory itself."""
+    base = SYSTEM_PATHS.get(sys.platform, SYSTEM_PATHS["linux"])
+    extra = {sys.prefix, sys.base_prefix, sys.exec_prefix}
+    home = str(Path.home())
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if entry and os.path.isabs(entry) and entry not in (os.sep, home):
+            extra.add(entry)
+    return [path for path in (*base, *sorted(extra)) if os.path.exists(path)]
+
+
+class Sandbox:
+    """Confines a shell command to the reach of a `Workspace`.
+
+    A backend says whether this machine supports it (`available`) and turns a
+    command into the argv that runs it confined (`argv`); `environ` points the
+    scratch directories of the command (temp, cache, home) into the workspace,
+    since what it cannot write it cannot use.
+    """
+
+    name = "none"
+    #: Where a confined command keeps its scratch files, under the workspace.
+    SCRATCH = ".sandbox"
+
+    @classmethod
+    def available(cls) -> bool:
+        return False
+
+    def argv(self, command: str, ws: "Workspace") -> list[str]:  # pragma: no cover
+        raise NotImplementedError
+
+    @staticmethod
+    def paths(ws: "Workspace") -> tuple[list[str], list[str], list[str]]:
+        """``(read, write, full)``: paths readable, writable only, and both."""
+        read = [os.sep] if ws.outside_read else system_paths()
+        write = [os.sep] if ws.outside_write else []
+        return read, write, [str(ws.root)]
+
+    def environ(self, env: dict[str, str], ws: "Workspace") -> dict[str, str]:
+        """Point temp (and, when confined, home and cache) into the workspace."""
+        scratch = ws.root / self.SCRATCH
+        tmp = scratch / "tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        env.update(TMPDIR=str(tmp), TMP=str(tmp), TEMP=str(tmp))
+        if not ws.outside_read:
+            home = scratch / "home"
+            home.mkdir(parents=True, exist_ok=True)
+            env["HOME"] = str(home)  # dotfiles out of reach would fail tools (git)
+        elif not ws.outside_write:
+            env["XDG_CACHE_HOME"] = str(scratch / "cache")
+        return env
+
+    def describe(self, ws: "Workspace") -> str:
+        """The boundary in words, for the description the model reads."""
+        reads = "anywhere" if ws.outside_read else "the workspace and system directories"
+        writes = "anywhere" if ws.outside_write else "inside the workspace only"
+        return f" It runs sandboxed: it can read {reads} and write {writes}."
+
+
+class LandlockSandbox(Sandbox):
+    """Linux 5.13+: the shell restricts itself with Landlock before it starts."""
+
+    name = "landlock"
+
+    @classmethod
+    def available(cls) -> bool:
+        return _landlock_abi() > 0
+
+    def argv(self, command: str, ws: "Workspace") -> list[str]:
+        read, write, full = self.paths(ws)
+        policy = {
+            "read": read,
+            "write": write,
+            "full": [*full, *(p for p in DEVICE_PATHS if os.path.exists(p))],
+            "shell": "/bin/sh",
+            "command": command,
+        }
+        return [sys.executable, "-I", "-S", "-c", LANDLOCK_LAUNCHER, json.dumps(policy)]
+
+
+class BubblewrapSandbox(Sandbox):
+    """Linux without Landlock: a bubblewrap mount namespace. Coarser — a
+    writable root is readable too, so `outside_write` implies reading."""
+
+    name = "bwrap"
+
+    @classmethod
+    def available(cls) -> bool:
+        return _bwrap_works()
+
+    def argv(self, command: str, ws: "Workspace") -> list[str]:
+        read, write, full = self.paths(ws)
+        args = [shutil.which("bwrap") or "bwrap", "--die-with-parent"]
+        for path in read:
+            args += ["--ro-bind-try", path, path]
+        for path in [*write, *full]:
+            args += ["--bind-try", path, path]
+        args += ["--dev", "/dev", "--chdir", str(ws.root), "/bin/sh", "-c", command]
+        return args
+
+
+class SeatbeltSandbox(Sandbox):
+    """macOS: ``sandbox-exec`` with a generated profile that denies what the
+    workspace flags do not allow on top of the default policy."""
+
+    name = "seatbelt"
+    EXE = "/usr/bin/sandbox-exec"
+    DEVICES = ("/dev/null", "/dev/zero", "/dev/tty", "/dev/stdout", "/dev/stderr", "/dev/dtracehelper")
+
+    @classmethod
+    def available(cls) -> bool:
+        return sys.platform == "darwin" and os.path.exists(cls.EXE)
+
+    @staticmethod
+    def quote(path: str) -> str:
+        return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    def profile(self, ws: "Workspace") -> str:
+        read, _write, full = self.paths(ws)
+        lines = ["(version 1)", "(allow default)"]
+        if not ws.outside_write:
+            allowed = [f"(subpath {self.quote(p)})" for p in full]
+            allowed += [f"(literal {self.quote(p)})" for p in self.DEVICES]
+            allowed.append('(subpath "/dev/fd")')
+            lines.append(f"(deny file-write* (require-not (require-any {' '.join(allowed)})))")
+        if not ws.outside_read:
+            allowed = [f"(subpath {self.quote(p)})" for p in [*read, *full]]
+            lines.append(f"(deny file-read-data (require-not (require-any {' '.join(allowed)})))")
+        return "\n".join(lines)
+
+    def argv(self, command: str, ws: "Workspace") -> list[str]:
+        return [self.EXE, "-p", self.profile(ws), "/bin/sh", "-c", command]
+
+
+#: Sandbox backends by name, in the order ``auto`` tries them.
+SANDBOXES: dict[str, type[Sandbox]] = {
+    "landlock": LandlockSandbox,
+    "bwrap": BubblewrapSandbox,
+    "seatbelt": SeatbeltSandbox,
+}
+
+
+def pick_sandbox(name: str = "auto") -> Sandbox | None:
+    """The sandbox `name` asks for when this machine has it, else ``None``.
+
+    ``auto`` takes the first available backend, ``none`` never takes one.
+    """
+    name = (name or "auto").strip().lower()
+    order = tuple(SANDBOXES) if name == "auto" else (name,)
+    for key in order:
+        kind = SANDBOXES.get(key)
+        if kind is not None and kind.available():
+            return kind()
+    return None
+
+
+@functools.cache
+def _landlock_abi() -> int:
+    """The Landlock ABI of the running kernel, ``0`` when there is none."""
+    if not sys.platform.startswith("linux"):
+        return 0
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.syscall.restype = ctypes.c_long
+        abi = libc.syscall(ctypes.c_long(444), ctypes.c_void_p(None), ctypes.c_long(0), ctypes.c_long(1))
+    except (OSError, AttributeError):
+        return 0
+    return max(int(abi), 0)
+
+
+@functools.cache
+def _bwrap_works() -> bool:
+    """Whether bubblewrap is installed and allowed to make a namespace here."""
+    exe = shutil.which("bwrap")
+    if not exe or not sys.platform.startswith("linux"):
+        return False
+    import subprocess
+
+    try:
+        probe = subprocess.run(
+            [exe, "--ro-bind", "/", "/", "true"], capture_output=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
+
+
 class WorkspaceError(ValueError):
     """Raised when an operation would escape the workspace root."""
 
@@ -2301,19 +3002,40 @@ class Workspace:
         shell_timeout: int = 900,
         shell_output_limit: int = 32_000,
         shell_heartbeat: float = 5.0,
-        read_outside: bool = False,
+        outside_read: bool = False,
+        outside_write: bool = False,
+        sandbox: Sandbox | None = None,
     ) -> None:
         self.root = Path(root).expanduser().resolve()
         self.shell_timeout = shell_timeout
         self.shell_output_limit = shell_output_limit
         self.shell_heartbeat = shell_heartbeat
-        #: Reads may resolve outside the root; writes never do.
-        self.read_outside = read_outside
+        #: Reads (writes) may resolve outside the root.
+        self.outside_read = outside_read
+        self.outside_write = outside_write
+        #: Confines `run_shell` while the reach above is not total.
+        self.sandbox = sandbox
+
+    @property
+    def confined(self) -> bool:
+        """True when some path outside the root is off limits."""
+        return not (self.outside_read and self.outside_write)
+
+    @property
+    def shell_allowed(self) -> bool:
+        """A shell reaches anything the process can, so it is offered only
+        when nothing is off limits or a sandbox holds it to the same reach.
+
+        `run_shell` itself does not check: the primitive runs what it is given,
+        and `ToolRegistry` decides whether the model gets it.
+        """
+        return not self.confined or self.sandbox is not None
 
     def resolve(self, raw: str, *, read: bool = False) -> Path:
         """Resolve a model supplied path inside the workspace root.
 
-        A `read` may leave the root when the workspace allows `read_outside`.
+        A `read` may leave the root when the workspace allows `outside_read`,
+        a write when it allows `outside_write`.
         """
         cleaned = (raw or "").strip().strip("\"'")
         if not cleaned:
@@ -2326,7 +3048,7 @@ class Workspace:
             resolved = path.resolve()
         except OSError as exc:  # pragma: no cover - platform specific
             raise WorkspaceError(str(exc)) from exc
-        if read and self.read_outside:
+        if self.outside_read if read else self.outside_write:
             return resolved
         if resolved != self.root and not resolved.is_relative_to(self.root):
             raise WorkspaceError(f"path escapes the workspace root: {raw}")
@@ -2403,17 +3125,21 @@ class Workspace:
         """
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
+        options: dict[str, Any] = dict(
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=self.root,
+            # its own process group, so a kill reaches its children (POSIX)
+            start_new_session=True,
+        )
         try:
-            process = await asyncio.create_subprocess_shell(
-                command,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=self.root,
-                env=env,
-                # its own process group, so a kill reaches its children (POSIX)
-                start_new_session=True,
-            )
+            if self.sandbox is not None and self.confined:
+                argv = self.sandbox.argv(command, self)
+                env = self.sandbox.environ(env, self)
+                process = await asyncio.create_subprocess_exec(*argv, env=env, **options)
+            else:
+                process = await asyncio.create_subprocess_shell(command, env=env, **options)
         except OSError as exc:
             return f"(command failed: {exc})"
         stdout: list[str] = []
@@ -2677,7 +3403,10 @@ class ToolRegistry:
         from agents.tool_context import ToolContext
 
         guard = self.guard
-        reach = " Paths outside the workspace may be read too." if ws.read_outside else ""
+        reach = " Paths outside the workspace may be read too." if ws.outside_read else ""
+        write_reach = (
+            " Paths outside the workspace may be written too." if ws.outside_write else ""
+        )
 
         @function_tool(
             name_override="list_directory",
@@ -2706,7 +3435,7 @@ class ToolRegistry:
             name_override="write_text_file",
             description_override=(
                 "Write text to a workspace file, creating parent directories as "
-                "needed. Overwrites the file when it already exists."
+                "needed. Overwrites the file when it already exists." + write_reach
             ),
         )
         @guard
@@ -2751,7 +3480,7 @@ class ToolRegistry:
             name_override="apply_patch",
             description_override=(
                 "Apply a unified diff to a workspace file. operation is one of "
-                "'create_file', 'update_file' or 'delete_file'."
+                "'create_file', 'update_file' or 'delete_file'." + write_reach
             ),
         )
         @guard
@@ -2762,7 +3491,12 @@ class ToolRegistry:
 
         tools = [list_directory, read_text_file, write_text_file, image_tool, apply_patch]
 
-        if self._shell:
+        if self._shell and not ws.shell_allowed:
+            self.withheld("no sandbox is available to hold it to the workspace")
+        if self._shell and ws.shell_allowed:
+            confinement = (
+                ws.sandbox.describe(ws) if ws.sandbox is not None and ws.confined else ""
+            )
 
             @guard
             async def run_shell_command(ctx: Any, command: str) -> str:
@@ -2780,11 +3514,27 @@ class ToolRegistry:
                     description_override=(
                         "Run a shell command with the workspace as the working "
                         "directory and return stdout, stderr and the exit code."
+                        + confinement
                     ),
                 )
             )
 
         return tools
+
+    #: Reasons the shell was withheld that were already reported.
+    _withheld: set[str] = set()
+
+    @classmethod
+    def withheld(cls, reason: str) -> None:
+        """Report, once per reason, that the shell tool was left out."""
+        if reason in cls._withheld:
+            return
+        cls._withheld.add(reason)
+        print(
+            f"[shell] run_shell_command withheld: outside_read / outside_write confine "
+            f"it and {reason} (see shell_sandbox)",
+            file=sys.stderr,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3054,6 +3804,8 @@ class Block:
     text: str = ""
     session_id: str | None = None
     created_at: float = field(default_factory=time.time)
+    #: The block is closed: nothing more will be streamed into it.
+    done: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -3063,6 +3815,7 @@ class Block:
             "text": self.text,
             "session": self.session_id,
             "created_at": self.created_at,
+            "done": self.done,
         }
 
 
@@ -3205,6 +3958,11 @@ class RunResult:
     error_kind: str | None = None
     #: Tokens and cost of every model call the run made, specialists included.
     usage: Usage = field(default_factory=Usage)
+    #: What the run added to the context window, step by step as each one
+    #: finished: assistant messages and tool calls with their outputs, as raw
+    #: model input items. An application keeping its own history appends
+    #: their `items` after its prompt; `Agent` journals each as it lands.
+    turns: list[Turn] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -3292,6 +4050,9 @@ class Engine:
         #: Questions the model asked that wait for an answer, by question id:
         #: the session they belong to and the future the answer resolves.
         self.questions: dict[str, tuple[str | None, asyncio.Future[str]]] = {}
+        #: What each open question published, so a client that (re)connects
+        #: is shown the card again (`pending_questions`).
+        self.asking: dict[str, dict[str, Any]] = {}
 
     # -- configuration ------------------------------------------------------
 
@@ -3428,13 +4189,23 @@ class Engine:
         target = workspace if workspace is not None else self.workspace
         if target is None or isinstance(target, Workspace):
             return target
+        outside_read, outside_write = bool(config.outside_read), bool(config.outside_write)
         return Workspace(
             target,
             shell_timeout=config.shell_timeout,
             shell_output_limit=config.shell_output_limit,
             shell_heartbeat=config.shell_heartbeat,
-            read_outside=bool(config.read_outside),
+            outside_read=outside_read,
+            outside_write=outside_write,
+            sandbox=None if outside_read and outside_write else self.build_sandbox(config),
         )
+
+    def build_sandbox(self, config: AgentConfig) -> Sandbox | None:
+        """The sandbox that confines the shell of a run, or ``None`` for none.
+
+        Override to supply a backend of your own (a container, a VM).
+        """
+        return pick_sandbox(config.shell_sandbox)
 
     # -- run ----------------------------------------------------------------
 
@@ -3583,6 +4354,10 @@ class Engine:
         )
         blocks: dict[str, Block] = {}
         current: Block | None = None
+        #: The newest output block: the block an assistant message is journaled as.
+        answer: Block | None = None
+        #: The raw call item of each open tool call, by block id, until its output.
+        calls: dict[str, dict[str, Any]] = {}
 
         def new_block(kind: str) -> Block:
             block = Block(
@@ -3595,7 +4370,10 @@ class Engine:
             return block
 
         async def open_block(kind: str) -> Block:
+            nonlocal answer
             block = new_block(kind)
+            if kind == "output":
+                answer = block
             await self.events.publish(
                 EventType.BLOCK_START,
                 session_id=session_id,
@@ -3608,6 +4386,7 @@ class Engine:
         async def close_block(block: Block | None) -> None:
             if block is None:
                 return
+            block.done = True
             await self.events.publish(
                 EventType.BLOCK_END,
                 session_id=session_id,
@@ -3624,6 +4403,9 @@ class Engine:
             call = self.tool_call_of(item, block.id)
             result.tools.append(call)
             block.text = call.report()
+            raw = self.input_item(item)
+            if raw is not None:
+                calls[block.id] = raw
             await self.events.publish(
                 EventType.TOOL_START,
                 session_id=session_id,
@@ -3644,6 +4426,7 @@ class Engine:
             block = blocks.get(call.id)
             if block is not None:
                 block.text = call.report()
+                block.done = True
             await self.events.publish(
                 EventType.TOOL_END,
                 session_id=session_id,
@@ -3656,6 +4439,34 @@ class Engine:
                 result=call.result,
                 duration=call.duration,
                 text=call.report(),
+            )
+            # Only a whole pair enters the context: a call without its output
+            # is a request the next model call could not make sense of.
+            raw_call, raw_output = calls.pop(call.id, None), self.input_item(item)
+            if raw_call is not None and raw_output is not None:
+                await self.checkpoint(
+                    result,
+                    Turn(
+                        "tool",
+                        call.report(),
+                        id=call.id,
+                        run=result.run_id,
+                        items=[raw_call, raw_output],
+                        meta={"name": call.name, "ok": call.ok},
+                    ),
+                )
+
+        async def finish_message(item: Any) -> None:
+            raw = self.input_item(item)
+            if raw is None:
+                return
+            text = message_text(raw) or (answer.text if answer is not None else "")
+            turn_id = (
+                answer.id if answer is not None
+                else f"{session_id}-{result.run_id}-m{len(result.turns)}"
+            )
+            await self.checkpoint(
+                result, Turn("assistant", text, id=turn_id, run=result.run_id, items=[raw])
             )
 
         events = streamed.stream_events().__aiter__()
@@ -3679,6 +4490,8 @@ class Engine:
                         await begin_tool(event.item)
                     elif event.name == "tool_output":
                         await finish_tool(event.item)
+                    elif event.name == "message_output_created":
+                        await finish_message(event.item)
                     continue
                 if not isinstance(event, RawResponsesStreamEvent):
                     continue
@@ -3884,6 +4697,7 @@ class Engine:
                 "call_id": call.call_id if call is not None else call_id,
             }
             answer, ok = "", False
+            self.asking[question_id] = {**fields, "question": question, "options": list(options)}
             try:
                 await self.events.publish(
                     EventType.QUESTION_START,
@@ -3897,6 +4711,7 @@ class Engine:
                 return answer
             finally:
                 self.questions.pop(question_id, None)
+                self.asking.pop(question_id, None)
                 if call is not None:
                     call.asking = False
                     call.touch()
@@ -3926,6 +4741,14 @@ class Engine:
             return False
         future.set_result(str(text))
         return True
+
+    def pending_questions(self, session_id: str | None) -> list[dict[str, Any]]:
+        """The open questions of a session, as `question.start` published them."""
+        return [
+            dict(self.asking[question_id])
+            for question_id, (owner, future) in self.questions.items()
+            if owner == session_id and not future.done() and question_id in self.asking
+        ]
 
     @staticmethod
     def cancel_stream(streamed: Any) -> None:
@@ -3976,6 +4799,29 @@ class Engine:
                 pass
         return redact(arguments if arguments is not None else {}, self.TOOL_VALUE_LIMIT)
 
+    # -- journal ------------------------------------------------------------
+
+    async def checkpoint(self, result: RunResult, turn: Turn) -> None:
+        """A step of the run finished: record what it added to the context.
+
+        The engine keeps it on `result.turns` only; `Agent` also journals it,
+        so a run that dies later still leaves this step behind.
+        """
+        result.turns.append(turn)
+
+    @staticmethod
+    def input_item(item: Any) -> dict[str, Any] | None:
+        """An SDK run item as a JSON safe model input item, or ``None``."""
+        convert = getattr(item, "to_input_item", None)
+        if not callable(convert):
+            return None
+        try:
+            raw = json.loads(json.dumps(convert(), default=str))
+        except (TypeError, ValueError, AttributeError) as exc:
+            print(f"[journal] run item not replayable: {exc!r}", file=sys.stderr)
+            return None
+        return raw if isinstance(raw, dict) else None
+
     @staticmethod
     def pending_tool(result: RunResult, call_id: Any) -> ToolCall | None:
         """The call an output belongs to: matched by id, else the oldest open one."""
@@ -4008,6 +4854,20 @@ def prompt_of(model_input: str | list[dict[str, Any]]) -> str:
     return str(model_input[-1].get("content", "")) if model_input else ""
 
 
+def message_text(item: dict[str, Any]) -> str:
+    """The text of an assistant message input item (its ``output_text`` parts)."""
+    content = item.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        str(part.get("text") or "")
+        for part in content
+        if isinstance(part, dict) and part.get("type") in ("output_text", "text")
+    )
+
+
 class Agent(Engine):
     """The one API: a feature rich agent harness.
 
@@ -4038,9 +4898,11 @@ class Agent(Engine):
         memory: "ConversationMemory | None" = None,
         repos: "RepoManager | None" = None,
         commands: CommandRegistry | None = None,
+        rules: "RuleBook | None" = None,
         console: bool = True,
         config_file: bool | str | Path | None = True,
         env_file: bool | str | Path | None = True,
+        mode: str | None = None,
         **overrides: Any,
     ) -> None:
         super().__init__(
@@ -4055,17 +4917,25 @@ class Agent(Engine):
             env_file=env_file,
             **overrides,
         )
+        #: The front end this agent was built for (``repl``, ``web``), which
+        #: settles what the layers left unset (`MODE_TOOLS`, `MODE_STATE`).
+        self.mode = mode
+        if mode is not None:
+            self.config = self.config.with_defaults(
+                **MODE_TOOLS.get(mode, {}), **MODE_STATE.get(mode, {})
+            )
+        self.config = self.config.state_paths()
         self.store = store or SqliteStore(self.config.db_path)
         self.cache = cache or LruCache(self.config.cache_size)
         self.sessions = sessions or SessionManager(
             root=self.config.workspace_root,
-            ttl=self.config.session_ttl,
+            ttl=self.config.session_ttl or DEFAULT_SESSION_TTL,
             store=self.store,
             cache=self.cache,
             prefix=self.config.name,
             keep_workspace=self.config.keep_workspace,
             seed=self.config.workspace_seed,
-            durable=self.config.session_durable,
+            durable=bool(self.config.session_durable),
             sweep_interval=self.config.session_sweep_interval,
         )
         self.repos = repos or RepoManager(
@@ -4076,9 +4946,19 @@ class Agent(Engine):
             enabled=self.config.memory_enabled,
             max_turns=self.config.memory_max_turns,
             max_chars=self.config.memory_max_chars,
+            tools=self.config.memory_tools,
         )
         if self.memory.summarizer is None:
             self.memory.summarizer = self.build_summarizer(self.config)
+        self.rules = rules or RuleBook(
+            self.store,
+            enabled=self.config.rules_enabled,
+            max_chars=self.config.rules_max_chars,
+        )
+        #: The run in flight per session, with the task running it.
+        self.live: dict[str, tuple[RunResult, "asyncio.Task[Any] | None"]] = {}
+        self.sessions.listeners.append(self.session_closed)
+        self.reconcile()
         self.commands = commands or CommandRegistry()
         self.register_default_commands()
 
@@ -4149,19 +5029,31 @@ class Agent(Engine):
         session remembers.
         """
         resolved = self.resolve_config(config, **overrides)
+        resolved = resolved.merge(
+            instructions=self.decorate_instructions(resolved.instructions, resolved)
+        )
         session_obj = self.acquire_session(session)
         await self.prepare_session(session_obj)
         result = RunResult(session_id=session_obj.id)
-        async with self.running(resolved, result):
-            result.prompt = self.build_prompt(template, resolved, **(context or {}))
-            await self.turn(
-                self.build_input(result.prompt, session_obj, resolved),
-                resolved,
-                result,
-                workspace=session_obj.workspace,
-                checkout=self.checkout(session_obj),
-            )
-            await self.remember(session_obj, resolved, result)
+        self.live[session_obj.id] = (result, asyncio.current_task())
+        try:
+            async with self.running(resolved, result):
+                await self.publish_prompt(resolved, result)
+                result.prompt = self.build_prompt(template, resolved, **(context or {}))
+                model_input = self.build_input(result.prompt, session_obj, resolved)
+                self.journal_prompt(session_obj, resolved, result)
+                await self.turn(
+                    model_input,
+                    resolved,
+                    result,
+                    workspace=session_obj.workspace,
+                    checkout=self.checkout(session_obj),
+                )
+                await self.remember(session_obj, resolved, result)
+        finally:
+            if self.live.get(session_obj.id, (None,))[0] is result:
+                del self.live[session_obj.id]
+            self.settle(session_obj, result)
         return result
 
     def acquire_session(self, session: Session | str | None) -> Session:
@@ -4170,39 +5062,272 @@ class Agent(Engine):
         self.sessions.purge_expired()
         return self.sessions.ensure(session)
 
+    def decorate_instructions(self, instructions: str, config: AgentConfig) -> str:
+        """Append harness supplied standing context (learned rules)."""
+        return self.rules.decorate(instructions) if config.rules_enabled else instructions
+
     # -- memory -------------------------------------------------------------
+
+    #: Sent in place of a prompt by `/resume`, which runs it without the template.
+    RESUME_PROMPT = (
+        "Your previous run in this conversation stopped before it finished. "
+        "Continue that task from where it stopped: everything already done is in "
+        "the conversation above, so don't repeat finished steps, check the state "
+        "of whatever was in progress, then carry on."
+    )
 
     def build_input(
         self, prompt: str, session: Session, config: AgentConfig
-    ) -> str | list[dict[str, str]]:
+    ) -> str | list[dict[str, Any]]:
         """The model input for a run: the prompt, preceded by what is remembered.
 
         A session with nothing remembered is a plain string, which is what the
-        SDK expects for a one shot run; otherwise the transcript is replayed as
-        chat messages and the prompt becomes the newest user message.
+        SDK expects for a one shot run; otherwise the journal is replayed as the
+        context window (messages, and tool calls with their outputs) and the
+        prompt becomes the newest user message.
         """
         history = self.memory.history(session.id) if config.memory_enabled else []
         if not history:
             return prompt
         return [*history, {"role": "user", "content": prompt}]
 
+    @staticmethod
+    def prompt_id(result: RunResult) -> str:
+        """The block id of the prompt of a run, on the bus and in the journal."""
+        return f"{result.session_id}-{result.run_id}-prompt"
+
+    async def publish_prompt(self, config: AgentConfig, result: RunResult) -> None:
+        """Show what the user asked as the first block of the run.
+
+        Every client of the session sees it, not only the one that sent it, and
+        under the id the journal keeps, so a reconnect replays the same block.
+        """
+        await self.events.publish(
+            EventType.BLOCK_START,
+            session_id=result.session_id,
+            id=self.prompt_id(result),
+            kind="prompt",
+            role="user",
+            text=(config.input or "").strip(),
+            attachments=list(config.extras.get("attachments") or []),
+            complete=True,
+        )
+
+    def journal_prompt(self, session: Session, config: AgentConfig, result: RunResult) -> None:
+        """Write the prompt ahead of the run, marked as running.
+
+        What is kept is the input the user actually wrote (falling back to the
+        rendered prompt), not the rendered template, which would be replayed
+        verbatim on every turn.
+        """
+        if not config.memory_enabled:
+            return
+        asked = (config.input or "").strip() or result.prompt
+        self.memory.journal(
+            session.id,
+            Turn(
+                "user",
+                asked,
+                id=self.prompt_id(result),
+                run=result.run_id,
+                meta={"status": RUN_RUNNING},
+            ),
+        )
+
+    async def checkpoint(self, result: RunResult, turn: Turn) -> None:
+        """Journal a finished step at once, so a crash later keeps it.
+
+        A tool output is clipped to `ConversationMemory.TOOL_LIMIT` for the
+        journal (the run itself saw it whole), and the session lease is
+        renewed: a run that is still working keeps its session alive.
+        """
+        await super().checkpoint(result, turn)
+        if not result.session_id or not self.memory.enabled:
+            return
+        limit = self.memory.TOOL_LIMIT
+        items = [
+            {**item, "output": clip_output(item["output"], limit)}
+            if item.get("type") == "function_call_output" and isinstance(item.get("output"), str)
+            else item
+            for item in turn.items
+        ]
+        self.memory.journal(result.session_id, replace(turn, items=items, meta=dict(turn.meta)))
+        self.sessions.get(result.session_id)
+
     async def remember(
         self, session: Session, config: AgentConfig, result: RunResult
     ) -> None:
-        """Append the exchange of a run to the transcript of its session.
+        """Close the journal of a run that finished: its answer, then the trim.
 
-        What is remembered is the input the user actually wrote (falling back to
-        the rendered prompt) and the output of the model — not the rendered
-        template, which would be replayed verbatim on every turn. Override to
+        A model whose final answer never arrived as a message item (or a stream
+        that does not report them) still has it journaled here. Override to
         remember more, less, or something else entirely.
         """
-        if not config.memory_enabled or not result.ok or not result.output.strip():
+        if not config.memory_enabled:
             return
-        asked = (config.input or "").strip() or result.prompt
-        await self.memory.remember(
-            session.id,
-            [Turn("user", asked), Turn("assistant", result.output.strip())],
+        output = result.output.strip()
+        journaled = self.memory.transcript(session.id).run_of(result.run_id)
+        if output and not any(t.role == "assistant" and t.text.strip() == output for t in journaled):
+            answers = [b for b in result.blocks if b.kind == "output"]
+            turn_id = answers[-1].id if answers else f"{result.session_id}-{result.run_id}-answer"
+            self.memory.journal(
+                session.id, Turn("assistant", output, id=turn_id, run=result.run_id)
+            )
+        await self.memory.remember(session.id, [])
+
+    def settle(self, session: Session, result: RunResult) -> None:
+        """Record how a run ended on its journaled prompt. Never raises."""
+        try:
+            transcript = self.memory.transcript(session.id)
+            prompt = transcript.prompt_of(result.run_id)
+            if prompt is None:
+                return
+            if result.ok:
+                prompt.meta["status"] = RUN_OK
+            else:
+                cancelled = result.error_kind == ErrorKind.CANCELLED
+                prompt.meta["status"] = RUN_CANCELLED if cancelled else RUN_FAILED
+                prompt.meta["error"] = result.error
+            self.memory.persist(transcript)
+        except Exception as exc:  # pragma: no cover - the run already ended
+            print(f"[journal] could not settle run {result.run_id}: {exc!r}", file=sys.stderr)
+
+    def unfinished(self, session_id: str | None) -> Turn | None:
+        """The prompt of the newest run of a session when it did not finish.
+
+        A run still marked running with nothing live behind it was interrupted
+        (the process died under it); a failed or cancelled one stopped early.
+        """
+        if not session_id or session_id in self.live:
+            return None
+        last = self.memory.transcript(session_id).last_run()
+        if last is None or last.meta.get("status") == RUN_OK:
+            return None
+        return last
+
+    async def resume(self, session: Session | str | None, **overrides: Any) -> RunResult:
+        """Continue the unfinished run of a session from its journal."""
+        return await self.run(
+            PASSTHROUGH_TEMPLATE, session=session, input=self.RESUME_PROMPT, **overrides
         )
+
+    def session_closed(self, session: Session) -> None:
+        """A session went away: its journal goes, and so does a run still in it.
+
+        May be called off the loop (the sweeper sweeps on a thread), so the
+        run is cancelled through its own loop.
+        """
+        self.memory.forget(session.id)
+        live = self.live.get(session.id)
+        task = live[1] if live else None
+        if task is not None and not task.done():
+            with contextlib.suppress(RuntimeError):
+                task.get_loop().call_soon_threadsafe(task.cancel)
+
+    def reconcile(self) -> None:
+        """Forget the journals of sessions that did not survive a restart."""
+        if self.sessions.store is not self.store:
+            return
+        live = {session.id for session in self.sessions.list()}
+        for session_id, _record in self.store.list(ConversationMemory.NAMESPACE):
+            if session_id not in live:
+                self.memory.forget(session_id)
+
+    # -- rules --------------------------------------------------------------
+
+    def build_distiller(
+        self, config: AgentConfig
+    ) -> Callable[[list[dict[str, str]]], Awaitable[str]] | None:
+        """Return the delegate that turns feedback into a rule, or ``None``.
+
+        It uses the `summary` role, which falls back to the leader.
+        """
+        spec = config.model_spec(SUMMARY_ROLE) or config.model_spec(LEADER_ROLE)
+        if spec is None:
+            return None
+        policy = self.build_policy(config)
+
+        async def distill(messages: list[dict[str, str]]) -> str:
+            return await self.models.complete(
+                spec,
+                messages,
+                max_tokens=config.rules_max_tokens or None,
+                policy=policy,
+                on_retry=self.retry_reporter(),
+            )
+
+        return distill
+
+    async def feedback(
+        self,
+        session_id: str | None,
+        vote: str,
+        *,
+        target: str | None = None,
+        note: str = "",
+    ) -> dict[str, Any]:
+        """Learn a rule from a vote (``up`` or ``down``) on an answer.
+
+        `target` is the block id of the answer; without one the newest answer
+        of the session is meant. The trace is the run behind the answer, up to
+        it. An answer is rated once. The outcome is returned and published as
+        `feedback`, so every client of the session marks the answer.
+        """
+        vote = {"good": "up", "bad": "down"}.get(vote, vote)
+        outcome: dict[str, Any] = {"ok": False, "id": target or "", "vote": vote}
+        answer: Turn | None = None
+        transcript = self.memory.transcript(session_id) if session_id else None
+        try:
+            if vote not in RULE_VOTES:
+                outcome["message"] = f"Unknown vote: {vote!r} (up or down)"
+                return outcome
+            if not self.config.rules_enabled:
+                outcome["message"] = "Learned rules are disabled (rules_enabled)"
+                return outcome
+            if transcript is not None:
+                answer = transcript.find(target) if target else next(
+                    (t for t in reversed(transcript.turns) if t.role == "assistant"), None
+                )
+            if answer is None or answer.role != "assistant":
+                outcome["message"] = "No answer to rate"
+                return outcome
+            outcome["id"] = answer.id
+            if answer.meta.get("vote"):
+                outcome["message"] = f"Already rated {answer.meta['vote']}"
+                return outcome
+            distill = self.build_distiller(self.config)
+            if distill is None:
+                outcome["message"] = "No model to learn with"
+                return outcome
+            answer.meta["vote"] = vote  # claimed now, so a second click waits for nothing
+            assert transcript is not None
+            turns = transcript.run_of(answer.run) if answer.run else []
+            trace = turns[: turns.index(answer) + 1] if answer in turns else [answer]
+            try:
+                action, rule = await self.rules.learn(
+                    vote, trace, distill, note=note, instructions=self.config.rules_instructions
+                )
+            except BaseException as exc:
+                answer.meta.pop("vote", None)
+                if not isinstance(exc, Exception):
+                    raise  # cancelled: nothing was learned, nothing is claimed
+                outcome["message"] = f"Could not learn a rule: {exc}"
+                return outcome
+            self.memory.persist(transcript)
+            verb = "added" if action == "add" else "updated"
+            outcome.update(
+                ok=True,
+                action=action,
+                rule=rule.to_dict(),
+                message=f"Rule {verb} ({rule.id}): {rule.line()}",
+            )
+            warning = self.rules.warning()
+            if warning:
+                outcome["warning"] = warning
+                outcome["message"] += f"\n{warning}"
+            return outcome
+        finally:
+            await self.events.publish(EventType.FEEDBACK, session_id=session_id, **outcome)
 
     # -- repository ---------------------------------------------------------
 
@@ -4252,10 +5377,12 @@ class Agent(Engine):
             return {"ok": True, "commands": self.commands.describe()}
 
         async def new_session(_args: str, session_id: str | None = None, **_: Any) -> dict[str, Any]:
+            previous = self.sessions.get(session_id) if session_id else None
+            client = previous.meta.get("client") if previous else None
             if session_id:
                 self.sessions.close(session_id)
                 self.memory.forget(session_id)
-            session = self.sessions.create()
+            session = self.sessions.create(**({"client": client} if client else {}))
             checkout = await self.prepare_session(session)
             message = "New session"
             if checkout is not None:
@@ -4377,7 +5504,53 @@ class Agent(Engine):
 
             return await repo_action(session_id, publish)
 
+        async def good_command(args: str, session_id: str | None = None, **_: Any) -> dict[str, Any]:
+            return await self.feedback(session_id, "up", note=args)
+
+        async def bad_command(args: str, session_id: str | None = None, **_: Any) -> dict[str, Any]:
+            return await self.feedback(session_id, "down", note=args)
+
+        def rules_command(args: str, **_: Any) -> dict[str, Any]:
+            action, _, target = args.strip().partition(" ")
+            if action == "drop":
+                dropped = self.rules.drop(target)
+                return {
+                    "ok": dropped,
+                    "message": f"Dropped rule {target}" if dropped else f"No such rule: {target}",
+                }
+            if action == "clear":
+                return {"ok": True, "message": f"Dropped {self.rules.clear()} rules"}
+            if action:
+                return {"ok": False, "message": "Usage: /rules [drop <id> | clear]"}
+            rules = self.rules.rules()
+            lines = [f"- `{r.id}` {r.line()}" for r in rules] or ["_no learned rules_"]
+            lines.append(f"{self.rules.size:,} of {self.rules.max_chars:,} chars")
+            warning = self.rules.warning()
+            return {
+                "ok": True,
+                "message": "\n".join([*lines, *([warning] if warning else [])]),
+                "rules": [r.to_dict() for r in rules],
+            }
+
+        def resume_command(_args: str, session_id: str | None = None, **_: Any) -> dict[str, Any]:
+            if session_id and session_id in self.live:
+                return {"ok": False, "message": "A run is in progress"}
+            unfinished = self.unfinished(session_id)
+            if unfinished is None:
+                return {"ok": False, "message": "Nothing to resume"}
+            state = {RUN_RUNNING: "was interrupted", RUN_FAILED: "failed"}.get(
+                unfinished.meta.get("status"), "was cancelled"
+            )
+            # The front end starts the run: it owns the task and the stream.
+            return {"ok": True, "resume": True, "message": f"Resuming the run that {state}"}
+
         self.commands.register("help", "List the available commands", help_command)
+        self.commands.register("good", "Rate the last answer good: '/good [why]'", good_command)
+        self.commands.register("bad", "Rate the last answer bad: '/bad [why]'", bad_command)
+        self.commands.register(
+            "rules", "List learned rules: '/rules [drop <id> | clear]'", rules_command
+        )
+        self.commands.register("resume", "Continue the run that did not finish", resume_command)
         self.commands.register("new", "Start a new isolated session", new_session)
         self.commands.register("end", "End the current session and wipe it", end_session)
         self.commands.register("sessions", "List live sessions", list_sessions)
@@ -4442,6 +5615,7 @@ class Agent(Engine):
         """
         args = parse_args(argv)
         kwargs.setdefault("config_file", args.config or True)
+        kwargs.setdefault("mode", mode_of(args))
         agent = cls(**kwargs)
         return asyncio.run(agent.execute(template or load_template(agent.config), args))
 
@@ -4510,9 +5684,8 @@ class Repl:
         reader: Callable[[str], str] | None = None,
     ) -> None:
         self.agent = agent
-        # a terminal user is on their own machine: reads may leave the workspace;
-        # and they are at the keyboard, so the model may ask them questions
-        agent.config = agent.config.with_defaults(read_outside=True, ask_enabled=True)
+        # a terminal user is on their own machine and at the keyboard
+        agent.config = agent.config.with_defaults(**MODE_TOOLS["repl"])
         self.template = (
             template or getattr(agent, "template", None) or PASSTHROUGH_TEMPLATE
         )
@@ -4538,10 +5711,12 @@ class Repl:
         `opening` is answered first, which is how ``--repl --input ...`` hands
         the command line prompt to an interactive session.
         """
-        self.session = self.agent.sessions.ensure(None)
+        resumed = self.agent.sessions.latest(client=self.CLIENT)
+        self.session = resumed or self.agent.sessions.create(client=self.CLIENT)
         await self.agent.prepare_session(self.session)
         self.agent.sessions.start_sweeper()
         self.greet()
+        self.recap(resumed is not None)
         disarm = self.arm_interrupt()
         unsubscribe = [
             self.agent.events.on(EventType.QUESTION_START, self.asked),
@@ -4576,11 +5751,15 @@ class Repl:
             return
         await self.command(text, parsed[0])
 
-    async def ask(self, text: str) -> None:
-        """Run one prompt in the current session, streaming the answer."""
+    async def ask(self, text: str, *, resume: bool = False) -> None:
+        """Run one prompt in the current session, streaming the answer.
+
+        With `resume` the unfinished run of the session is continued instead.
+        """
         session = self.current()
         self.task = asyncio.create_task(
-            self.agent.run(self.template, session=session, input=text)
+            self.agent.resume(session) if resume
+            else self.agent.run(self.template, session=session, input=text)
         )
         try:
             await self.task
@@ -4605,16 +5784,48 @@ class Repl:
         )
         self.adopt(result)
         self.report(result)
+        if isinstance(result, dict) and result.get("ok") and result.get("resume"):
+            await self.ask("", resume=True)
 
     # -- session ------------------------------------------------------------
+
+    #: Tag on the sessions this front end opens, so a restart resumes its own.
+    CLIENT = "repl"
+    #: Remembered turns shown when a session is resumed.
+    RECAP_TURNS = 4
 
     def current(self) -> Session:
         """The session prompts run in, replacing one that has gone away."""
         live = self.agent.sessions.get(self.session.id) if self.session else None
         if live is None:
-            live = self.agent.sessions.ensure(None)
+            live = self.agent.sessions.create(client=self.CLIENT)
         self.session = live
         return live
+
+    def recap(self, resumed: bool) -> None:
+        """After the banner: where a resumed session left off, and warnings."""
+        if resumed and self.session is not None:
+            transcript = self.agent.memory.transcript(self.session.id)
+            spoken = [t for t in transcript.turns if t.role in ("user", "assistant")]
+            if spoken:
+                self.emit(
+                    "tool",
+                    f"Resumed session {self.session.id}: {len(transcript)} turns remembered "
+                    f"(/new for a fresh one)\n",
+                )
+                for turn in spoken[-self.RECAP_TURNS:]:
+                    mark = ">" if turn.role == "user" else "<"
+                    self.emit("tool", f"{mark} {truncate(' '.join(turn.text.split()), 200)}\n")
+            unfinished = self.agent.unfinished(self.session.id)
+            if unfinished is not None:
+                self.emit(
+                    "error",
+                    f"The last run did not finish ({unfinished.meta.get('status')}): "
+                    f"/resume to continue it\n",
+                )
+        warning = self.agent.rules.warning() if self.agent.config.rules_enabled else None
+        if warning:
+            self.emit("error", f"{warning}\n")
 
     def adopt(self, result: Any) -> None:
         """Follow a command that started, switched or ended a session."""
@@ -4897,6 +6108,11 @@ THEME_KEYS = {
         "editorError.foreground",
         "inputValidation.errorBorder",
     ),
+    "--warn": (
+        "editorWarning.foreground",
+        "list.warningForeground",
+        "inputValidation.warningBorder",
+    ),
     "--link": ("textLink.foreground", "textLink.activeForeground"),
     "--code-bg": ("textCodeBlock.background", "editorWidget.background"),
     "--badge-bg": ("badge.background",),
@@ -5100,15 +6316,21 @@ class WebServer:
         hub: Hub | None = None,
     ) -> None:
         self.agent = agent
-        # a web client may be anyone who reaches the port: reads stay confined;
-        # the page answers the questions of the model on the discussion itself
-        agent.config = agent.config.with_defaults(read_outside=False, ask_enabled=True)
+        # a web client may be anyone who reaches the port: reads and writes stay
+        # confined; the page answers the questions of the model on the discussion
+        agent.config = agent.config.with_defaults(**MODE_TOOLS["web"])
         self.host = host or agent.config.host
         self.port = port or agent.config.port
         self.template = template or getattr(agent, "template", None) or PASSTHROUGH_TEMPLATE
         self.assets_root = assets_root or ROOT
         self.hub = hub or Hub()
         self.theme = load_vscode_theme(agent.config.theme)
+        #: The run in flight per session. A run belongs to its session, not to
+        #: the socket that started it: a dropped connection leaves it running,
+        #: and whoever says `hello` to the session next picks it up.
+        self.runs: dict[str, asyncio.Task[Any]] = {}
+        #: Background work (rule learning) kept referenced until it finishes.
+        self.tasks: set[asyncio.Task[Any]] = set()
         self.register_handlers()
         self.agent.events.on(EventType.ALL, self._on_agent_event)
 
@@ -5143,16 +6365,28 @@ class WebServer:
         self.hub.on("command", self.on_command)
         self.hub.on("cancel", self.on_cancel)
         self.hub.on("answer", self.on_answer)
+        self.hub.on("feedback", self.on_feedback)
         self.hub.on("ping", lambda conn, _msg: conn.send("pong"))
 
+    #: Tag on the sessions this front end opens.
+    CLIENT = "web"
+
     async def on_hello(self, connection: Connection, message: dict[str, Any]) -> None:
-        session = self.agent.sessions.ensure(message.get("session"))
+        """(Re)attach a client to its session: the journal, the run in flight
+        with the blocks it has not journaled yet, and its open questions."""
+        session = self.agent.sessions.ensure(message.get("session"), client=self.CLIENT)
         await self.agent.prepare_session(session)
         self.bind(connection, session.id)
+        unfinished = self.agent.unfinished(session.id)
         await connection.send(
             "hello",
             session=session.to_dict(),
             history=self.agent.memory.replay(session.id),
+            live=self.live_blocks(session.id),
+            questions=self.agent.pending_questions(session.id),
+            busy=self.active(session.id),
+            unfinished=unfinished.run if unfinished is not None else None,
+            warning=self.agent.rules.warning() if self.agent.config.rules_enabled else None,
             config=self.agent.config.to_dict(),
             commands=self.agent.commands.describe(),
             theme=self.theme,
@@ -5163,28 +6397,20 @@ class WebServer:
         if not text:
             await connection.fail("Prompt cannot be empty")
             return
-        if connection.task is not None and not connection.task.done():
+        session = self.agent.sessions.ensure(connection.session_id, client=self.CLIENT)
+        self.bind(connection, session.id)
+        if self.active(session.id):
             await connection.fail("A run is already active")
             return
-        session = self.agent.sessions.ensure(connection.session_id)
-        self.bind(connection, session.id)
         try:
             attachments = self.store_attachments(session, message.get("attachments") or [])
         except (ValueError, OSError) as exc:
             await connection.fail(f"Attachment rejected: {exc}")
             return
-        await self.hub.broadcast(
-            self.channel(session.id),
-            EventType.BLOCK_START,
-            id=f"prompt-{time.time_ns()}",
-            kind="prompt",
-            role="user",
-            text=text,
-            attachments=attachments,
-            complete=True,
-        )
-        connection.task = asyncio.create_task(
-            self.run(connection, session, text, attachments)
+        # the run publishes the prompt block itself, to every client of the session
+        self.start(
+            session,
+            self.agent.run(self.template, session=session, input=text, attachments=attachments),
         )
 
     async def on_command(self, connection: Connection, message: dict[str, Any]) -> None:
@@ -5198,10 +6424,31 @@ class WebServer:
         if isinstance(result, dict) and isinstance(result.get("session"), dict):
             self.bind(connection, str(result["session"]["id"]))
         await connection.send("command", command=text, result=result)
+        if isinstance(result, dict) and result.get("ok") and result.get("resume"):
+            session = self.agent.sessions.get(connection.session_id)
+            if session is not None and not self.active(session.id):
+                self.start(session, self.agent.resume(session))
 
     async def on_cancel(self, connection: Connection, _message: dict[str, Any]) -> None:
-        cancelled = await connection.cancel_task()
+        cancelled = await self.cancel(connection.session_id)
         await connection.send("cancelled", ok=cancelled)
+
+    async def on_feedback(self, connection: Connection, message: dict[str, Any]) -> None:
+        """A thumb on an answer. Learning calls a model, so it runs off the
+        read loop; the outcome reaches every client of the session as `feedback`."""
+        if not connection.session_id:
+            await connection.fail("No session")
+            return
+        task = asyncio.create_task(
+            self.agent.feedback(
+                connection.session_id,
+                str(message.get("vote", "")),
+                target=str(message.get("id", "")) or None,
+                note=str(message.get("note", "")),
+            )
+        )
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
 
     async def on_answer(self, connection: Connection, message: dict[str, Any]) -> None:
         """Answer a question the model asked the session of this connection.
@@ -5251,26 +6498,53 @@ class WebServer:
             saved.append(workspace.relative(path))
         return saved
 
-    async def run(
-        self,
-        connection: Connection,
-        session: Session,
-        text: str,
-        attachments: list[str],
-    ) -> None:
+    def active(self, session_id: str | None) -> bool:
+        """Whether a run of this session is in flight."""
+        task = self.runs.get(session_id or "")
+        return task is not None and not task.done()
+
+    def start(self, session: Session, work: Awaitable[Any]) -> None:
+        """Run `work` (an agent run) as the run of `session`."""
+        self.runs[session.id] = asyncio.create_task(self.run(session, work))
+
+    async def cancel(self, session_id: str | None) -> bool:
+        """Cancel the run of a session, if any."""
+        task = self.runs.pop(session_id or "", None)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        return True
+
+    async def run(self, session: Session, work: Awaitable[Any]) -> None:
         try:
-            await self.agent.run(
-                self.template,
-                session=session,
-                input=text,
-                attachments=attachments,
-            )
+            await work
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
-            await connection.fail(str(exc))
+            await self.hub.broadcast(self.channel(session.id), "error", message=str(exc))
         finally:
-            connection.task = None
+            if self.runs.get(session.id) is asyncio.current_task():
+                del self.runs[session.id]
+
+    def live_blocks(self, session_id: str) -> list[dict[str, Any]]:
+        """The blocks of the run in flight that the journal does not hold yet.
+
+        A client that reconnects mid run gets the block being streamed (and a
+        tool still running) whole, then the stream carries on from there.
+        """
+        live = self.agent.live.get(session_id)
+        if live is None:
+            return []
+        result = live[0]
+        journaled = {t.id for t in self.agent.memory.transcript(session_id).run_of(result.run_id)}
+        names = {call.id: call.name for call in result.tools}
+        return [
+            {**block.to_dict(), **({"name": names[block.id]} if block.id in names else {})}
+            for block in result.blocks
+            if block.id not in journaled
+        ]
 
     # -- http ---------------------------------------------------------------
 
@@ -5385,6 +6659,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"a JSON or YAML config file (default: {STEM}.json|.yaml here or beside {STEM}.py)",
     )
     return parser.parse_args(argv)
+
+
+def mode_of(args: argparse.Namespace) -> str | None:
+    """The front end parsed arguments select: ``web``, ``repl`` or ``None``
+    for a one shot run, in the order `Agent.execute` dispatches them."""
+    if args.serve:
+        return "web"
+    if args.repl or not args.input:
+        return "repl"
+    return None
 
 
 def template_candidates(directories: Iterable[Path | str] | None = None) -> list[Path]:

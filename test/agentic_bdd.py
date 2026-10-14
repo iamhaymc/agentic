@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import functools
 import io
 import json
 import os
@@ -113,14 +114,17 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(A.mask_secret(""), "")
 
     def test_defaults_fill_only_unset_fields(self):
-        self.assertIsNone(A.AgentConfig().read_outside)
-        self.assertTrue(A.AgentConfig().with_defaults(read_outside=True).read_outside)
-        config = A.AgentConfig(read_outside=False).with_defaults(read_outside=True)
-        self.assertFalse(config.read_outside)
+        self.assertIsNone(A.AgentConfig().outside_read)
+        self.assertTrue(A.AgentConfig().with_defaults(outside_read=True).outside_read)
+        config = A.AgentConfig(outside_read=False).with_defaults(outside_read=True)
+        self.assertFalse(config.outside_read)
 
-    def test_env_layer_sets_read_outside(self):
-        config = A.AgentConfig().with_env({"AGENTIC_READ_OUTSIDE": "false"})
-        self.assertIs(config.read_outside, False)
+    def test_env_layer_sets_the_outside_flags(self):
+        config = A.AgentConfig().with_env(
+            {"AGENTIC_OUTSIDE_READ": "false", "AGENTIC_OUTSIDE_WRITE": "true"}
+        )
+        self.assertIs(config.outside_read, False)
+        self.assertIs(config.outside_write, True)
 
 
 class ModelSpecTest(unittest.TestCase):
@@ -853,12 +857,17 @@ class ToolProgressTest(unittest.TestCase):
             ws = self.engine.build_workspace(root, A.AgentConfig(shell_heartbeat=2.5))
             self.assertEqual(ws.shell_heartbeat, 2.5)
 
-    def test_the_workspace_reads_outside_only_when_the_config_says(self):
+    def test_the_workspace_reaches_outside_only_when_the_config_says(self):
         with tempfile.TemporaryDirectory() as root:
             ws = self.engine.build_workspace(root, A.AgentConfig())
-            self.assertFalse(ws.read_outside)
-            ws = self.engine.build_workspace(root, A.AgentConfig(read_outside=True))
-            self.assertTrue(ws.read_outside)
+            self.assertFalse(ws.outside_read)
+            self.assertFalse(ws.outside_write)
+            ws = self.engine.build_workspace(
+                root, A.AgentConfig(outside_read=True, outside_write=True)
+            )
+            self.assertTrue(ws.outside_read)
+            self.assertTrue(ws.outside_write)
+            self.assertIsNone(ws.sandbox)  # nothing is off limits: nothing to confine
 
 
 class QuestionTest(unittest.TestCase):
@@ -1345,22 +1354,27 @@ class WorkspaceTest(unittest.TestCase):
         base = Path(self.tmp.name)
         (base / "root").mkdir()
         (base / "outside.txt").write_text("out", encoding="utf-8")
-        ws = A.Workspace(base / "root", read_outside=True)
+        ws = A.Workspace(base / "root", outside_read=True)
         self.assertEqual(ws.read_text(str(base / "outside.txt")), "out")
         self.assertEqual(ws.read_text("../outside.txt"), "out")
         self.assertIn("outside.txt", ws.list_dir(".."))
         self.assertTrue(ws.read_data_url("../outside.txt").startswith("data:"))
 
-    def test_writes_never_leave_the_root(self):
+    def test_writes_leave_the_root_only_with_outside_write(self):
         base = Path(self.tmp.name)
         (base / "root").mkdir()
         (base / "outside.txt").write_text("out", encoding="utf-8")
-        ws = A.Workspace(base / "root", read_outside=True)
+        ws = A.Workspace(base / "root", outside_read=True)
         with self.assertRaises(A.WorkspaceError):
             ws.write_text("../outside.txt", "x")
         with self.assertRaises(A.WorkspaceError):
             ws.apply_patch("../outside.txt", "", "delete_file")
         self.assertEqual((base / "outside.txt").read_text(encoding="utf-8"), "out")
+        ws = A.Workspace(base / "root", outside_write=True)
+        ws.write_text("../outside.txt", "in")
+        self.assertEqual((base / "outside.txt").read_text(encoding="utf-8"), "in")
+        with self.assertRaises(A.WorkspaceError):
+            ws.read_text("../outside.txt")  # writing out is not reading out
 
     def test_read_write_and_list(self):
         self.ws.write_text("dir/file.txt", "hello")
@@ -1490,12 +1504,15 @@ class ToolRegistryTest(unittest.TestCase):
             self.invoke(tools["view_image"], '{"path": "a.png"}').startswith("data:image/png")
         )
 
-    def test_read_tools_mention_outside_paths_only_when_allowed(self):
+    def test_tools_mention_outside_paths_only_when_allowed(self):
         self.assertNotIn("outside", self.tools()["read_text_file"].description)
-        self.ws.read_outside = True
+        self.ws.outside_read = True
         for name in ("list_directory", "read_text_file", "view_image"):
             self.assertIn("outside the workspace", self.tools()[name].description)
         self.assertNotIn("outside", self.tools()["write_text_file"].description)
+        self.ws.outside_write = True
+        for name in ("write_text_file", "apply_patch"):
+            self.assertIn("written too", self.tools()[name].description)
 
     def test_vision_model_replaces_the_raw_image_tool(self):
         seen: list[tuple[str, str]] = []
@@ -1518,6 +1535,7 @@ class ToolRegistryTest(unittest.TestCase):
         async def progress(call_id, text):
             seen.append((call_id, text))
 
+        self.ws.outside_read = self.ws.outside_write = True  # unconfined: no sandbox
         built = A.ToolRegistry().build(self.ws, progress=progress)
         shell = {tool.name: tool for tool in built}["run_shell_command"]
         self.assertEqual(set(shell.params_json_schema["properties"]), {"command"})
@@ -2360,8 +2378,9 @@ class AgentRunTest(unittest.TestCase):
         self.assertEqual(result.prompt, "Say: hello")
         self.assertEqual(result.output, "SAY: HELLO")
         self.assertEqual(result.text_of("output"), "SAY: HELLO")
+        # the prompt is the first block of the run, then the answer streams
         self.assertEqual(
-            seen, ["agent.start", "block.start", "block.delta", "agent.end"]
+            seen, ["agent.start", "block.start", "block.start", "block.delta", "agent.end"]
         )
 
     def test_run_reuses_a_given_session(self):
@@ -2756,15 +2775,16 @@ class WebServerTest(unittest.TestCase):
         agent = A.Agent(console=False, store=A.MemoryStore(), config_file=False, env=False)
         self.addCleanup(agent.close)
         A.WebServer(agent)
-        self.assertIs(agent.config.read_outside, False)
+        self.assertIs(agent.config.outside_read, False)
+        self.assertIs(agent.config.outside_write, False)
 
-    def test_an_explicit_read_outside_wins_over_the_web_default(self):
+    def test_an_explicit_outside_flag_wins_over_the_web_default(self):
         agent = A.Agent(
-            console=False, store=A.MemoryStore(), config_file=False, env=False, read_outside=True
+            console=False, store=A.MemoryStore(), config_file=False, env=False, outside_read=True
         )
         self.addCleanup(agent.close)
         A.WebServer(agent)
-        self.assertIs(agent.config.read_outside, True)
+        self.assertIs(agent.config.outside_read, True)
 
     def test_page_assets_exist_and_are_linked(self):
         for name, _ in A.WebServer.ASSETS.values():
@@ -2966,7 +2986,7 @@ class E2eCaptureTest(unittest.TestCase):
             return await task
 
         result = run(drive())
-        self.assertEqual(seen, ["reasoning", "output"])
+        self.assertEqual(seen, ["prompt", "reasoning", "output"])
         self.assertEqual(result.text_of("reasoning"), self.E.REASONING)
 
 
@@ -3262,14 +3282,16 @@ class ReplTest(unittest.TestCase):
         run(repl.start(opening="from the command line"))
         self.assertEqual(self.agent.asked, ["from the command line"])
 
-    def test_reads_outside_the_workspace_by_default(self):
+    def test_reaches_outside_the_workspace_by_default(self):
         self.repl([None])
-        self.assertIs(self.agent.config.read_outside, True)
+        self.assertIs(self.agent.config.outside_read, True)
+        self.assertIs(self.agent.config.outside_write, True)
 
-    def test_an_explicit_read_outside_wins_over_the_repl_default(self):
-        self.agent.config = self.agent.config.merge(read_outside=False)
+    def test_an_explicit_outside_flag_wins_over_the_repl_default(self):
+        self.agent.config = self.agent.config.merge(outside_write=False)
         self.repl([None])
-        self.assertIs(self.agent.config.read_outside, False)
+        self.assertIs(self.agent.config.outside_read, True)
+        self.assertIs(self.agent.config.outside_write, False)
 
     def test_a_slash_line_is_a_command(self):
         repl = self.repl(["/model tiny", None])
@@ -3491,6 +3513,932 @@ class CliTest(unittest.TestCase):
     def test_the_passthrough_template_is_the_last_resort(self):
         with unittest.mock.patch.object(A, "template_candidates", return_value=[]):
             self.assertEqual(A.load_template(A.AgentConfig()), A.PASSTHROUGH_TEMPLATE)
+
+
+# ---------------------------------------------------------------------------
+# Modes, boundaries, the journal and learned rules
+# ---------------------------------------------------------------------------
+
+
+def quiet_agent(cls=A.Agent, **kwargs):
+    """An agent with no console, no config file, no environment and no disk."""
+    kwargs.setdefault("store", A.MemoryStore())
+    return cls(console=False, config_file=False, env=False, **kwargs)
+
+
+class ModeTest(unittest.TestCase):
+    def agent(self, **kwargs):
+        agent = quiet_agent(**kwargs)
+        self.addCleanup(agent.close)
+        return agent
+
+    def test_an_interactive_mode_keeps_its_state_under_the_state_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = self.agent(mode="repl", state_dir=tmp)
+            state = Path(tmp).resolve()
+            self.assertEqual(agent.config.db_path, state / "agentic.db")
+            self.assertEqual(agent.config.workspace_root, state / "workspaces")
+            self.assertTrue(agent.sessions.durable)
+            self.assertEqual(agent.sessions.ttl, 86400)
+            self.assertIs(agent.config.outside_read, True)
+            self.assertIs(agent.config.outside_write, True)
+
+    def test_the_web_mode_confines_the_tools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = self.agent(mode="web", state_dir=tmp)
+            self.assertTrue(agent.sessions.durable)
+            self.assertIs(agent.config.outside_read, False)
+            self.assertIs(agent.config.outside_write, False)
+
+    def test_no_mode_keeps_nothing(self):
+        agent = self.agent()
+        self.assertIsNone(agent.config.state_dir)
+        self.assertIsNone(agent.config.db_path)
+        self.assertFalse(agent.sessions.durable)
+        self.assertEqual(agent.sessions.ttl, A.DEFAULT_SESSION_TTL)
+
+    def test_an_explicit_setting_wins_over_the_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = self.agent(mode="repl", state_dir=tmp, session_durable=False, outside_write=False)
+            self.assertFalse(agent.sessions.durable)
+            self.assertIs(agent.config.outside_write, False)
+            self.assertIs(agent.config.outside_read, True)
+
+    def test_the_arguments_select_the_mode(self):
+        self.assertEqual(A.mode_of(A.parse_args(["--serve"])), "web")
+        self.assertEqual(A.mode_of(A.parse_args([])), "repl")
+        self.assertEqual(A.mode_of(A.parse_args(["--repl", "--input", "x"])), "repl")
+        self.assertIsNone(A.mode_of(A.parse_args(["--input", "x"])))
+
+
+class SandboxTest(unittest.TestCase):
+    class EchoSandbox(A.Sandbox):
+        """Marks the command instead of confining it, which proves the wiring."""
+
+        name = "echo"
+
+        def argv(self, command, ws):
+            return ["/bin/sh", "-c", f"echo sandboxed; {command}"]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name).resolve()
+        self.root = self.base / "root"
+        self.root.mkdir()
+        self.secret = self.base / "secret.txt"
+        self.secret.write_text("classified", encoding="utf-8")
+
+    @staticmethod
+    def tools(ws):
+        with contextlib.redirect_stderr(io.StringIO()):
+            return {tool.name: tool for tool in A.ToolRegistry().build(ws)}
+
+    def test_a_confined_workspace_without_a_sandbox_gets_no_shell(self):
+        ws = A.Workspace(self.root)
+        self.assertFalse(ws.shell_allowed)
+        self.assertNotIn("run_shell_command", self.tools(ws))
+        self.assertIn("read_text_file", self.tools(ws))
+
+    def test_an_unconfined_workspace_gets_a_plain_shell(self):
+        ws = A.Workspace(self.root, outside_read=True, outside_write=True)
+        self.assertNotIn("sandboxed", self.tools(ws)["run_shell_command"].description)
+
+    def test_a_sandboxed_shell_tells_the_model_its_boundary(self):
+        ws = A.Workspace(self.root, outside_read=True, sandbox=self.EchoSandbox())
+        description = self.tools(ws)["run_shell_command"].description
+        self.assertIn("sandboxed", description)
+        self.assertIn("read anywhere and write inside the workspace only", description)
+
+    @unittest.skipIf(os.name == "nt", "a POSIX shell")
+    def test_a_confined_shell_runs_through_the_sandbox(self):
+        ws = A.Workspace(self.root, sandbox=self.EchoSandbox())
+        lines = run(ws.run_shell("echo $TMPDIR; echo $HOME")).splitlines()
+        self.assertEqual(lines[0], "sandboxed")
+        self.assertEqual(lines[1], str(self.root / ".sandbox" / "tmp"))
+        self.assertEqual(lines[2], str(self.root / ".sandbox" / "home"))
+
+    def test_an_unconfined_shell_bypasses_the_sandbox(self):
+        ws = A.Workspace(
+            self.root, outside_read=True, outside_write=True, sandbox=self.EchoSandbox()
+        )
+        self.assertNotIn("sandboxed", run(ws.run_shell("echo plain")))
+
+    def test_home_stays_when_reads_may_leave(self):
+        ws = A.Workspace(self.root, outside_read=True)
+        env = self.EchoSandbox().environ({"HOME": "/home/me"}, ws)
+        self.assertEqual(env["HOME"], "/home/me")
+        self.assertEqual(env["XDG_CACHE_HOME"], str(self.root / ".sandbox" / "cache"))
+
+    def test_unknown_and_none_pick_nothing(self):
+        self.assertIsNone(A.pick_sandbox("none"))
+        self.assertIsNone(A.pick_sandbox("bogus"))
+
+    def test_the_engine_confines_only_what_the_config_confines(self):
+        engine = A.Engine(env=False, config_file=False)
+        self.addCleanup(engine.close)
+        ws = engine.build_workspace(self.root, A.AgentConfig(shell_sandbox="none"))
+        self.assertIsNone(ws.sandbox)
+        self.assertFalse(ws.shell_allowed)
+        ws = engine.build_workspace(
+            self.root, A.AgentConfig(outside_read=True, outside_write=True, shell_sandbox="none")
+        )
+        self.assertTrue(ws.shell_allowed)
+
+    def test_the_seatbelt_profile_denies_what_the_flags_do_not_allow(self):
+        sandbox = A.SeatbeltSandbox()
+        confined = sandbox.profile(A.Workspace(self.root))
+        self.assertIn("(allow default)", confined)
+        self.assertIn(
+            f'(deny file-write* (require-not (require-any (subpath "{self.root}")', confined
+        )
+        self.assertIn("(deny file-read-data", confined)
+        reads = sandbox.profile(A.Workspace(self.root, outside_read=True))
+        self.assertNotIn("file-read-data", reads)
+        self.assertIn("file-write*", reads)
+        argv = sandbox.argv("ls", A.Workspace(self.root))
+        self.assertEqual(argv[:2], [A.SeatbeltSandbox.EXE, "-p"])
+        self.assertEqual(argv[-3:], ["/bin/sh", "-c", "ls"])
+
+    def test_the_seatbelt_profile_quotes_paths(self):
+        self.assertEqual(A.SeatbeltSandbox.quote('a"b\\c'), '"a\\"b\\\\c"')
+
+    @unittest.skipIf(os.name == "nt", "POSIX paths")
+    def test_bubblewrap_binds_the_workspace_and_reads_the_system(self):
+        confined = " ".join(A.BubblewrapSandbox().argv("ls", A.Workspace(self.root)))
+        self.assertIn(f"--bind-try {self.root} {self.root}", confined)
+        self.assertIn("--ro-bind-try /usr /usr", confined)
+        self.assertNotIn("--ro-bind-try / /", confined)
+        reads = " ".join(
+            A.BubblewrapSandbox().argv("ls", A.Workspace(self.root, outside_read=True))
+        )
+        self.assertIn("--ro-bind-try / /", reads)
+        self.assertTrue(reads.endswith("/bin/sh -c ls"))
+
+    @unittest.skipUnless(A.LandlockSandbox.available(), "needs Landlock")
+    def test_landlock_holds_the_shell_to_the_workspace(self):
+        ws = A.Workspace(self.root, sandbox=A.LandlockSandbox())
+        out = run(
+            ws.run_shell(
+                f"echo in > inside.txt; cat inside.txt; cat '{self.secret}'; "
+                f"echo x > '{self.base / 'out.txt'}'"
+            )
+        )
+        self.assertIn("in", out.splitlines())
+        self.assertNotIn("classified", out)
+        self.assertIn("Permission denied", out)
+        self.assertFalse((self.base / "out.txt").exists())
+
+    @unittest.skipUnless(A.LandlockSandbox.available(), "needs Landlock")
+    def test_landlock_follows_the_outside_flags(self):
+        reader = A.Workspace(self.root, outside_read=True, sandbox=A.LandlockSandbox())
+        out = run(reader.run_shell(f"cat '{self.secret}'; echo x > '{self.base / 'out.txt'}'"))
+        self.assertIn("classified", out)
+        self.assertFalse((self.base / "out.txt").exists())
+        writer = A.Workspace(self.root, outside_write=True, sandbox=A.LandlockSandbox())
+        out = run(writer.run_shell(f"cat '{self.secret}'; echo x > '{self.base / 'out.txt'}'"))
+        self.assertNotIn("classified", out)
+        self.assertTrue((self.base / "out.txt").exists())
+
+
+class StreamJournalTest(unittest.TestCase):
+    """The stream hands each finished step to `checkpoint` as raw input items."""
+
+    drive = StreamTest.drive
+
+    @staticmethod
+    def raw(item, payload):
+        item.to_input_item = lambda: payload
+        return item
+
+    def test_messages_and_whole_tool_pairs_become_turns(self):
+        S = StreamTest
+        message = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Let me look"}]}
+        call = self.raw(
+            types.SimpleNamespace(
+                tool_name="read_text_file",
+                raw_item=types.SimpleNamespace(call_id="c1", arguments='{"path": "a"}'),
+            ),
+            {"type": "function_call", "call_id": "c1", "name": "read_text_file", "arguments": '{"path": "a"}'},
+        )
+        output = self.raw(
+            types.SimpleNamespace(output="A", call_id="c1"),
+            {"type": "function_call_output", "call_id": "c1", "output": "A"},
+        )
+        orphan = self.raw(
+            types.SimpleNamespace(
+                tool_name="run_shell_command",
+                raw_item=types.SimpleNamespace(call_id="c2", arguments="{}"),
+            ),
+            {"type": "function_call", "call_id": "c2", "name": "run_shell_command", "arguments": "{}"},
+        )
+        streamed = S.FakeStream(
+            events=[
+                S.delta("Let me look"),
+                S.item("message_output_created", self.raw(types.SimpleNamespace(), message)),
+                S.item("tool_called", call),
+                S.item("tool_output", output),
+                S.item("tool_called", orphan),
+            ]
+        )
+        _engine, result, stream = self.drive(streamed)
+        stream()
+        self.assertEqual([t.role for t in result.turns], ["assistant", "tool"])
+        said, tool = result.turns
+        self.assertEqual(said.id, result.blocks[0].id)
+        self.assertEqual(said.text, "Let me look")
+        self.assertEqual(said.items, [message])
+        self.assertEqual(tool.id, result.tools[0].id)
+        self.assertEqual([i["type"] for i in tool.items], ["function_call", "function_call_output"])
+        self.assertTrue(result.blocks[0].done)
+
+
+class JournalTest(unittest.TestCase):
+    """A run journals each step as it finishes, so a crash keeps them."""
+
+    class StepAgent(A.Agent):
+        """Checkpoints a tool call and a message, then answers; with a gate it
+        parks after the tool call, the way a process that died there would."""
+
+        gate = None
+        reached = None
+        fail = None
+
+        def build_sdk_agent(self, config, tools):
+            return {}
+
+        async def stream(self, sdk_agent, model_input, config, result):
+            self.inputs = [*getattr(self, "inputs", []), model_input]
+            call_id = f"c{len(self.inputs)}"
+            prefix = f"{result.session_id}-{result.run_id}"
+            await self.checkpoint(
+                result,
+                A.Turn(
+                    "tool",
+                    'read_text_file(path="a") -> ok',
+                    id=f"{prefix}-0",
+                    run=result.run_id,
+                    items=[
+                        {"type": "function_call", "call_id": call_id, "name": "read_text_file", "arguments": '{"path": "a"}'},
+                        {"type": "function_call_output", "call_id": call_id, "output": "A" * 20000},
+                    ],
+                ),
+            )
+            if self.reached is not None:
+                self.reached.set()
+            if self.gate is not None:
+                await self.gate.wait()
+            if self.fail is not None:
+                raise self.fail
+            text = f"done: {A.prompt_of(model_input)[:20]}"
+            message = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
+            await self.checkpoint(
+                result, A.Turn("assistant", text, id=f"{prefix}-1", run=result.run_id, items=[message])
+            )
+            result.output = text
+            return result
+
+    def agent(self, **kwargs):
+        agent = quiet_agent(self.StepAgent, **kwargs)
+        self.addCleanup(agent.close)
+        return agent
+
+    def test_steps_are_journaled_and_replayed_as_the_context_window(self):
+        agent = self.agent()
+        session = agent.sessions.create()
+        run(agent.run("{{ config.input }}", session=session, input="first"))
+        run(agent.run("{{ config.input }}", session=session, input="second"))
+        replayed = agent.inputs[1]
+        self.assertEqual(
+            [i.get("type") or i.get("role") for i in replayed],
+            ["user", "function_call", "function_call_output", "message", "user"],
+        )
+        self.assertEqual(replayed[0]["content"], "first")
+        self.assertLessEqual(len(replayed[2]["output"]), A.ConversationMemory.TOOL_LIMIT + 40)
+        transcript = agent.memory.transcript(session.id)
+        answers = [t for t in transcript.turns if t.role == "assistant"]
+        self.assertEqual(len(answers), 2)  # the final answer is not journaled twice
+        self.assertEqual(transcript.last_run().meta["status"], A.RUN_OK)
+        self.assertIsNone(agent.unfinished(session.id))
+
+    def test_a_crash_leaves_the_steps_for_the_next_process(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+
+        def build():
+            return quiet_agent(
+                self.StepAgent,
+                store=A.SqliteStore(root / "a.db"),
+                workspace_root=root / "ws",
+                session_durable=True,
+            )
+
+        first = build()
+        session = first.sessions.create()
+
+        async def crash():
+            first.gate, first.reached = asyncio.Event(), asyncio.Event()
+            task = asyncio.create_task(first.run("{{ config.input }}", session=session, input="build it"))
+            await first.reached.wait()
+            second = build()  # the process that starts after the crash
+            seen = (
+                second.sessions.get(session.id),
+                second.memory.history(session.id),
+                second.unfinished(session.id),
+            )
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            return second, seen
+
+        second, (restored, history, unfinished) = run(crash())
+        self.addCleanup(second.close)
+        self.addCleanup(first.store.close)
+        self.assertIsNotNone(restored)
+        self.assertEqual(
+            [i.get("type") or i.get("role") for i in history],
+            ["user", "function_call", "function_call_output"],
+        )
+        self.assertEqual(unfinished.text, "build it")
+        self.assertEqual(unfinished.meta["status"], A.RUN_RUNNING)
+
+        result = run(second.commands.invoke("/resume", session_id=session.id))
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["resume"])
+        run(second.resume(session.id))
+        resumed = second.inputs[-1]
+        self.assertEqual(resumed[-1], {"role": "user", "content": A.Agent.RESUME_PROMPT})
+        self.assertIn("function_call", [i.get("type") for i in resumed])
+        self.assertIsNone(second.unfinished(session.id))
+
+    def test_a_failed_run_keeps_its_steps_and_says_so(self):
+        agent = self.agent()
+        agent.fail = RuntimeError("provider fell over")
+        session = agent.sessions.create()
+        result = run(agent.run("{{ config.input }}", session=session, input="try"))
+        self.assertFalse(result.ok)
+        unfinished = agent.unfinished(session.id)
+        self.assertEqual(unfinished.meta["status"], A.RUN_FAILED)
+        self.assertIn("provider fell over", unfinished.meta["error"])
+        roles = [t.role for t in agent.memory.transcript(session.id).turns]
+        self.assertEqual(roles, ["user", "tool"])
+        self.assertEqual(run(agent.commands.invoke("/resume", session_id=session.id))["ok"], True)
+
+    def test_a_cancelled_run_is_marked_cancelled(self):
+        agent = self.agent()
+        session = agent.sessions.create()
+
+        async def cancel():
+            agent.gate, agent.reached = asyncio.Event(), asyncio.Event()
+            task = asyncio.create_task(agent.run("{{ config.input }}", session=session, input="x"))
+            await agent.reached.wait()
+            self.assertIn(session.id, agent.live)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        run(cancel())
+        self.assertNotIn(session.id, agent.live)
+        self.assertEqual(agent.unfinished(session.id).meta["status"], A.RUN_CANCELLED)
+
+    def test_tool_calls_can_be_left_out_of_the_context(self):
+        agent = self.agent(memory_tools=False)
+        session = agent.sessions.create()
+        run(agent.run("{{ config.input }}", session=session, input="first"))
+        history = agent.memory.history(session.id)
+        self.assertNotIn("function_call", [i.get("type") for i in history])
+        self.assertIn("tool", [t["kind"] for t in agent.memory.replay(session.id)])
+
+    def test_a_journal_dies_with_its_session(self):
+        agent = self.agent()
+        session = agent.sessions.create()
+        run(agent.run("{{ config.input }}", session=session, input="x"))
+        self.assertIsNotNone(agent.store.get(A.ConversationMemory.NAMESPACE, session.id))
+        session.expires_at = 0
+        agent.sessions.purge_expired()
+        self.assertIsNone(agent.store.get(A.ConversationMemory.NAMESPACE, session.id))
+
+    def test_a_restart_forgets_journals_without_a_session(self):
+        store = A.MemoryStore()
+        store.set(A.ConversationMemory.NAMESPACE, "gone", {"turns": [{"role": "user", "text": "hi"}]})
+        self.agent(store=store)
+        self.assertIsNone(store.get(A.ConversationMemory.NAMESPACE, "gone"))
+
+    def test_closing_a_session_cancels_its_run(self):
+        agent = self.agent()
+        session = agent.sessions.create()
+
+        async def close():
+            agent.gate, agent.reached = asyncio.Event(), asyncio.Event()
+            task = asyncio.create_task(agent.run("{{ config.input }}", session=session, input="x"))
+            await agent.reached.wait()
+            agent.sessions.close(session.id)
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            return task
+
+        self.assertTrue(run(close()).cancelled())
+
+    def test_a_working_run_renews_its_session(self):
+        agent = self.agent()
+        session = agent.sessions.create()
+        session.expires_at = time.time() + 1
+        run(agent.run("{{ config.input }}", session=session, input="x"))
+        self.assertGreater(session.expires_at, time.time() + 60)
+
+    def test_the_journal_replays_as_chat_messages_the_sdk_accepts(self):
+        """Raw items keep an assistant message and its tool call one message."""
+        from agents.items import MessageOutputItem, ToolCallItem, ToolCallOutputItem
+        from agents.models.chatcmpl_converter import Converter
+        from openai.types.responses import (
+            ResponseFunctionToolCall,
+            ResponseOutputMessage,
+            ResponseOutputText,
+        )
+
+        sdk = A.Agent  # any agent object satisfies the items' back reference
+        said = MessageOutputItem(
+            agent=sdk,
+            raw_item=ResponseOutputMessage(
+                id="m1",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[ResponseOutputText(type="output_text", text="Let me look", annotations=[])],
+            ),
+        )
+        call = ToolCallItem(
+            agent=sdk,
+            raw_item=ResponseFunctionToolCall(
+                type="function_call", call_id="c1", name="read_text_file", arguments='{"path": "a"}'
+            ),
+        )
+        output = ToolCallOutputItem(
+            agent=sdk,
+            raw_item={"type": "function_call_output", "call_id": "c1", "output": "A"},
+            output="A",
+        )
+        agent = self.agent()
+        session = agent.sessions.create()
+        agent.memory.journal(
+            session.id,
+            A.Turn("user", "look", run="r1"),
+            A.Turn("assistant", "Let me look", run="r1", items=[A.Engine.input_item(said)]),
+            A.Turn("tool", "t", run="r1", items=[A.Engine.input_item(call), A.Engine.input_item(output)]),
+        )
+        stored = A.ConversationMemory(agent.store).history(session.id)  # from the store, as JSON
+        messages = Converter.items_to_messages([*stored, {"role": "user", "content": "next"}])
+        self.assertEqual([m["role"] for m in messages], ["user", "assistant", "tool", "user"])
+        self.assertEqual(messages[1]["content"], "Let me look")
+        self.assertEqual(messages[1]["tool_calls"][0]["id"], "c1")
+        self.assertEqual(messages[2]["tool_call_id"], "c1")
+
+    def test_turns_round_trip(self):
+        turn = A.Turn(
+            "tool", "t", id="b1", run="r1", items=[{"type": "function_call"}], meta={"ok": True}
+        )
+        again = A.Turn.from_dict(json.loads(json.dumps(turn.to_dict())))
+        self.assertEqual(again, turn)
+        self.assertEqual(again.kind, "tool")
+        self.assertNotIn("items", A.Turn("user", "plain").to_dict())
+
+
+class RuleBookTest(unittest.TestCase):
+    def setUp(self):
+        self.store = A.MemoryStore()
+        self.book = A.RuleBook(self.store)
+
+    def test_a_json_reply_is_read(self):
+        decision = self.book.parse(
+            'Sure: {"action": "add", "polarity": "avoid", "rule": "No emojis."}', "up"
+        )
+        self.assertEqual(
+            decision, {"action": "add", "id": "", "polarity": "avoid", "rule": "No emojis."}
+        )
+
+    def test_an_edit_of_an_unknown_rule_is_an_add(self):
+        decision = self.book.parse('{"action": "edit", "id": "r404", "rule": "X."}', "down")
+        self.assertEqual((decision["action"], decision["polarity"]), ("add", "avoid"))
+
+    def test_a_plain_reply_is_the_rule_itself(self):
+        decision = self.book.parse("Keep answers short.\nBecause...", "down")
+        self.assertEqual((decision["rule"], decision["polarity"]), ("Keep answers short.", "avoid"))
+
+    def test_an_empty_reply_teaches_nothing(self):
+        with self.assertRaises(ValueError):
+            self.book.parse("   ", "up")
+        with self.assertRaises(ValueError):
+            self.book.parse('{"action": "add"}', "up")
+        with self.assertRaises(ValueError):
+            self.book.parse("{}", "up")
+
+    def test_rules_persist_through_the_store(self):
+        self.book.add("do", "Cite files.")
+        self.assertEqual([r.line() for r in A.RuleBook(self.store).rules()], ["Do: Cite files."])
+
+    def test_decorate_appends_the_rules(self):
+        self.assertEqual(self.book.decorate("Base."), "Base.")
+        self.book.add("do", "Cite files.")
+        self.assertEqual(
+            self.book.decorate("Base."),
+            "Base.\n\n## Learned rules\n\nThe user taught you these through feedback:"
+            "\n\n- Do: Cite files.",
+        )
+        self.book.enabled = False
+        self.assertEqual(self.book.decorate("Base."), "Base.")
+
+    def test_the_warning_follows_the_budget(self):
+        self.assertIsNone(self.book.warning())
+        self.book.max_chars = 10
+        self.book.add("do", "x" * 20)
+        self.assertIn("over the 10 budget", self.book.warning())
+        self.book.max_chars = 0
+        self.assertIsNone(self.book.warning())
+
+    def test_a_long_trace_keeps_its_head_and_tail(self):
+        text = self.book.trace([A.Turn("user", "ask " + "a" * 20000), A.Turn("assistant", "end")])
+        self.assertLess(len(text), A.RuleBook.TRACE_LIMIT + 40)
+        self.assertTrue(text.startswith("USER: ask"))
+        self.assertTrue(text.endswith("ASSISTANT: end"))
+
+    def test_learning_is_serialized(self):
+        async def drive():
+            seen = []
+
+            async def distill(messages):
+                seen.append(messages[1]["content"])
+                await asyncio.sleep(0.01)
+                return '{"action": "add", "polarity": "do", "rule": "R%d"}' % len(seen)
+
+            await asyncio.gather(
+                self.book.learn("up", [A.Turn("assistant", "a")], distill),
+                self.book.learn("up", [A.Turn("assistant", "b")], distill),
+            )
+            return seen
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            seen = run(drive())
+        self.assertIn("R1", seen[1])  # the second saw what the first learned
+
+
+class FeedbackTest(unittest.TestCase):
+    class LearningAgent(A.Agent):
+        """Answers in capitals; its distiller replies from a script."""
+
+        replies: list[str] = []
+
+        def build_sdk_agent(self, config, tools):
+            self.instructions = config.instructions
+            return {}
+
+        async def stream(self, sdk_agent, model_input, config, result):
+            block = A.Block(
+                id=f"{result.session_id}-{result.run_id}-0", kind="output", session_id=result.session_id
+            )
+            block.text = A.prompt_of(model_input).upper()
+            result.blocks.append(block)
+            result.output = block.text
+            return result
+
+        def build_distiller(self, config):
+            async def distill(messages):
+                self.requests = [*getattr(self, "requests", []), messages]
+                return self.replies.pop(0)
+
+            return distill
+
+    def setUp(self):
+        self.agent = quiet_agent(self.LearningAgent)
+        self.addCleanup(self.agent.close)
+        self.session = self.agent.sessions.create()
+        run(self.agent.run("{{ config.input }}", session=self.session, input="hello"))
+        self.stderr = contextlib.redirect_stderr(io.StringIO())
+        self.stderr.__enter__()
+        self.addCleanup(self.stderr.__exit__, None, None, None)
+
+    def answers(self):
+        return [t for t in self.agent.memory.transcript(self.session.id).turns if t.role == "assistant"]
+
+    def test_good_adds_a_do_rule_from_the_trace(self):
+        self.agent.replies = ['{"action": "add", "polarity": "do", "rule": "Answer in capitals."}']
+        events = []
+        self.agent.events.on(A.EventType.FEEDBACK, events.append)
+        result = run(self.agent.commands.invoke("/good loved it", session_id=self.session.id))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "add")
+        self.assertIn("Do: Answer in capitals.", result["message"])
+        request = self.agent.requests[0][1]["content"]
+        for expected in ("USER: hello", "ASSISTANT: HELLO", "LIKED", "loved it"):
+            self.assertIn(expected, request)
+        self.assertEqual(events[0].data["id"], self.answers()[0].id)
+        self.assertEqual(self.answers()[0].meta["vote"], "up")
+
+    def test_an_answer_is_rated_once(self):
+        self.agent.replies = ['{"action": "add", "rule": "R."}']
+        run(self.agent.feedback(self.session.id, "up"))
+        again = run(self.agent.commands.invoke("/bad", session_id=self.session.id))
+        self.assertFalse(again["ok"])
+        self.assertIn("Already rated up", again["message"])
+        self.assertEqual(len(self.agent.requests), 1)
+
+    def test_bad_edits_the_related_rule(self):
+        rule = self.agent.rules.add("do", "Answer in capitals.")
+        self.agent.replies = [
+            json.dumps({"action": "edit", "id": rule.id, "polarity": "avoid", "rule": "Shouting."})
+        ]
+        result = run(self.agent.feedback(self.session.id, "down"))
+        self.assertEqual(result["action"], "edit")
+        self.assertEqual(len(self.agent.rules.rules()), 1)
+        edited = self.agent.rules.get(rule.id)
+        self.assertEqual((edited.polarity, edited.text, edited.votes), ("avoid", "Shouting.", 2))
+        self.assertIn(rule.id, self.agent.requests[0][1]["content"])
+
+    def test_a_target_picks_the_answer_it_names(self):
+        first = self.answers()[0].id
+        run(self.agent.run("{{ config.input }}", session=self.session, input="again"))
+        self.agent.replies = ['{"rule": "R."}']
+        result = run(self.agent.feedback(self.session.id, "up", target=first))
+        self.assertEqual(result["id"], first)
+        request = self.agent.requests[0][1]["content"]
+        self.assertIn("HELLO", request)
+        self.assertNotIn("AGAIN", request)
+
+    def test_rules_reach_the_instructions_of_the_next_run(self):
+        self.agent.rules.add("avoid", "Long preambles.")
+        run(self.agent.run("{{ config.input }}", session=self.session, input="again"))
+        self.assertIn("## Learned rules", self.agent.instructions)
+        self.assertIn("- Avoid: Long preambles.", self.agent.instructions)
+
+    def test_disabled_rules_stay_out(self):
+        agent = quiet_agent(self.LearningAgent, rules_enabled=False)
+        self.addCleanup(agent.close)
+        agent.rules.add("do", "Hidden.")
+        session = agent.sessions.create()
+        run(agent.run("{{ config.input }}", session=session, input="x"))
+        self.assertNotIn("Learned rules", agent.instructions)
+        self.assertFalse(run(agent.feedback(session.id, "up"))["ok"])
+
+    def test_a_failed_distillation_claims_nothing(self):
+        self.agent.replies = ["   "]
+        result = run(self.agent.feedback(self.session.id, "up"))
+        self.assertFalse(result["ok"])
+        self.assertIn("Could not learn", result["message"])
+        self.assertNotIn("vote", self.answers()[0].meta)
+
+    def test_an_unknown_vote_is_refused(self):
+        result = run(self.agent.feedback(self.session.id, "sideways"))
+        self.assertFalse(result["ok"])
+        self.assertIn("Unknown vote", result["message"])
+        self.assertNotIn("vote", self.answers()[0].meta)
+
+    def test_nothing_to_rate_is_said(self):
+        empty = self.agent.sessions.create()
+        self.assertIn("No answer", run(self.agent.feedback(empty.id, "up"))["message"])
+
+    def test_the_warning_comes_with_an_oversized_book(self):
+        self.agent.rules.max_chars = 10
+        self.agent.replies = ['{"rule": "A rule longer than ten characters."}']
+        result = run(self.agent.feedback(self.session.id, "up"))
+        self.assertIn("over the 10 budget", result["warning"])
+        self.assertIn(result["warning"], result["message"])
+
+    def test_rules_command_lists_drops_and_clears(self):
+        rule = self.agent.rules.add("do", "Be brief.")
+        listing = run(self.agent.commands.invoke("/rules"))
+        self.assertIn(rule.id, listing["message"])
+        self.assertEqual(listing["rules"][0]["text"], "Be brief.")
+        self.assertTrue(run(self.agent.commands.invoke(f"/rules drop {rule.id}"))["ok"])
+        self.assertEqual(self.agent.rules.rules(), [])
+        self.assertFalse(run(self.agent.commands.invoke("/rules drop nope"))["ok"])
+        self.agent.rules.add("do", "One.")
+        self.agent.rules.add("avoid", "Two.")
+        self.assertIn("Dropped 2", run(self.agent.commands.invoke("/rules clear"))["message"])
+
+
+class WebReattachTest(unittest.TestCase):
+    """A run belongs to its session: it outlives a socket and is picked up again."""
+
+    class GatedAgent(FeedbackTest.LearningAgent):
+        """Streams half an answer, then waits for the gate."""
+
+        gate = None
+        reached = None
+
+        async def stream(self, sdk_agent, model_input, config, result):
+            self.inputs = [*getattr(self, "inputs", []), model_input]
+            block = A.Block(
+                id=f"{result.session_id}-{result.run_id}-0", kind="output", session_id=result.session_id
+            )
+            result.blocks.append(block)
+            publish = functools.partial(self.events.publish, session_id=result.session_id, id=block.id, kind="output")
+            await publish(A.EventType.BLOCK_START, role="assistant")
+            block.text = "half"
+            await publish(A.EventType.BLOCK_DELTA, text="half")
+            if self.reached is not None:
+                self.reached.set()
+            if self.gate is not None:
+                await self.gate.wait()
+            block.text += " whole"
+            await publish(A.EventType.BLOCK_DELTA, text=" whole")
+            block.done = True
+            await publish(A.EventType.BLOCK_END, text=block.text)
+            result.output = block.text
+            return result
+
+    def setUp(self):
+        self.agent = quiet_agent(self.GatedAgent)
+        self.addCleanup(self.agent.close)
+        self.server = A.WebServer(self.agent, template="{{ config.input }}")
+
+    def connect(self):
+        connection = A.Connection(self.server.hub, HubTest.FakeSocket())
+        self.server.hub.connections[connection.id] = connection
+        return connection
+
+    def drop(self, connection):
+        """What `Hub.serve_connection` does when a socket closes."""
+        run_soon = connection.cancel_task()
+        for channel in list(connection.channels):
+            self.server.hub.leave(connection, channel)
+        self.server.hub.connections.pop(connection.id, None)
+        return run_soon
+
+    def test_a_run_outlives_its_socket_and_a_new_one_picks_it_up(self):
+        async def drive():
+            self.agent.gate, self.agent.reached = asyncio.Event(), asyncio.Event()
+            first = self.connect()
+            await self.server.on_hello(first, {})
+            session_id = first.session_id
+            await self.server.on_prompt(first, {"text": "write"})
+            await self.agent.reached.wait()
+            await self.drop(first)
+            self.assertTrue(self.server.active(session_id))
+            second = self.connect()
+            await self.server.on_hello(second, {"session": session_id})
+            hello = second.ws.sent[-1]
+            self.agent.gate.set()
+            await self.server.runs[session_id]
+            return session_id, hello, second
+
+        session_id, hello, second = run(drive())
+        self.assertTrue(hello["busy"])
+        self.assertEqual([t["kind"] for t in hello["history"]], ["prompt"])
+        self.assertEqual(
+            [(b["kind"], b["text"], b["done"]) for b in hello["live"]], [("output", "half", False)]
+        )
+        after = [m["type"] for m in second.ws.sent[1:]]
+        self.assertIn("block.end", after)
+        self.assertIn("agent.end", after)
+        texts = [t.text for t in self.agent.memory.transcript(session_id).turns]
+        self.assertEqual(texts, ["write", "half whole"])
+        self.assertFalse(self.server.active(session_id))
+
+    def test_hello_shows_an_open_question_again(self):
+        session = self.agent.sessions.create()
+
+        async def drive():
+            asker = self.agent.build_asker(
+                self.agent.config.merge(ask_enabled=True), A.RunResult(session_id=session.id)
+            )
+            task = asyncio.create_task(asker(None, "Which one?", ["red", "blue"]))
+            while not self.agent.questions:
+                await asyncio.sleep(0.005)
+            connection = self.connect()
+            await self.server.on_hello(connection, {"session": session.id})
+            hello = connection.ws.sent[-1]
+            await self.server.on_answer(connection, {"id": hello["questions"][0]["id"], "text": "red"})
+            return hello, await task
+
+        hello, answer = run(drive())
+        self.assertEqual(hello["questions"][0]["question"], "Which one?")
+        self.assertEqual(hello["questions"][0]["options"], ["red", "blue"])
+        self.assertEqual(answer, "red")
+
+    def test_stop_cancels_the_run_of_the_session_and_one_run_at_a_time(self):
+        async def drive():
+            self.agent.gate, self.agent.reached = asyncio.Event(), asyncio.Event()
+            first = self.connect()
+            await self.server.on_hello(first, {})
+            await self.server.on_prompt(first, {"text": "write"})
+            await self.agent.reached.wait()
+            other = self.connect()
+            await self.server.on_hello(other, {"session": first.session_id})
+            await self.server.on_prompt(other, {"text": "again"})
+            await self.server.on_cancel(other, {})
+            return first.session_id, other
+
+        session_id, other = run(drive())
+        self.assertIn("A run is already active", [m.get("message") for m in other.ws.sent])
+        self.assertEqual(other.ws.sent[-1], {"type": "cancelled", "ok": True})
+        self.assertEqual(self.agent.unfinished(session_id).meta["status"], A.RUN_CANCELLED)
+
+    def test_resume_starts_a_run_without_the_template(self):
+        session = self.agent.sessions.create()
+        self.agent.memory.journal(
+            session.id, A.Turn("user", "build it", run="r1", meta={"status": A.RUN_RUNNING})
+        )
+
+        async def drive():
+            connection = self.connect()
+            await self.server.on_hello(connection, {"session": session.id})
+            hello = connection.ws.sent[-1]
+            await self.server.on_command(connection, {"text": "/resume"})
+            await self.server.runs[session.id]
+            return hello
+
+        hello = run(drive())
+        self.assertEqual(hello["unfinished"], "r1")
+        self.assertEqual(self.agent.inputs[-1][-1]["content"], A.Agent.RESUME_PROMPT)
+
+    def test_a_thumb_learns_off_the_read_loop(self):
+        session = self.agent.sessions.create()
+        self.agent.gate = None
+        self.agent.replies = ['{"rule": "Finish what you start."}']
+
+        async def drive():
+            connection = self.connect()
+            await self.server.on_hello(connection, {"session": session.id})
+            await self.agent.run("{{ config.input }}", session=session, input="write")
+            answer = self.agent.memory.transcript(session.id).turns[-1]
+            await self.server.on_feedback(connection, {"id": answer.id, "vote": "up"})
+            await asyncio.gather(*self.server.tasks)
+            return connection, answer
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            connection, answer = run(drive())
+        feedback = [m for m in connection.ws.sent if m["type"] == "feedback"]
+        self.assertTrue(feedback[0]["ok"])
+        self.assertEqual(feedback[0]["id"], answer.id)
+        self.assertEqual(feedback[0]["rule"]["text"], "Finish what you start.")
+
+
+class ReplResumeTest(unittest.TestCase):
+    def setUp(self):
+        self.out = io.StringIO()
+        self.agent = quiet_agent(
+            ReplTest.ReplAgent, renderer=A.ConsoleRenderer(color=False, stream=self.out)
+        )
+        self.addCleanup(self.agent.close)
+
+    def repl(self, lines):
+        feed = iter(lines)
+        return self.agent.repl(reader=lambda prompt: next(feed))
+
+    def test_the_repl_resumes_its_last_session(self):
+        old = self.agent.sessions.create(client="repl")
+        self.agent.memory.journal(
+            old.id,
+            A.Turn("user", "first question", run="r1", meta={"status": A.RUN_OK}),
+            A.Turn("assistant", "first answer", run="r1"),
+        )
+        self.agent.sessions.create(client="web")  # newer, but not the repl's
+        repl = self.repl([None])
+        run(repl.start())
+        self.assertEqual(repl.session.id, old.id)
+        out = self.out.getvalue()
+        self.assertIn(f"Resumed session {old.id}", out)
+        self.assertIn("> first question", out)
+        self.assertNotIn("/resume", out)
+
+    def test_a_fresh_start_opens_a_tagged_session(self):
+        repl = self.repl([None])
+        run(repl.start())
+        self.assertEqual(repl.session.meta["client"], "repl")
+        self.assertNotIn("Resumed", self.out.getvalue())
+
+    def test_an_unfinished_run_is_flagged_and_resumed(self):
+        old = self.agent.sessions.create(client="repl")
+        self.agent.memory.journal(
+            old.id, A.Turn("user", "build it", run="r1", meta={"status": A.RUN_RUNNING})
+        )
+        repl = self.repl(["/resume", None])
+        run(repl.start())
+        self.assertIn("/resume to continue", self.out.getvalue())
+        self.assertEqual(self.agent.asked, [A.Agent.RESUME_PROMPT])
+
+    def test_good_and_bad_teach_from_the_terminal(self):
+        old = self.agent.sessions.create(client="repl")
+        self.agent.memory.journal(
+            old.id,
+            A.Turn("user", "q", run="r1", meta={"status": A.RUN_OK}),
+            A.Turn("assistant", "a", id="b1", run="r1"),
+        )
+
+        async def distill(messages):
+            return '{"action": "add", "polarity": "avoid", "rule": "Terse answers."}'
+
+        repl = self.repl(["/bad too short", None])
+        with unittest.mock.patch.object(self.agent, "build_distiller", return_value=distill):
+            with contextlib.redirect_stderr(io.StringIO()):
+                run(repl.start())
+        self.assertIn("Avoid: Terse answers.", self.out.getvalue())
+        self.assertEqual([r.text for r in self.agent.rules.rules()], ["Terse answers."])
+
+    def test_an_oversized_book_is_flagged_at_start(self):
+        self.agent.rules.max_chars = 5
+        self.agent.rules.add("do", "Something long enough.")
+        run(self.repl([None]).start())
+        self.assertIn("over the 5 budget", self.out.getvalue())
 
 
 if __name__ == "__main__":

@@ -22,12 +22,19 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       sessions, bound total workspace size, and apply backpressure on the hub
       instead of accepting work that cannot be served.
 
-- [ ] **Stronger tool sandboxing.** The workspace confines paths, but
-      `run_shell_command` inherits the environment, the network and the whole
-      filesystem of the host, and `AGENTIC_SHELL_ENABLED` is the only control.
-      Offer an allow/deny list of commands, a scrubbed environment, optional
-      network isolation and a container or namespace backend for the cases where
-      a real boundary is required.
+- [ ] **Stronger tool sandboxing.** The shell is now held to `outside_read` /
+      `outside_write` by Landlock or bubblewrap (Linux) and Seatbelt (macOS),
+      and withheld where none exists. Still open: a Windows backend
+      (AppContainer, or a low integrity token over a labelled workspace) so the
+      shell is not withheld there, network isolation (Landlock ABI 4 net rules,
+      `--unshare-net`, a Seatbelt `network*` deny), a scrubbed environment and
+      an allow/deny list of commands.
+
+- [ ] **Several processes on one state directory.** Sessions, journals and
+      rules are cached per process, so a repl and a server sharing `.agentic/`
+      overwrite each other's journals and miss each other's sessions and rules
+      until a restart. Take a lock on the state directory (and say who holds
+      it), or read through the store and merge on write.
 
 - [ ] **Observability.** Diagnostics are `print` calls and a swallowed
       subscriber exception; SDK tracing is disabled outright. Add structured
@@ -35,14 +42,14 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       and timings for runs, tools and model calls, and an opt-in exporter so a
       deployment can see what the harness is doing.
 
-- [ ] **Tests for the web layer and the client.** The unit tests stop at the
-      protocol codec and `test/agentic_e2e.py` only photographs a happy path: the hub
-      handlers, attachment limits, cancellation, reconnection and most of
-      `app/agentic_ui.js` are still unasserted, which is most of the surface a user
-      actually touches. Add server tests over a real websocket, and assertions
-      (plus cancellation, errors and reconnection) to the browser pass.
+- [ ] **Tests for the web layer and the client.** The hub handlers (prompt,
+      cancel, answer, feedback, resume, reattach) are asserted over fake
+      sockets, and the browser pass now checks a reload mid run, a vote and a
+      resume. Still open: server tests over a real websocket, attachment limits
+      end to end, error paths and most of `app/agentic_ui.js` (markdown, hints,
+      themes) under assertion rather than photographs.
 
-- [ ] **Questions, extended scope.** `ask_user` covers one question with optional choices, answered by the session that asked. Still open: replay a pending question in `hello` so a second tab (or a reconnect that does not cancel the run) shows the card, multi-select and structured answers (a number, a path, a yes/no), an optional `ask_timeout` after which the tool answers for the user, and a way for a one shot `--input` run to answer on stdin.
+- [ ] **Questions, extended scope.** `ask_user` covers one question with optional choices, answered by the session that asked. Still open: multi-select and structured answers (a number, a path, a yes/no), an optional `ask_timeout` after which the tool answers for the user, and a way for a one shot `--input` run to answer on stdin.
 
 - [ ] **Repl ergonomics.** The terminal reads plain lines: there is no history
       across restarts, no editing beyond what the platform's `input()` gives,
@@ -57,3 +64,11 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       the model fetch, diff, rebase and update an existing pull request, handle
       conflicts and protected branches explicitly, and report what was rejected
       instead of failing the run.
+
+- [ ] **Seatbelt on a real Mac.** The macOS profile is asserted as text only;
+      run the sandbox tests on macOS (CI runner) and tune the read allow-list
+      (`/private/var/folders`, Homebrew prefixes) against real commands.
+
+- [ ] **Rule review.** A vote keeps whatever rule the model distils. Show the
+      rule for a one click keep or discard, let a second vote undo the first,
+      and list, edit and drop rules from the page rather than only `/rules`.
