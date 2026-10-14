@@ -381,6 +381,37 @@ tools in any pattern. The constraints that shaped it:
   repl say when a compaction happened and what it saved, its summary is one
   click away, and `/compact [focus]` does it on demand.
 
+### Work slicing
+
+Compaction reacts once the context is full; slicing plans ahead so it rarely
+has to. The incident behind it: a 27B local model read a long document a page
+at a time until its context held ~60k tokens, then sat silent for an hour, six
+attempts each failed by a 10 minute stall guard. The window was not the limit,
+the read speed was: ~100 tokens/s, so a cold read of the context (after a cache
+miss) took longer than the guard allowed. The constraints that shaped it:
+
+- **Time is a budget, like tokens.** The window says what fits; the read speed
+  says what fits *in time*. Each call is timed from the input handed over to the
+  first chunk, over the tokens the provider actually had to read (all of them
+  after a compaction, else the growth since the call before), and once a model
+  is measured its budget is capped to what it reads from scratch in half the
+  stall guard (`slice_stall`). Hosted models read thousands of tokens a second
+  and never feel the cap; a local one compacts before it can stall.
+- **Measured, never guessed.** A model asked how much it will read guesses
+  badly, and a small one worse. The `plan` tool takes paths, globs and line
+  ranges and the harness counts them, the same counter the context uses.
+- **Enforced, with a way out.** A step over one slice is refused with its sizes,
+  which tells the model how to split it; the same steps sent back are kept with
+  a warning, since a single line cannot be split and a refusal loop is worse
+  than a large step.
+- **Recited, not remembered.** The open plan and the budget ride on a short note
+  at the end of every call, after compaction and outside the journal, so no
+  summary can lose them and the model always sees where it stands (the
+  todo-list recitation long running agents use against drifting goals). At the
+  end of the input it costs the provider's cache only the newest response.
+- **Off with one switch.** `plan_enabled: false` restores the input byte for
+  byte, which is what the compaction tests run under.
+
 ## Learned rules
 
 Feedback on an answer used to go nowhere. A thumb (or `/good`, `/bad` in the
@@ -978,6 +1009,18 @@ harness.
     - [ ] Extended scope: in [`TODO.md`](TODO.md) (paged history, pre-summary
       at a soft watermark, exact tokenizers, compaction evals, the Responses
       API).
+33. Work slicing, in three scopes:
+    - [x] Minimum scope: `Throughput` timed per call (first chunk, usage,
+      provider cache counts; median of recent samples, idle and whole replies
+      skipped), `ContextBudget.capped` and the read-time cap (`slice_stall`)
+      with the read page following it, `SliceBudget` (`slice_share`), the
+      budget note on every call, `Planner` and the `plan` tool (paths, confined
+      lazy globs, bounded line ranges; refuse once, then keep), `plan_enabled`,
+      the `SliceTest` suite and the docs.
+    - [ ] Complete scope: in [`TODO.md`](TODO.md) (`delegate` workers, the
+      sizing question, plan progress journaled).
+    - [ ] Extended scope: in [`TODO.md`](TODO.md) (`map`, context folding,
+      evals).
 
 ## Fixes worth remembering
 

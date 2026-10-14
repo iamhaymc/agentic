@@ -165,6 +165,24 @@ tiktoken encoding the context is counted with.
 - Expected format `{{ENCODING}}` or empty, default `o200k_base`
 - Empty (or a vocabulary that cannot be downloaded) estimates from the byte size; either way the count is calibrated on the usage the provider reports
 
+### `plan_enabled`
+Give the leader the `plan` tool and end every model call with a budget note.
+- Environment variable: `AGENTIC_PLAN_ENABLED`
+- Expected format `true` or `false`, default `true`
+- The note: context in use, the slice one step may read, the model's measured read speed and the open plan
+
+### `slice_share`
+Share of the budget one plan step may read.
+- Environment variable: `AGENTIC_SLICE_SHARE`
+- Expected format `{{SHARE}}` (float), default `0.25`
+- A step over it is refused; sent back unchanged it is kept with a warning
+
+### `slice_stall`
+Share of `stream_timeout` a cold read of the whole context may take.
+- Environment variable: `AGENTIC_SLICE_STALL`
+- Expected format `{{SHARE}}` (float), default `0.5`, `0` turns the cap off
+- Once the leader's read speed is measured, the budget is capped to what it reads in that time (at least `8192` tokens), so a slow local model compacts before a cold read can stall
+
 ### `summary_max_tokens`
 Tokens a summary may grow to.
 - Environment variable: `AGENTIC_SUMMARY_MAX_TOKENS`

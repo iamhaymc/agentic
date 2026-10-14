@@ -215,6 +215,7 @@ genre: noir
 | `AGENTIC_CONTEXT_TRIGGER`, `AGENTIC_CONTEXT_TARGET`                           | Compact past / down to (share of budget)    |
 | `AGENTIC_CONTEXT_KEEP`, `AGENTIC_CONTEXT_SUMMARY`                             | Outputs never cleared; summarise or drop    |
 | `AGENTIC_CONTEXT_TOKENIZER`                                                   | tiktoken encoding (empty: byte estimate)    |
+| `AGENTIC_PLAN_ENABLED`, `AGENTIC_SLICE_SHARE`, `AGENTIC_SLICE_STALL`          | Plan tool + note; slice; read-time cap      |
 | `AGENTIC_RULES_ENABLED`, `AGENTIC_RULES_MAX_CHARS`                            | Learned rules; size that raises a warning   |
 | `AGENTIC_RULES_INSTRUCTIONS`, `AGENTIC_RULES_MAX_TOKENS`                      | Rule distiller prompt and answer budget     |
 | `AGENTIC_SUMMARY_MODEL`, `AGENTIC_SUMMARY_API_URL`, `AGENTIC_SUMMARY_API_KEY` | Summary role (defaults to the leader)       |
@@ -445,6 +446,55 @@ flowchart LR
   C -- yes --> S
   C -- no --> K[clip giant outputs] --> S
   S --> U[provider usage] --> Q[calibrate ratio]
+```
+
+### Slicing
+
+**Measure → cap → plan → recite: a step of work fits the context and the time the model takes to read it.**
+
+> Why: a 27B model on a local GPU reads ~100 tokens/s; after a compaction or a cache miss a 60k context takes 10 minutes to the first token, past the 600s stall guard, and every retry starts over
+
+Speed (`Throughput`, one per leader model, `Engine.speeds`):
+
+- each call is stamped: input handed over (`ContextRun.__call__`), first chunk (`response.created` → `first_token()`), `response.completed` → `observe(input, output, cached)` → `time_call()`
+- tokens read: input less the `cached_tokens` the provider reports; else the whole input after a compaction (`rebuilt`), else the growth since the call before less its trailing note; a run's first call without a cache count is not timed
+- `prefill` = read / time to first token, `decode` = written / time after it; each the median of the newest `WINDOW` (9) samples, so a dropped cache or a queued request cannot move it; under 512 read or 64 written is noise
+- skipped: a call after `IDLE` (240 s) of quiet on the model (a local server may have unloaded it), and a reply that arrived whole (≥ 8 tokens within `BURST` 50 ms, or faster than `WRITE_LIMIT` 5,000 tokens/s: a tool call some servers hold back)
+
+Cap (`ContextRun.timed()`, `retime()`):
+
+- `timed` = prefill × `stream_timeout` × `slice_stall` (0.5), at least `TIMED_FLOOR` (8,192)
+- `compactor.budget` = `base.capped(timed)`: input capped, reserve kept; `base` is the window's own budget, which an overflow lowers
+- a move under `RETIME_STEP` (10%) is ignored; a model timed in an earlier run is capped from the first call, and the background compaction between runs uses the same cap
+- the `read_text_file` page follows it: `Engine.page_limit()` asks the run's budget at every read (a quarter of `usable`), so a capped budget never has to clip a fresh page
+
+Slice (`SliceBudget`, `ContextRun.limits()`):
+
+- `limit` = min(`usable`, `timed`); `slice` = `limit` × `slice_share` (0.25); `used` = the context now
+
+Note (`note_text()`, `with_note()`), when `plan_enabled`:
+
+- added after compaction to what is sent, never journaled: folded into a closing user message, else a user message of its own (never two in a row)
+- `NOTE_HEADER`, then `[budget] context U of L tokens; one step may read up to S; the model reads ~R tokens/s`, then `[plan] d/n done; now k. title`
+- cache cost: the provider re-reads the newest response and the note, nothing older
+
+Plan (`Planner`, the `plan` tool, `Engine.plans` by session):
+
+- `plan(steps=[{title, inputs, status}])` replaces the whole plan; `status` is `pending`, `active` or `done`; the schema is inlined (no `$ref`)
+- an input is a path, a directory, a glob or a line range `path:A-B`, resolved as a read (`outside_read` applies); ≤ 500 files; an image 1,024
+- a glob is walked lazily from the root (`root_dir`, never a pattern itself); confined, it may not be absolute or use `..`, and a match or directory entry resolving outside is skipped silently (nothing outside is revealed)
+- counted exactly up to 256 KiB a file or range and 4 MiB a plan, the rest estimated from its size; a range is read 64 KiB at a time (one line may be huge)
+- a step not done that reads more than a slice is refused, with its inputs and sizes; the same steps sent back are kept with a warning (a line cannot be split)
+- the answer lists each step with its tokens, what is left to read and, past a minute, how long at the measured speed
+- `Engine.plans` is an `LruCache` of 256 sessions, cleared by `close()`
+
+```mermaid
+flowchart LR
+  C[model call] --> F[first token] --> U[usage] --> T[throughput]
+  T --> K[cap: prefill × stall × share] --> L[slice = limit × share]
+  L --> P[plan refuses a step over a slice]
+  L --> N[note on the next call]
+  P --> N
 ```
 
 ### Journal
@@ -706,12 +756,13 @@ returns `(the user did not answer)` for an empty answer.
 | `describe_image`    | vision model configured     | Ask the specialist about the image        |
 | `run_shell_command` | `shell_enabled`, unconfined or sandboxed | Run a command in the workspace |
 | `ask_user`          | `ask_enabled` (repl, web)   | Ask the user, wait for the answer         |
+| `plan`              | `plan_enabled`              | Plan steps, each measured against a slice |
 
 Paged reads (`read_text_file(path, offset=1, limit=0)`):
 
 - `Workspace.read_page(path, offset, limit, max_chars)` → `TextPage`: whole lines from `offset` (1-based), at most `limit` lines and `max_chars` characters; a first line longer than the cap is clipped
 - `TextPage.render()` — the file as is when whole, else the lines + `[lines A-B of N of path; continue with offset=B+1]`
-- `max_chars` is `Engine.read_limit(config)`: `read_output_limit`, or a quarter of the usable budget (× 4 chars/token, ≥ 2,000); `-1` reads whole
+- `max_chars` is `Engine.page_limit()`: `read_output_limit`, else a quarter of the run's usable budget at each read, time cap included (× 4 chars/token, ≥ 2,000, at most `Engine.read_limit(config)`); `-1` reads whole
 - `ReadRepeats` — per tool build: a cut read repeated back to back with the same arguments returns an error naming the next range instead of the same page; `write_text_file`, `apply_patch` and `run_shell_command` forget it
 | `git_status`        | the session has a checkout  | Branch and working tree                   |
 | `git_commit`        | the session has a checkout  | Stage everything and commit               |

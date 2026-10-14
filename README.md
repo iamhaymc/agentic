@@ -171,6 +171,23 @@ context: # a group flattens onto context_*
 - the journal keeps every turn; the page shows a folded marker where a compaction happened
 - `/compact [focus]` summarises now; the mark's core fills with the context in use
 
+## ▶️ Slice (Work)
+
+Work too large for one pass is planned in steps that fit:
+
+```yaml
+plan:
+  enabled: true  # the plan tool and the budget note
+slice:
+  share: 0.25    # one step reads at most this share of the budget
+  stall: 0.5     # a cold read of the context fits this share of stream_timeout
+```
+
+- **measure → cap → plan → recite**, enforced by the harness, not left to the model
+- the leader's read speed is timed per call; a slow model's budget is capped to what it reads in time
+- `plan` takes steps and their inputs (paths, globs, `notes.md:1-400`), measures each and refuses a step over one slice
+- every call ends with a budget note: context in use, the slice, the open plan
+
 ## ▶️ Test
 
 BDD Test(s):

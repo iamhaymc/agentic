@@ -1930,7 +1930,8 @@ class ContextRunTest(unittest.TestCase):
 
                 return summarize
 
-        options = dict(env=False, config_file=False, context_window=6000, context_reserve=1000, context_keep=2)
+        # compaction alone: no budget note on the input
+        options = dict(env=False, config_file=False, context_window=6000, context_reserve=1000, context_keep=2, plan_enabled=False)
         options.update(overrides)
         engine = Scripted(**options)
         self.addCleanup(engine.close)
@@ -2038,6 +2039,321 @@ class ContextRunTest(unittest.TestCase):
         self.assertEqual(len(model.calls[-1].input), 1 + 2 * 3)
 
 
+class SliceTest(unittest.TestCase):
+    """Work slicing: measured speed, the slice budget, the note and the plan."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.ws = A.Workspace(self.root, shell_timeout=10)
+        self.clock = [0.0]
+
+    def context(self, speed=None, **options):
+        compactor = A.Compactor(A.TokenCounter(None), A.ContextBudget.of(100_000, 20_000))
+        options = {"stall": 600, "slice_stall": 0.5, "clock": lambda: self.clock[0], **options}
+        return A.ContextRun(compactor, throughput=speed or A.Throughput(), **options)
+
+    def call(self, context, start, first, end, read, wrote=100, cached=0):
+        """One model call as the stream reports it, on the fake clock."""
+        self.clock[0] = start
+        context.called_at, context.first_at = start, None  # as `__call__` stamps it
+        self.clock[0] = first
+        context.first_token()
+        self.clock[0] = end
+        return context.observe(read, wrote, cached)
+
+    def planner(self, slice_budget=None, store=None):
+        limits = (lambda: slice_budget) if slice_budget is not None else None
+        store = store if store is not None else A.LruCache()  # an empty cache is falsy
+        return A.Planner(self.ws, A.TokenCounter(None), limits, store, "s")
+
+    def write(self, name, size):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x" * size, encoding="utf-8")
+        return path
+
+    def test_throughput_averages_timed_calls_and_skips_noise(self):
+        speed = A.Throughput()
+        speed.observe(100, 1.0)  # too few tokens: the round trip, not the model
+        self.assertEqual(speed.prefill, 0.0)
+        speed.observe(1000, 10.0, 640, 8.0)
+        speed.observe(3000, 10.0)
+        self.assertEqual(speed.prefill, 200.0)
+        self.assertEqual(speed.decode, 80.0)
+        self.assertEqual(speed.samples, 2)
+        self.assertEqual(speed.tokens(10), 2000)
+        self.assertEqual(speed.seconds(400), 2.0)
+        self.assertEqual(A.Throughput().tokens(10), 0)
+
+    def test_a_budget_capped_by_time_keeps_its_reserve(self):
+        budget = A.ContextBudget.of(100_000, 20_000)
+        capped = budget.capped(30_000)
+        self.assertEqual((capped.usable, capped.reserve), (30_000, 20_000))
+        self.assertEqual((capped.trigger, capped.target), (budget.trigger, budget.target))
+        self.assertIs(budget.capped(0), budget)
+        self.assertIs(budget.capped(200_000), budget)
+
+    def test_the_slice_is_a_share_of_the_smaller_limit(self):
+        self.assertEqual(A.SliceBudget(80_000, 0, 0.25).slice, 20_000)
+        timed = A.SliceBudget(80_000, 40_000, 0.25)
+        self.assertEqual((timed.limit, timed.slice), (40_000, 10_000))
+
+    def test_a_slow_model_caps_the_budget_to_what_it_reads_in_time(self):
+        speed = A.Throughput()
+        context = self.context(speed)
+        self.call(context, 0.0, 0.5, 1.0, 20_000)  # first call of a run: not timed
+        self.assertEqual(speed.samples, 0)
+        self.call(context, 2.0, 52.0, 53.0, 25_000)  # 5k new tokens in 50 s
+        self.assertEqual(speed.prefill, 100.0)
+        # 100 tokens/s x 600 s x 0.5 = 30k: what a cold read gets done in time
+        self.assertEqual(context.budget.usable, 30_000)
+        self.assertEqual(context.base.usable, 80_000)
+        self.assertEqual(context.limits().slice, 7_500)
+
+    def test_after_a_compaction_the_whole_input_is_timed(self):
+        speed = A.Throughput()
+        context = self.context(speed)
+        context.rebuilt = True
+        self.call(context, 0.0, 40.0, 41.0, 20_000)
+        self.assertEqual(speed.prefill, 500.0)
+
+    def test_a_reply_sent_whole_is_not_timed(self):
+        speed = A.Throughput()
+        context = self.context(speed)
+        context.rebuilt = True
+        self.call(context, 0.0, 50.0, 50.01, 20_000, wrote=500)  # 50k tokens/s: one piece
+        self.assertEqual(speed.samples, 0)
+
+    def test_a_slow_read_and_a_fast_write_are_both_timed(self):
+        speed = A.Throughput()
+        context = self.context(speed)
+        context.rebuilt = True
+        self.call(context, 0.0, 200.0, 201.0, 20_000, wrote=100)
+        self.assertEqual((speed.prefill, speed.decode), (100.0, 100.0))
+
+    def test_a_short_reply_sent_whole_is_not_timed(self):
+        speed = A.Throughput()
+        context = self.context(speed)
+        context.rebuilt = True
+        self.call(context, 0.0, 20.0, 20.001, 2_000, wrote=20)  # a held back tool call
+        self.assertEqual(speed.samples, 0)
+
+    def test_one_odd_call_does_not_move_the_speed(self):
+        speed = A.Throughput()
+        for first in (10.0, 10.0, 10.0, 200.0):  # the last: a prompt cache the server dropped
+            speed.observe(1000, first)
+        self.assertEqual(speed.prefill, 100.0)
+        for _ in range(A.Throughput.WINDOW):
+            speed.observe(1000, 20.0)  # a lasting change wins once it is the majority
+        self.assertEqual(speed.prefill, 50.0)
+        self.assertEqual(len(speed.reads), A.Throughput.WINDOW)
+
+    def test_the_cache_the_provider_reports_says_what_was_read(self):
+        speed = A.Throughput()
+        context = self.context(speed)
+        self.call(context, 0.0, 10.0, 11.0, 20_000, cached=15_000)  # even a first call
+        self.assertEqual(speed.prefill, 500.0)
+
+    def test_a_call_after_a_long_quiet_is_not_timed(self):
+        speed = A.Throughput()
+        context = self.context(speed)
+        context.rebuilt = True
+        self.call(context, 0.0, 10.0, 11.0, 5_000)
+        context.rebuilt = True
+        self.call(context, 11.0 + A.ContextRun.IDLE + 1, 600.0, 601.0, 5_000)  # reloaded first
+        self.assertEqual(speed.samples, 1)
+
+    def test_the_page_of_a_read_follows_the_capped_budget(self):
+        engine = A.Engine(env=False, config_file=False)
+        self.addCleanup(engine.close)
+        result = A.RunResult()
+        limit = engine.page_limit(engine.config, result, 80_000)
+        self.assertEqual(limit(), 80_000)  # no context yet
+        result.context = self.context(A.Throughput(prefill=100.0))  # capped to 30k tokens
+        self.assertEqual(limit(), 30_000)
+        fixed = engine.config.merge(read_output_limit=5000)
+        self.assertEqual(engine.page_limit(fixed, result, 5000), 5000)
+
+    def test_the_time_cap_can_be_turned_off(self):
+        context = self.context(A.Throughput(prefill=100.0), slice_stall=0)
+        self.assertEqual(context.budget.usable, 80_000)
+
+    def test_a_measured_model_is_capped_from_the_first_call_of_a_run(self):
+        context = self.context(A.Throughput(prefill=100.0))
+        self.assertEqual(context.budget.usable, 30_000)
+
+    def test_the_cap_never_leaves_less_than_a_floor(self):
+        context = self.context(A.Throughput(prefill=1.0))
+        self.assertEqual(context.budget.usable, A.ContextRun.TIMED_FLOOR)
+
+    def test_the_note_closes_the_prompt_or_follows_a_tool_output(self):
+        prompt = [{"role": "user", "content": "do it"}]
+        merged = A.ContextRun.with_note(prompt, "NOTE")
+        self.assertEqual(merged, [{"role": "user", "content": "do it\n\nNOTE"}])
+        self.assertEqual(prompt[0]["content"], "do it")  # the input itself is left alone
+        output = [{"type": "function_call_output", "call_id": "c1", "output": "ok"}]
+        self.assertEqual(A.ContextRun.with_note(output, "NOTE")[-1], {"role": "user", "content": "NOTE"})
+
+    def test_the_note_says_the_budget_and_the_plan(self):
+        plan = A.Plan([A.PlanStep("Read", status="done"), A.PlanStep("Write", status="active")])
+        context = self.context(A.Throughput(prefill=100.0), plan=lambda: plan)
+        note = context.note_text()
+        self.assertTrue(note.startswith(A.ContextRun.NOTE_HEADER))
+        self.assertIn("of 30k tokens; one step may read up to 7.5k", note)
+        self.assertIn("~100 tokens/s", note)
+        self.assertIn("[plan] 1/2 done; now 2. Write", note)
+
+    def test_a_plan_is_measured_and_kept_for_the_session(self):
+        self.write("a.md", 4000)
+        store = A.LruCache()
+        planner = self.planner(A.SliceBudget(100_000), store)
+        text = run(planner.update([
+            {"title": "Read", "inputs": ["a.md"], "status": "active"},
+            {"title": "Write", "inputs": ["out.md"], "status": "pending"},
+        ]))
+        self.assertIn("Plan: 0 of 2 done; one step may read up to 25k tokens", text)
+        self.assertIn("1. [>] Read (1.0k: a.md)", text)
+        self.assertIn("2. [ ] Write (not found yet: out.md)", text)
+        plan = store.get("s")
+        self.assertEqual(plan.steps[0].tokens, 1000)
+        self.assertEqual(plan.current().title, "Read")
+
+    def test_a_step_over_the_slice_is_refused_then_kept_when_sent_back(self):
+        self.write("big.md", 8000)  # 2k tokens, over a 1k slice
+        store = A.LruCache()
+        planner = self.planner(A.SliceBudget(4000), store)
+        steps = [{"title": "Read all", "inputs": ["big.md"], "status": "pending"}]
+        refused = run(planner.update(steps))
+        self.assertIn("Plan not kept", refused)
+        self.assertIn("1. Read all: ~2.0k (big.md 2.0k)", refused)
+        self.assertIsNone(store.get("s"))
+        kept = run(planner.update(steps))  # a step that cannot be split is not refused for ever
+        self.assertIn("reads more than one slice", kept)
+        self.assertIsNotNone(store.get("s"))
+
+    def test_done_steps_are_not_measured_or_refused(self):
+        self.write("big.md", 8000)
+        planner = self.planner(A.SliceBudget(4000))
+        text = run(planner.update([{"title": "Read all", "inputs": ["big.md"], "status": "done"}]))
+        self.assertIn("Plan: 1 of 1 done", text)
+
+    def test_inputs_may_be_globs_directories_and_line_ranges(self):
+        self.write("notes/a.md", 400)
+        self.write("notes/b.md", 800)
+        (self.root / "lines.txt").write_text("aaaa\nbbbb\ncccc\ndddd\n", encoding="utf-8")
+        planner = self.planner()
+        self.assertEqual(planner.measure("notes/*.md"), 300)
+        self.assertEqual(planner.measure("notes"), 300)
+        self.assertEqual(planner.measure("lines.txt:2-3"), 3)  # "bbbb\ncccc\n": 10 bytes
+        self.assertIsNone(planner.measure("missing.md"))
+
+    def test_an_input_outside_the_workspace_is_refused(self):
+        with self.assertRaises(A.WorkspaceError):
+            self.planner().measure("../elsewhere.md")
+
+    def test_a_glob_may_not_leave_the_workspace_or_reveal_what_is_outside(self):
+        planner = self.planner()
+        for pattern in ("../*", str(self.root.parent / "*")):
+            with self.assertRaises(A.WorkspaceError) as caught:
+                planner.measure(pattern)
+            self.assertIn("must stay inside the workspace", str(caught.exception))
+
+    def test_a_root_with_glob_characters_is_not_a_pattern(self):
+        (self.root / "proj[1]").mkdir()
+        ws = A.Workspace(self.root / "proj[1]", shell_timeout=10)
+        (ws.root / "a.md").write_text("x" * 400, encoding="utf-8")
+        planner = A.Planner(ws, A.TokenCounter(None), None, A.LruCache(), "s")
+        self.assertEqual(planner.measure("*.md"), 100)
+
+    def test_a_huge_line_range_is_counted_only_in_part(self):
+        self.write("huge.txt", 1024 * 1024)  # one line of 1 MiB
+        planner = self.planner()
+        self.assertEqual(planner.measure("huge.txt:1-1"), 262_144)  # estimated past the cap
+        self.assertEqual(planner.spare, A.Planner.COUNT_TOTAL - A.Planner.COUNT_BYTES)
+
+    def test_an_empty_plan_clears_it(self):
+        store = A.LruCache()
+        planner = self.planner(store=store)
+        run(planner.update([{"title": "Read", "inputs": [], "status": "pending"}]))
+        self.assertEqual(run(planner.update([])), "Plan cleared.")
+        self.assertIsNone(store.get("s"))
+
+    def test_the_plan_tool_is_built_only_with_a_planner(self):
+        names = lambda tools: {tool.name for tool in tools}
+        registry = A.ToolRegistry(shell=False)
+        self.assertNotIn("plan", names(registry.build(self.ws)))
+        self.assertIn("plan", names(registry.build(self.ws, planner=self.planner())))
+        engine = A.Engine(env=False, config_file=False, plan_enabled=False)
+        self.addCleanup(engine.close)
+        self.assertIsNone(engine.build_planner(engine.config, A.RunResult(), self.ws))
+
+    def test_the_plan_schema_is_inline(self):
+        schema = A.ToolRegistry(defaults=False)._build_plan_tool(self.planner()).params_json_schema
+        self.assertNotIn("$ref", json.dumps(schema))
+        item = schema["properties"]["steps"]["items"]
+        self.assertEqual(item["required"], ["title", "inputs", "status"])
+        self.assertEqual(item["properties"]["status"]["enum"], ["pending", "active", "done"])
+
+    def scripted(self, steps, **overrides):
+        from agents.testing import ScriptedModel
+
+        model = ScriptedModel(steps)
+
+        class Scripted(A.Engine):
+            def build_model(self, config, role=A.LEADER_ROLE):
+                return model
+
+        options = dict(env=False, config_file=False, context_window=6000, context_reserve=1000, context_tokenizer="", context_summary=False, shell_enabled=False)
+        options.update(overrides)
+        engine = Scripted(**options)
+        self.addCleanup(engine.close)
+        return engine, model
+
+    @staticmethod
+    def unnoted(items):
+        """`items` without the budget note the harness ended them with."""
+        last = items[-1]
+        content = last.get("content") if isinstance(last, dict) else None
+        if not isinstance(content, str) or A.ContextRun.NOTE_HEADER not in content:
+            return items
+        if content.startswith(A.ContextRun.NOTE_HEADER):
+            return items[:-1]
+        return [*items[:-1], {**last, "content": content.split("\n\n" + A.ContextRun.NOTE_HEADER)[0]}]
+
+    def test_every_call_ends_with_the_note_and_the_prefix_holds_otherwise(self):
+        from agents.testing import assistant_message, function_call
+
+        self.write("f.md", 2000)
+        steps = [[function_call("read_text_file", {"path": "f.md"}, call_id=f"c{n}")] for n in range(8)]
+        engine, model = self.scripted(steps + [[assistant_message("done")]])
+        result = run(engine.run("read it", workspace=self.root))
+        self.assertTrue(result.ok, result.error)
+        inputs = [call.input for call in model.calls]
+        self.assertTrue(all(A.ContextRun.NOTE_HEADER in json.dumps(i[-1]) for i in inputs))
+        self.assertEqual(inputs[0][-1]["content"].split("\n\n")[0], "read it")
+        bare = [self.unnoted(i) for i in inputs]
+        changes = sum(1 for before, after in zip(bare, bare[1:]) if after[: len(before)] != before)
+        self.assertEqual(changes, len(result.context.compactions))
+
+    def test_the_model_plans_and_the_note_recites_the_plan(self):
+        from agents.testing import assistant_message, function_call
+
+        self.write("a.md", 2000)
+        plan = {"steps": [
+            {"title": "Read a", "inputs": ["a.md"], "status": "active"},
+            {"title": "Write b", "inputs": [], "status": "pending"},
+        ]}
+        engine, model = self.scripted([[function_call("plan", plan, call_id="p1")], [assistant_message("done")]])
+        result = run(engine.run("plan it", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        answer = next(i for i in model.calls[1].input if i.get("type") == "function_call_output")
+        self.assertIn("1. [>] Read a (500: a.md)", answer["output"])
+        self.assertIn("[plan] 0/2 done; now 1. Read a", model.calls[1].input[-1]["content"])
+        self.assertEqual(engine.plans.get("s1").steps[1].title, "Write b")
+
+
 class AgentContextTest(unittest.TestCase):
     """Compaction over the journal: an endless chat on a small window."""
 
@@ -2076,6 +2392,7 @@ class AgentContextTest(unittest.TestCase):
             context_window=6000,
             context_reserve=1000,
             context_keep=2,
+            plan_enabled=False,  # compaction alone: no budget note on the input
         )
         self.addCleanup(self.agent.close)
         self.session = self.agent.sessions.create()

@@ -2,10 +2,31 @@
 
 Everything still open, in one flat list, most important first.
 Nothing delivered is recorded here:
-the reasoning behind what exists is in [CHANGES.md](CHANGES.md), 
+the reasoning behind what exists is in [CHANGES.md](CHANGES.md),
 and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 ---
+
+- [ ] Move the text copy button on the markdown editor to the top right corner of the editor view.
+  
+- [ ] implement an efficient way for token text that fades in quickly when displayed.
+
+- [ ] Redesign the context usage meter so it is communicated through the main icon (maybe a ring around the icon that fills up like in vscode) 
+
+- [ ] **Work slicing, complete and extended scope.** Each call is timed, the
+      budget is capped to what the model reads in time, `plan` measures and
+      refuses oversized steps, and a note recites budget and plan (see
+      CHANGES.md). Still open:
+  - [ ] Complete scope: isolated workers and a sizing question
+    - [ ] `delegate` tool: a step runs in a fresh context with slim instructions, its own tools and a capped reply
+    - [ ] Sizing question: one `ask_user` when the split depends on intent or the estimate (slices, minutes, cost) passes a threshold
+    - [ ] Plan progress journaled, so a resumed session (or a restarted process) continues the plan
+  - [ ] Extended scope: deterministic batches, folding and evals
+    - [ ] `map` tool: the harness chunks files by tokens and runs one worker per chunk
+    - [ ] Context folding: `branch` / `return` fold a finished sub-task into its summary
+    - [ ] Evals: peak context, success and wall time on long tasks, local and hosted models
+    - [ ] Decode speed in the cap: reserve time for a long reply, not only for the read
+    - [ ] Show the plan and the measured speed on the page and in the repl
 
 - [ ] **Context compaction, extended scope.** Compaction is token aware,
       tiered and runs before every model call (see CHANGES.md). Still open:
@@ -15,8 +36,6 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
   - [ ] Compaction quality evals (`test/agentic_eval.py`): recall of facts and files after N compactions
   - [ ] Clip a giant user message (a pasted file) the way a giant tool output is clipped
   - [ ] OpenAI Responses path with server side compaction when the endpoint is api.openai.com
-
-- [ ] Create tool in a single file python file for creating markdown files. It should be in apps/tools and should be able to be plugged into the agent/engine.
 
 - [ ] **Authentication and authorization on the web layer.** The server binds
       without any identity: whoever reaches the port gets a session with shell,

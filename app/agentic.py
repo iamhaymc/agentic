@@ -57,7 +57,9 @@ import codecs
 import contextlib
 import contextvars
 import functools
+import glob
 import inspect
+import itertools
 import json
 import mimetypes
 import os
@@ -67,6 +69,7 @@ import re
 import shutil
 import signal
 import sqlite3
+import statistics
 import sys
 import tempfile
 import threading
@@ -80,8 +83,10 @@ from typing import (
     Awaitable,
     Callable,
     Iterable,
+    Literal,
     MutableMapping,
     Protocol,
+    TypedDict,
     runtime_checkable,
 )
 
@@ -570,6 +575,16 @@ class AgentConfig:
     # tiktoken encoding the context is counted with; empty estimates from the
     # byte size. Either way the count is calibrated on the provider's usage.
     context_tokenizer: str = "o200k_base"
+    # Work slicing. With `plan_enabled` the leader gets the `plan` tool and every
+    # model call ends with a budget note: the context in use, the slice one step
+    # may read and the open plan. A slice is `slice_share` of the usable budget;
+    # once the leader's read speed is measured the budget is also capped to what
+    # it reads from scratch within `slice_stall` of `stream_timeout`, so a slow
+    # (local) model is compacted before a cold read could stall. 0 turns the
+    # time cap off.
+    plan_enabled: bool = True
+    slice_share: float = 0.25
+    slice_stall: float = 0.5
     summary_model: str = ""
     summary_api_url: str = ""
     summary_api_key: str = ""
@@ -2071,6 +2086,96 @@ class ContextBudget:
             "estimated": estimated,
         }
 
+    def capped(self, usable: int) -> "ContextBudget":
+        """This budget with at most `usable` tokens of input (0: unchanged).
+
+        The reserve for the reply stays whole: only the input gives way.
+        """
+        if usable <= 0 or usable >= self.usable:
+            return self
+        return ContextBudget(usable + self.reserve, self.reserve, self.trigger, self.target)
+
+
+@dataclass
+class Throughput:
+    """How fast one model reads its input and writes its reply, as measured.
+
+    `prefill` is input tokens read per second before the first token arrives,
+    `decode` output tokens written per second after it; each is the median of
+    the newest `WINDOW` calls worth timing, so one odd call (a prompt cache
+    the server dropped, another session queued ahead) cannot move it. Too few
+    tokens and what is timed is the round trip, not the model, so such calls
+    are left out.
+    """
+
+    prefill: float = 0.0
+    decode: float = 0.0
+    samples: int = 0
+    reads: list[float] = field(default_factory=list, repr=False)
+    writes: list[float] = field(default_factory=list, repr=False)
+    #: When the newest call of the model ended, on the clock that timed it.
+    last: float | None = field(default=None, repr=False)
+
+    #: Fewer tokens read (written) than this time the connection, not the model.
+    MIN_READ = 512
+    MIN_WRITE = 64
+    #: Newest samples the median is taken over.
+    WINDOW = 9
+
+    def observe(self, read: int, first: float, wrote: int = 0, writing: float = 0.0) -> None:
+        """Fold in one call: `read` tokens before a first token after `first`
+        seconds, then `wrote` tokens in `writing` seconds."""
+        if read >= self.MIN_READ and first > 0:
+            self.prefill = self.median(self.reads, read / first)
+            self.samples += 1
+        if wrote >= self.MIN_WRITE and writing > 0:
+            self.decode = self.median(self.writes, wrote / writing)
+
+    def median(self, samples: list[float], sample: float) -> float:
+        samples.append(sample)
+        del samples[: -self.WINDOW]
+        return statistics.median(samples)
+
+    def tokens(self, seconds: float) -> int:
+        """Input tokens the model reads in `seconds` (0: not measured yet)."""
+        return int(self.prefill * seconds) if self.prefill > 0 and seconds > 0 else 0
+
+    def seconds(self, tokens: int) -> float:
+        """Seconds the model takes to read `tokens` (0: not measured yet)."""
+        return tokens / self.prefill if self.prefill > 0 else 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "prefill": round(self.prefill, 1),
+            "decode": round(self.decode, 1),
+            "samples": self.samples,
+        }
+
+
+@dataclass(frozen=True)
+class SliceBudget:
+    """What one step of work may bring into the context.
+
+    `usable` is the window's budget for input; `timed` the input the model can
+    read again from scratch within its share of the stall guard (0: not yet
+    measured), which is what bounds a slow local model long before its window
+    does; `share` the part of the smaller of the two one step may take; `used`
+    the context in use now.
+    """
+
+    usable: int
+    timed: int = 0
+    share: float = 0.25
+    used: int = 0
+
+    @property
+    def limit(self) -> int:
+        return min(self.usable, self.timed) if self.timed > 0 else self.usable
+
+    @property
+    def slice(self) -> int:
+        return max(int(self.limit * self.share), 1)
+
 
 def compact_tokens(count: int) -> str:
     """A token count for people: ``950``, ``12k``, ``1.2M``."""
@@ -2539,10 +2644,35 @@ class ContextRun:
     with every compaction and the items it was made over (the agent journals
     it). After a call `observe` folds the tokens the provider reported into
     the calibration.
+
+    Each call is timed as well, against the model's `throughput`: from the
+    input handed over to the first token (`first_token`), over the tokens the
+    provider had to read again (all of them after a compaction, else what was
+    added since the previous call). Once the model's read speed is known, the
+    budget is capped to what it reads from scratch within `slice_stall` of the
+    `stall` guard, so a slow model is compacted before a cold read of its
+    context could stall. With `note`, every call ends with a short budget note
+    for the model: the context in use, the slice one step may read and the
+    open `plan`.
     """
 
     #: Recoveries from a context length error allowed per run.
     OVERFLOWS = 2
+    #: The smallest context the time cap leaves (instructions and tools alone
+    #: may take most of it).
+    TIMED_FLOOR = 8192
+    #: A cap that moves less than this share of the budget is left alone, so
+    #: the watermarks do not wander with every timed call.
+    RETIME_STEP = 0.1
+    #: Tokens per second no model writes at: a reply that came faster arrived
+    #: in one piece; so did one of `BURST_TOKENS` or more within `BURST` seconds.
+    WRITE_LIMIT = 5000
+    BURST = 0.05
+    BURST_TOKENS = 8
+    #: Seconds of quiet after which a local server may have unloaded the model.
+    IDLE = 240.0
+    #: Opens the note, so the model does not take it for the user.
+    NOTE_HEADER = "[harness status, not from the user]"
 
     def __init__(
         self,
@@ -2555,6 +2685,13 @@ class ContextRun:
         pinned: str = "",
         on_compact: Callable[[Compaction, list[Any]], Awaitable[None]] | None = None,
         on_window: Callable[[int], None] | None = None,
+        throughput: Throughput | None = None,
+        stall: float = 0.0,
+        slice_share: float = 0.25,
+        slice_stall: float = 0.0,
+        plan: Callable[[], Any] | None = None,
+        note: bool = False,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.compactor = compactor
         self.state = state or ContextState()
@@ -2565,6 +2702,15 @@ class ContextRun:
         self.pinned = pinned
         self.on_compact = on_compact
         self.on_window = on_window
+        #: The window's own budget; `compactor.budget` is it under the time cap.
+        self.base = compactor.budget
+        self.throughput = throughput
+        self.stall = max(float(stall), 0.0)
+        self.slice_share = min(max(float(slice_share), 0.01), 1.0)
+        self.slice_stall = max(float(slice_stall), 0.0)
+        self.plan = plan
+        self.note = note
+        self.clock = clock
         #: Tokens of the instructions and tool schemas, counted once.
         self.fixed: int | None = None
         #: The items of the newest call, before and after compaction.
@@ -2574,7 +2720,19 @@ class ContextRun:
         self.estimate = 0
         self.compactions: list[Compaction] = []
         self.overflows = 0
+        #: Timing of the newest call: when its input was handed over, when its
+        #: first token arrived, whether its prefix was rebuilt (a compaction:
+        #: the provider reads it all again), the input the provider reported
+        #: for the call before and the note tokens that call ended with.
+        self.called_at: float | None = None
+        self.first_at: float | None = None
+        self.rebuilt = False
+        self.reported = 0
+        self.noted = 0
+        self.noted_before = 0
         self._lock = asyncio.Lock()
+        # a model already timed by an earlier run is capped from the first call
+        self.compactor.budget = self.base.capped(self.timed())
 
     @property
     def counter(self) -> TokenCounter:
@@ -2593,6 +2751,12 @@ class ContextRun:
                 model_data.instructions, getattr(data.agent, "tools", None) or []
             )
         sent = await self.fit(list(model_data.input))
+        self.noted = 0
+        if self.note:
+            text = self.note_text()
+            self.noted = self.counter.text(text) + TokenCounter.MESSAGE_TOKENS
+            sent = self.with_note(sent, text)
+        self.called_at, self.first_at = self.clock(), None
         return ModelInputData(input=sent, instructions=model_data.instructions)
 
     def fixed_cost(self, instructions: str | None, tools: list[Any]) -> int:
@@ -2636,6 +2800,7 @@ class ContextRun:
             self.sent = self.compactor.view(items, self.state)
             self.estimate = self.compactor.tokens(items, self.state, self.fixed or 0)
             if report is not None:
+                self.rebuilt = True
                 report.id = self.block(n)
                 self.compactions.append(report)
                 await self.announce(report, started)
@@ -2667,16 +2832,117 @@ class ContextRun:
         if self.publish is not None:
             await self.publish(event_type, **data)
 
-    def observe(self, input_tokens: int) -> dict[str, Any] | None:
+    def observe(
+        self, input_tokens: int, output_tokens: int = 0, cached_tokens: int = 0
+    ) -> dict[str, Any] | None:
         """The provider counted the input of the newest call: calibrate on it.
 
-        Returns the `context.usage` payload to publish, or ``None`` when
-        nothing was reported.
+        The call is timed too (see `time_call`). Returns the `context.usage`
+        payload to publish, or ``None`` when nothing was reported.
         """
         if input_tokens <= 0:
             return None
         self.counter.calibrate(self.estimate, input_tokens)
+        self.time_call(input_tokens, output_tokens, cached_tokens)
         return self.budget.usage(input_tokens, estimated=False)
+
+    def first_token(self) -> None:
+        """The first token of the newest call arrived."""
+        if self.called_at is not None and self.first_at is None:
+            self.first_at = self.clock()
+
+    def time_call(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0) -> None:
+        """Fold the timing of the newest call into the model's throughput.
+
+        What the provider read is the input less what it reports it had cached;
+        where it reports nothing, the whole input after a compaction, else what
+        the input grew by since the call before (whose trailing note it read
+        again). The first call of a run, over a prefix the provider may or may
+        not still hold, is not timed, nor is a call after `IDLE` seconds of
+        quiet (a local server unloads an idle model and reloads it first). A
+        reply whose tokens all came within `BURST` of the first (or faster than
+        `WRITE_LIMIT`) arrived in one piece, as some servers send a tool call:
+        its wait timed the writing too, so it is left out.
+        """
+        if cached_tokens > 0:
+            read = input_tokens - cached_tokens
+        elif self.rebuilt:
+            read = input_tokens
+        elif self.reported:
+            read = input_tokens - (self.reported - self.counter.scaled(self.noted_before))
+        else:
+            read = 0
+        self.reported, self.noted_before, self.rebuilt = input_tokens, self.noted, False
+        speed = self.throughput
+        if speed is None or self.called_at is None or self.first_at is None:
+            return
+        now = self.clock()
+        idle = speed.last is not None and self.called_at - speed.last > self.IDLE
+        speed.last = now
+        first = self.first_at - self.called_at
+        writing = now - self.first_at
+        if idle or (
+            output_tokens >= self.BURST_TOKENS
+            and writing < max(self.BURST, output_tokens / self.WRITE_LIMIT)
+        ):
+            return
+        speed.observe(read, first, output_tokens, writing)
+        self.retime()
+
+    def timed(self) -> int:
+        """Input tokens the model reads from scratch within its share of the
+        stall guard, or 0 while unmeasured (or the cap is off)."""
+        if self.throughput is None or self.stall <= 0 or self.slice_stall <= 0:
+            return 0
+        tokens = self.throughput.tokens(self.stall * self.slice_stall)
+        return max(tokens, self.TIMED_FLOOR) if tokens else 0
+
+    def retime(self) -> None:
+        """Cap the budget to what the model reads in time, when that moved."""
+        capped = self.base.capped(self.timed())
+        current = self.compactor.budget
+        if capped == current:
+            return
+        if abs(capped.usable - current.usable) >= current.usable * self.RETIME_STEP:
+            self.compactor.budget = capped
+
+    def limits(self) -> SliceBudget:
+        """The slice budget of the run now."""
+        return SliceBudget(
+            self.base.usable,
+            self.timed(),
+            self.slice_share,
+            self.counter.scaled(self.estimate),
+        )
+
+    def note_text(self) -> str:
+        """The budget note the newest call ends with."""
+        limits = self.limits()
+        line = (
+            f"[budget] context {compact_tokens(limits.used)} of "
+            f"{compact_tokens(limits.limit)} tokens; one step may read up to "
+            f"{compact_tokens(limits.slice)}"
+        )
+        if self.throughput is not None and self.throughput.prefill > 0:
+            line += f"; the model reads ~{self.throughput.prefill:.0f} tokens/s"
+        lines = [self.NOTE_HEADER, line]
+        plan = self.plan() if self.plan is not None else None
+        if plan is not None and plan.steps:
+            lines.append(plan.brief())
+        return "\n".join(lines)
+
+    @staticmethod
+    def with_note(items: list[Any], note: str) -> list[Any]:
+        """`items` ending with `note`: folded into a closing user message (no
+        two user messages in a row), else as a message of its own."""
+        last = items[-1] if items else None
+        if (
+            isinstance(last, dict)
+            and last.get("role") == "user"
+            and isinstance(last.get("content"), str)
+        ):
+            return [*items[:-1], {**last, "content": f"{last['content']}\n\n{note}"}]
+        return [*items, {"role": "user", "content": note}]
 
     async def overflowed(self, exc: BaseException) -> list[Any] | None:
         """The input did not fit after all: the input to retry with, or ``None``.
@@ -2689,12 +2955,16 @@ class ContextRun:
         self.overflows += 1
         budget = self.budget
         window = overflow_window(str(exc)) or int(budget.window * 0.75)
-        self.compactor.budget = ContextBudget.of(
-            min(window, budget.window), budget.reserve, budget.trigger, budget.target
+        self.base = ContextBudget.of(
+            min(window, self.base.window), budget.reserve, budget.trigger, budget.target
         )
+        self.compactor.budget = self.base.capped(self.timed())
         if self.on_window is not None:
-            self.on_window(self.compactor.budget.window)
-        return await self.fit(self.items, force=True, reason="overflow")
+            self.on_window(self.base.window)
+        retry = await self.fit(self.items, force=True, reason="overflow")
+        self.noted = 0
+        self.called_at, self.first_at = self.clock(), None
+        return retry
 
 
 @functools.cache
@@ -4666,6 +4936,318 @@ class Workspace:
             process.kill()
 
 
+# Work slicing. A task too large for one pass is planned as steps, each sized
+# against the slice budget of the run (`SliceBudget`): the harness measures what
+# a step reads instead of trusting the model's guess, refuses a step larger than
+# one slice, and the budget note of every call recites the open plan, so no
+# compaction can fold it away.
+
+PLAN_STATUSES = ("pending", "active", "done")
+
+
+class PlanItem(TypedDict):
+    """One step of a plan as the model writes it (the `plan` tool's schema)."""
+
+    title: str
+    inputs: list[str]
+    status: Literal["pending", "active", "done"]
+
+
+@dataclass
+class PlanStep:
+    """One step of a plan, with what the harness measured it reads."""
+
+    title: str
+    inputs: list[str] = field(default_factory=list)
+    status: str = "pending"
+    #: Tokens each input reads (provider units), in the order given.
+    sizes: list[tuple[str, int]] = field(default_factory=list)
+    #: Inputs that do not exist yet: a step may read what an earlier one writes.
+    missing: list[str] = field(default_factory=list)
+
+    @property
+    def tokens(self) -> int:
+        return sum(size for _, size in self.sizes)
+
+    @property
+    def done(self) -> bool:
+        return self.status == "done"
+
+    def key(self) -> tuple[str, tuple[str, ...]]:
+        return self.title, tuple(self.inputs)
+
+
+@dataclass
+class Plan:
+    """The steps of a task, in order."""
+
+    steps: list[PlanStep] = field(default_factory=list)
+
+    @property
+    def done(self) -> int:
+        return sum(1 for step in self.steps if step.done)
+
+    def current(self) -> PlanStep | None:
+        """The active step, else the first one still pending."""
+        for status in ("active", "pending"):
+            for step in self.steps:
+                if step.status == status:
+                    return step
+        return None
+
+    def left(self) -> int:
+        """Tokens the steps not done yet still read."""
+        return sum(step.tokens for step in self.steps if not step.done)
+
+    def brief(self) -> str:
+        """The plan in one line, for the budget note."""
+        step = self.current()
+        if step is None:
+            return f"[plan] all {len(self.steps)} steps done"
+        number = self.steps.index(step) + 1
+        return f"[plan] {self.done}/{len(self.steps)} done; now {number}. {step.title}"
+
+    def render(
+        self, limits: SliceBudget | None = None, throughput: Throughput | None = None
+    ) -> str:
+        """The plan as the `plan` tool answers it."""
+        marks = {"done": "x", "active": ">"}
+        head = f"Plan: {self.done} of {len(self.steps)} done"
+        if limits is not None:
+            head += f"; one step may read up to {compact_tokens(limits.slice)} tokens"
+        lines = [head]
+        for number, step in enumerate(self.steps, 1):
+            line = f"{number}. [{marks.get(step.status, ' ')}] {step.title}"
+            if step.sizes:
+                names = ", ".join(name for name, _ in step.sizes)
+                line += f" ({compact_tokens(step.tokens)}: {names})"
+            if step.missing:
+                line += f" (not found yet: {', '.join(step.missing)})"
+            lines.append(line)
+        left = self.left()
+        if left:
+            tail = f"Left to read: {compact_tokens(left)} tokens"
+            seconds = throughput.seconds(left) if throughput is not None else 0.0
+            if seconds >= 60:
+                tail += f", ~{seconds / 60:.0f} min at ~{throughput.prefill:.0f} tokens/s"
+            lines.append(f"{tail}.")
+        lines.append(
+            "Work one step at a time; call plan again with the whole list to mark progress."
+        )
+        return "\n".join(lines)
+
+
+class Planner:
+    """Sizes the plan of one session against the slice budget, and keeps it.
+
+    `limits` returns the run's `SliceBudget` (``None``: unknown, nothing is
+    refused); `store` keeps plans by session (`key`), so the budget note of a
+    later call, or run, recites the same plan. An input is a path, a glob or a
+    line range (``notes.md:1-400``), resolved by the workspace as a read.
+    """
+
+    #: Files a glob or a directory is measured over, at most.
+    FILE_LIMIT = 500
+    #: Files up to this size are counted; larger ones estimated from their size.
+    COUNT_BYTES = 256 * 1024
+    #: Bytes counted per plan; past it every input is estimated from its size.
+    COUNT_TOTAL = 4 * 1024 * 1024
+    #: Bytes read at a time from a line range (a single line may be huge).
+    CHUNK = 64 * 1024
+    RANGE = re.compile(r"(.+?):(\d+)-(\d+)")
+
+    def __init__(
+        self,
+        workspace: Workspace,
+        counter: TokenCounter,
+        limits: Callable[[], SliceBudget | None] | None,
+        store: Cache,
+        key: str,
+        throughput: Throughput | None = None,
+    ) -> None:
+        self.workspace = workspace
+        self.counter = counter
+        self.limits = limits
+        self.store = store
+        self.key = key
+        self.throughput = throughput
+        #: The oversized steps refused last: the same steps sent back are kept
+        #: with a warning, not refused for ever (a line cannot be split).
+        self.refused: tuple[Any, ...] = ()
+        #: Bytes still counted exactly by the plan being measured.
+        self.spare = self.COUNT_TOTAL
+
+    @property
+    def plan(self) -> Plan | None:
+        return self.store.get(self.key)
+
+    async def update(self, items: Iterable[dict[str, Any]]) -> str:
+        """Measure, check and keep a plan; the answer for the model."""
+        steps = [step for step in map(self.step_of, items) if step is not None]
+        if not steps:
+            self.store.delete(self.key)
+            self.refused = ()
+            return "Plan cleared."
+        await asyncio.to_thread(self.size, steps)
+        plan = Plan(steps)
+        limits = self.limits() if self.limits is not None else None
+        over = [
+            step for step in steps
+            if not step.done and limits is not None and step.tokens > limits.slice
+        ]
+        keys = tuple(step.key() for step in over)
+        if over and keys != self.refused:
+            self.refused = keys
+            return self.refusal(plan, over, limits)
+        self.refused = ()
+        self.store.set(self.key, plan)
+        text = plan.render(limits, self.throughput)
+        if over:
+            numbers = ", ".join(str(steps.index(step) + 1) for step in over)
+            text += (
+                f"\nKept as sent, though step {numbers} reads more than one slice: "
+                "read it a page at a time."
+            )
+        return text
+
+    @staticmethod
+    def step_of(item: Any) -> PlanStep | None:
+        data = dict(item) if isinstance(item, dict) else {}
+        title = str(data.get("title") or "").strip()
+        if not title:
+            return None
+        status = str(data.get("status") or "pending").strip().lower()
+        inputs = [str(raw).strip() for raw in data.get("inputs") or [] if str(raw).strip()]
+        return PlanStep(title, inputs, status if status in PLAN_STATUSES else "pending")
+
+    def size(self, steps: list[PlanStep]) -> None:
+        """Measure the inputs of every step not done yet."""
+        self.spare = self.COUNT_TOTAL
+        for step in steps:
+            if step.done:
+                continue
+            for spec in step.inputs:
+                tokens = self.measure(spec)
+                if tokens is None:
+                    step.missing.append(spec)
+                else:
+                    step.sizes.append((spec, tokens))
+
+    def refusal(self, plan: Plan, over: list[PlanStep], limits: SliceBudget) -> str:
+        lines = [
+            f"Plan not kept: {len(over)} step(s) read more than one slice "
+            f"({compact_tokens(limits.slice)} tokens):"
+        ]
+        for step in over:
+            parts = ", ".join(f"{name} {compact_tokens(size)}" for name, size in step.sizes)
+            number = plan.steps.index(step) + 1
+            lines.append(f"- {number}. {step.title}: ~{compact_tokens(step.tokens)} ({parts})")
+        lines.append(
+            "Split them by file or by line range ('path:1-400') and call plan again."
+        )
+        return "\n".join(lines)
+
+    def measure(self, spec: str) -> int | None:
+        """Tokens one input reads (provider units), ``None`` when it is not there."""
+        text = spec.strip().strip("\"'")
+        start = end = 0
+        match = self.RANGE.fullmatch(text)
+        if match:
+            text, start, end = match.group(1), int(match.group(2)), int(match.group(3))
+        files = self.expand(text)
+        if not files:
+            return None
+        return self.counter.scaled(sum(self.file_tokens(path, start, end) for path in files))
+
+    def expand(self, text: str) -> list[Path]:
+        """The files an input names: a file, the files of a directory or a glob.
+
+        A glob is walked lazily from the root (never read as a pattern itself)
+        and stops at `FILE_LIMIT`; unless the workspace reads outside, it may
+        not be absolute or climb with ``..``, and a match or a directory entry
+        that resolves outside is skipped, not reported, so nothing outside is
+        revealed. A plain path is resolved like any read.
+        """
+        ws = self.workspace
+        if any(char in text for char in "*?["):
+            pattern = Path(text).expanduser()
+            if not ws.outside_read and (pattern.is_absolute() or ".." in pattern.parts):
+                raise WorkspaceError(f"a glob must stay inside the workspace: {text}")
+            found = (
+                glob.iglob(str(pattern), recursive=True)
+                if pattern.is_absolute()
+                else glob.iglob(text, root_dir=ws.root, recursive=True)
+            )
+            paths = [
+                path
+                for path in (self.inside(raw) for raw in itertools.islice(found, self.FILE_LIMIT))
+                if path is not None
+            ]
+        else:
+            paths = [ws.resolve(text, read=True)]
+        files: list[Path] = []
+        for path in paths:
+            if path.is_file():
+                files.append(path)
+            elif path.is_dir():
+                for child in path.rglob("*"):
+                    inner = self.inside(str(child))
+                    if inner is not None and inner.is_file():
+                        files.append(inner)
+                    if len(files) >= self.FILE_LIMIT:
+                        break
+            if len(files) >= self.FILE_LIMIT:
+                break
+        return files
+
+    def inside(self, raw: str) -> Path | None:
+        """`raw` resolved as a read, or ``None`` where the workspace may not read."""
+        try:
+            return self.workspace.resolve(raw, read=True)
+        except WorkspaceError:
+            return None
+
+    def file_tokens(self, path: Path, start: int = 0, end: int = 0) -> int:
+        """Tokens of a file, or of its lines `start`-`end`, uncalibrated.
+
+        Text is counted exactly while the plan's `spare` bytes last (and a
+        whole file only up to `COUNT_BYTES`); the rest is estimated from its
+        size, so a giant file or a glob over many costs a read, not a tokenizer.
+        """
+        if guess_mime(path).startswith("image/"):
+            return TokenCounter.IMAGE_TOKENS
+        if start:
+            return self.range_tokens(path, start, end)
+        size = path.stat().st_size
+        if size > min(self.COUNT_BYTES, self.spare):
+            return -(-size // TokenCounter.BYTES_PER_TOKEN)
+        self.spare -= size
+        return self.counter.text(path.read_text(encoding="utf-8", errors="replace"))
+
+    def range_tokens(self, path: Path, start: int, end: int) -> int:
+        """Tokens of lines `start`-`end`, read a bounded chunk at a time."""
+        kept: list[bytes] = []
+        counted = skipped = 0
+        number = 1
+        with path.open("rb") as handle:
+            while number <= end:
+                chunk = handle.readline(self.CHUNK)
+                if not chunk:
+                    break
+                if number >= start:
+                    size = len(chunk)
+                    if counted + size <= self.COUNT_BYTES and size <= self.spare:
+                        kept.append(chunk)
+                        counted += size
+                        self.spare -= size
+                    else:
+                        skipped += size
+                if chunk.endswith(b"\n"):
+                    number += 1
+        text = b"".join(kept).decode("utf-8", "replace")
+        return self.counter.text(text) + -(-skipped // TokenCounter.BYTES_PER_TOKEN)
+
+
 class ToolRegistry:
     """Builds the model facing tool list for a workspace.
 
@@ -4693,7 +5275,8 @@ class ToolRegistry:
         checkout: "Checkout | None" = None,
         progress: ToolReporter | None = None,
         ask: Asker | None = None,
-        read_limit: int = 0,
+        read_limit: int | Callable[[], int] = 0,
+        planner: "Planner | None" = None,
     ) -> list[Any]:
         """Build the tools for `workspace`.
 
@@ -4705,7 +5288,9 @@ class ToolRegistry:
         ``(call_id, text)`` a long running tool reports while it works. `ask`
         puts a question to the person behind the run; when it is given the
         leader gets `ask_user`. `read_limit` is the characters one
-        `read_text_file` call returns (0: whole files).
+        `read_text_file` call returns (0: whole files), or a callable asked
+        on every read when the budget moves during a run. `planner` sizes the
+        plan of the session; when it is given the leader gets `plan`.
         """
         tools = (
             list(self._build_defaults(workspace, vision, progress, read_limit))
@@ -4716,6 +5301,8 @@ class ToolRegistry:
             tools.extend(self._build_repo_tools(checkout))
         if ask is not None:
             tools.append(self._build_ask_tool(ask))
+        if planner is not None:
+            tools.append(self._build_plan_tool(planner))
         tools.extend(factory(workspace) for factory in self._factories.values())
         return tools
 
@@ -4800,6 +5387,34 @@ class ToolRegistry:
 
         return [git_status, git_commit, git_push, open_pull_request, publish_work]
 
+    def _build_plan_tool(self, planner: "Planner") -> Any:
+        """The tool that lets the leader plan work too large for one pass."""
+        from agents import function_tool
+
+        @function_tool(
+            name_override="plan",
+            description_override=(
+                "Plan work too large for one pass: reading many files or a long "
+                "one, or writing a long document. List every step with a short "
+                "title, the inputs it reads (paths, globs or line ranges such as "
+                "'notes.md:1-400') and its status (pending, active or done). The "
+                "harness measures each step and refuses one that reads more than "
+                "one slice (the [budget] note says how much); split it by file or "
+                "by line range. Call it again with the whole list to mark progress; "
+                "an empty list clears the plan."
+            ),
+        )
+        @self.guard
+        async def plan(steps: list[PlanItem]) -> str:
+            return await planner.update(steps)
+
+        # inlined: some local servers and small models do not follow `$ref`
+        schema = plan.params_json_schema
+        item = schema.pop("$defs", {}).get("PlanItem")
+        if item is not None:
+            schema["properties"]["steps"]["items"] = item
+        return plan
+
     def _build_ask_tool(self, ask: Asker) -> Any:
         """The tool that lets the leader ask the person behind the run."""
         from agents import function_tool
@@ -4832,7 +5447,7 @@ class ToolRegistry:
         ws: Workspace,
         vision: Callable[[str, str], Awaitable[str]] | None = None,
         progress: ToolReporter | None = None,
-        read_limit: int = 0,
+        read_limit: int | Callable[[], int] = 0,
     ) -> Iterable[Any]:
         from agents import function_tool
         from agents.tool_context import ToolContext
@@ -4872,7 +5487,8 @@ class ToolRegistry:
             refused = repeats.check(key)
             if refused:
                 return refused
-            page = await asyncio.to_thread(ws.read_page, path, offset, limit, read_limit)
+            chars = read_limit() if callable(read_limit) else read_limit
+            page = await asyncio.to_thread(ws.read_page, path, offset, limit, chars)
             repeats.record(key, page.footer)
             return page.render()
 
@@ -5522,6 +6138,10 @@ class Engine:
         self.asking: dict[str, dict[str, Any]] = {}
         #: Token counters by leader model: each keeps its own calibration.
         self.counters: dict[tuple[str, str], TokenCounter] = {}
+        #: Measured read and write speeds by leader model (`throughput`).
+        self.speeds: dict[tuple[str, str], Throughput] = {}
+        #: The plan of each session (`Planner`), bounded like any cache.
+        self.plans: Cache = LruCache(maxsize=256)
 
     # -- configuration ------------------------------------------------------
 
@@ -5634,7 +6254,8 @@ class Engine:
         session_id: str | None = None,
         progress: ToolReporter | None = None,
         ask: Asker | None = None,
-        read_limit: int = 0,
+        read_limit: int | Callable[[], int] = 0,
+        planner: Planner | None = None,
     ) -> list[Any]:
         resolved = config or self.config
         vision = self.build_vision(resolved, usage=usage, session_id=session_id)
@@ -5645,6 +6266,7 @@ class Engine:
             progress=progress,
             ask=ask,
             read_limit=read_limit,
+            planner=planner,
         )
 
     def build_sdk_agent(self, config: AgentConfig, tools: list[Any]) -> Any:
@@ -5673,6 +6295,29 @@ class Engine:
             counter = self.counters[key] = TokenCounter(config.context_tokenizer or None)
         return counter
 
+    def throughput(self, config: AgentConfig) -> Throughput:
+        """The measured speeds of the leader model, shared by its runs."""
+        key = (config.inference_url, config.inference_llm)
+        speed = self.speeds.get(key)
+        if speed is None:
+            speed = self.speeds[key] = Throughput()
+        return speed
+
+    def build_planner(
+        self, config: AgentConfig, result: RunResult, workspace: Workspace
+    ) -> Planner | None:
+        """The planner behind the `plan` tool of a run, or ``None`` when off."""
+        if not config.plan_enabled:
+            return None
+        return Planner(
+            workspace,
+            self.counter(config),
+            lambda: result.context.limits() if result.context is not None else None,
+            self.plans,
+            result.session_id or result.run_id,
+            self.throughput(config),
+        )
+
     async def context_window(self, config: AgentConfig, role: str = LEADER_ROLE) -> int:
         """The window of a role's model: configured, else asked, else assumed."""
         if config.context_window > 0:
@@ -5700,6 +6345,23 @@ class Engine:
             return max(int(config.read_output_limit), 0)
         budget = await self.context_budget(config)
         return max(budget.usable // 4 * TokenCounter.BYTES_PER_TOKEN, 2000)
+
+    def page_limit(
+        self, config: AgentConfig, result: RunResult, fixed: int
+    ) -> int | Callable[[], int]:
+        """The `read_text_file` page of a run: `fixed` when configured, else a
+        quarter of the run's budget as it stands at each read, since the time
+        cap can shrink it mid run below what `read_limit` sized."""
+        if config.read_output_limit:
+            return fixed
+
+        def limit() -> int:
+            if result.context is None:
+                return fixed
+            usable = result.context.budget.usable
+            return min(fixed, max(usable // 4 * TokenCounter.BYTES_PER_TOKEN, 2000))
+
+        return limit
 
     def build_summarizer(
         self, config: AgentConfig
@@ -5788,6 +6450,7 @@ class Engine:
             if spec is not None:
                 self.models.learn_window(spec, window)
 
+        plan_key = session_id or result.run_id
         return ContextRun(
             compactor,
             state=state,
@@ -5797,6 +6460,12 @@ class Engine:
             pinned=pinned,
             on_compact=on_compact,
             on_window=learned,
+            throughput=self.throughput(config),
+            stall=config.stream_timeout,
+            slice_share=config.slice_share,
+            slice_stall=config.slice_stall,
+            plan=(lambda: self.plans.get(plan_key)) if config.plan_enabled else None,
+            note=config.plan_enabled,
         )
 
     def build_run_config(self, config: AgentConfig, result: RunResult) -> Any:
@@ -5948,7 +6617,8 @@ class Engine:
                     session_id=result.session_id,
                     progress=self.tool_reporter(result),
                     ask=self.build_asker(config, result),
-                    read_limit=await self.read_limit(config),
+                    read_limit=self.page_limit(config, result, await self.read_limit(config)),
+                    planner=self.build_planner(config, result, sandbox),
                 )
                 if sandbox
                 else []
@@ -6154,6 +6824,9 @@ class Engine:
                         kind=kind,
                         text=delta,
                     )
+                elif getattr(data, "type", "") == "response.created":
+                    if result.context is not None:
+                        result.context.first_token()
                 elif getattr(data, "type", "") == "response.completed":
                     await self.context_observed(result, data)
                 elif getattr(data, "type", "") == "response.function_call_arguments.delta":
@@ -6450,7 +7123,14 @@ class Engine:
         if result.context is None:
             return
         usage = getattr(getattr(data, "response", None), "usage", None)
-        payload = result.context.observe(usage_value(usage, "input_tokens", "prompt_tokens"))
+        details = usage.get("input_tokens_details") if isinstance(usage, dict) else getattr(
+            usage, "input_tokens_details", None
+        )
+        payload = result.context.observe(
+            usage_value(usage, "input_tokens", "prompt_tokens"),
+            usage_value(usage, "output_tokens", "completion_tokens"),
+            usage_value(details, "cached_tokens") if details is not None else 0,
+        )
         if payload is not None:
             await self.events.publish(
                 EventType.CONTEXT_USAGE, session_id=result.session_id, **payload
@@ -6489,8 +7169,9 @@ class Engine:
     # -- lifecycle ----------------------------------------------------------
 
     def close(self) -> None:
-        """Release the resources of the engine: its clients and models."""
+        """Release the resources of the engine: its clients, models and plans."""
         self.models.clear()
+        self.plans.clear()
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self.close)
@@ -6925,7 +7606,14 @@ class Agent(Engine):
             self.journal_compaction(session_id, "", report, items, owners)
 
         context = ContextRun(
-            compactor, state=state, publish=publish, block=lambda n: block, on_compact=on_compact
+            compactor,
+            state=state,
+            publish=publish,
+            block=lambda n: block,
+            on_compact=on_compact,
+            throughput=self.throughput(config),
+            stall=config.stream_timeout,
+            slice_stall=config.slice_stall,
         )
         context.fixed = self.context_fixed.get(session_id) or context.fixed_cost(
             self.decorate_instructions(config.instructions, config), []
