@@ -1053,6 +1053,47 @@ reason in fewer tokens. The constraints that shaped it:
   provider never gets the key or the model id of another, so the OpenRouter
   key cannot leak to a LAN host. `num_ctx` is Ollama's alone and is off
   unless asked for.
+- **A failure, not an error word.** The hard-turn rule matched any `error`
+  in the last 3,000 chars before a turn: printed source (`except KeyError:`),
+  the task text, the typed `grep error` command, a heredoc. 40% of turns ran
+  at `lite`. Failures are now line-anchored (`KeyError: x`, `error:`, `FAIL:`,
+  `a.c:1:2: error`…) and read only in terminal output, without the prompt
+  line, `> ` lines and harness warnings: 21% hard. The 115 turns that moved
+  to `full` saved 28% of their prose instead of 16%; the total stayed at 22%,
+  since the long turns, still `lite` (29% of all prose), saved less on the
+  same run: a hosted compressor is not deterministic.
+- **Traces at once, written in order.** Full scale was ~14 days one trace at
+  a time. `--traces N` runs N traces concurrently behind a semaphore and
+  writes them in source order from a bounded window, so output stays
+  deterministic and resume still works by `row_idx`: 50 traces in 2.9 min
+  at 4 × 4 instead of 11.
+- **Each trace shrunk once.** Mixing levels per trace means a trace is only
+  ever used at one level, so shrinking every trace at every level wastes two
+  thirds of the calls. A seeded plan (`mix/plan.json`) assigns each row a
+  slot up front: held out, original and untagged, or one level; `shrink
+  --planned` skips the rest. Untagged originals keep the student working
+  without a tag; the held-out rows feed the eval and are never trained on.
+- **A student-sized verifier.** The replay gate used the compressor (a large
+  model). Re-checking the shrunk turns of 48 traces with `qwen/qwen3.5-9b`
+  passed 91% (95% at `lite`, 88% at `full`); its scores run lower than the
+  large verifier's (p50 0.34 vs 0.55), so the pass relative to the original
+  reasoning carries it. `mistralai/ministral-3b-2512` passed 76%, with the
+  same miss rate at `lite` and `full`: misses that do not grow with
+  compression measure the verifier, not the shrink, so a 3B is no gate. The
+  verifier can now live on its own host, as a set.
+- **A trainer without a framework.** One PEP 723 script (torch, transformers,
+  peft) runs on any CUDA box with `uv run`. ChatML is rendered by hand: Qwen
+  templates drop thinking from history turns, but Terminus-2 replays whole
+  turns, so every assistant turn is trained with its `<think>`. Per-row
+  weights scale the loss; no TRL, no template magic. Qwen3.5 checkpoints are
+  image-text models; `AutoModelForCausalLM` loads their text model.
+- **A proxy before the benchmarks.** No student exists yet, and Terminal-Bench
+  needs Docker and a served model. The `eval` command scores the next action
+  on held-out turns per budget tag (command similarity vs reasoning tokens)
+  against any OpenAI-compatible endpoint; Harbor and BFCL runs are documented
+  against the same endpoint. Untrained `qwen/qwen3.5-9b` on 60 turns: 100%
+  parsed, similarity 0.68, 25% exact, 195 reasoning tokens vs the teacher's
+  220; the `full` tag changed nothing, as it should before training.
 
 ---
 
@@ -1214,9 +1255,16 @@ reason in fewer tokens. The constraints that shaped it:
       (`tag_budget`), parquet shards (`parquet_files`, `download`,
       `parquet_rows`, `fetch --parquet`), weights (`--weight`), streaming
       and crash-safe JSONL, per-level outputs, the 50 trace run and the docs.
-    - [ ] Extended scope: in [`TODO.md`](TODO.md) (LoRA SFT on a student,
-      accuracy vs reasoning tokens, full scale shrink, a student-sized
-      verifier).
+    - [x] Extended scope: the narrowed hard-turn rule (`terminal_output`,
+      line-anchored `_ERROR`, v3), traces at once (`--traces`, ordered
+      window, ETA, 5 client retries), the plan and mix (`Plan`,
+      `line_offsets`, `run_mix`, `shrink --planned`), the student-sized
+      re-check (`run_replay`, `replay`, `--verifier-url` / `--verifier-key`),
+      the proxy eval (`eval_cases`, `score_reply`, `summarize_eval`,
+      `run_eval`, `eval`), the trainer (`util/caveman_train.py`), the
+      Harbor / BFCL runbook, the measurements and the docs. Still open in
+      [`TODO.md`](TODO.md): the remote training run, the full scale shrink,
+      benchmarks per level.
 
 ## Fixes worth remembering
 

@@ -304,6 +304,29 @@ Compressor model (`--model`)
 - LAN Ollama: `huihui_ai/Qwen3.8-abliterated:27b` or `qwen3.8:27b-mlx`
 
 ### `CAVEMAN_VERIFIER`
-Replay verifier model (`--verifier`)
+Replay verifier model (`--verifier`, shrink and replay)
 - Default empty: the compressor
 - `--no-replay` skips the verifier
+- Student-sized re-check on OpenRouter: `qwen/qwen3.5-9b`
+
+### `CAVEMAN_VERIFIER_URL`
+Replay verifier API URL (`--verifier-url`), its own host as a set with `CAVEMAN_VERIFIER_KEY`
+- Default empty: the compressor's host and key
+- Requires `CAVEMAN_VERIFIER`: model ids differ per host
+
+### `CAVEMAN_VERIFIER_KEY`
+Replay verifier API key (`--verifier-key`)
+- Used only with `CAVEMAN_VERIFIER_URL`: the compressor's key never goes to the verifier's host
+
+### `CAVEMAN_EVAL_URL`
+Student endpoint of `eval` (`--url`), OpenAI-compatible (vLLM)
+- Required; no fallback to the inference config: a hosted model is not the student
+- Example: `http://gpu:8000/v1`
+
+### `CAVEMAN_EVAL_LLM`
+Student model of `eval` (`--model`): the served name, e.g. the LoRA module `caveman`
+- Required
+
+### `CAVEMAN_EVAL_KEY`
+Student endpoint key (`--key`)
+- Default empty

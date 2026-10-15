@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from util import caveman_data as C  # noqa: E402
+from util import caveman_train as Tn  # noqa: E402
 
 THINK = (
     "The `dpkg --configure -a` command ran without any output, which means there are no pending "
@@ -644,9 +645,234 @@ class RunShrink(unittest.TestCase):
             self.assertEqual(len(ask.calls), 1)
 
 
+    def test_traces_run_at_once_written_in_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            C.write_jsonl(out / C.SOURCE, [row(i) for i in (1, 2, 3, 4)])
+            live, peak, calls = 0, 0, []
+
+            async def ask(messages):  # one parsed turn per trace; earlier traces answer later
+                nonlocal live, peak
+                calls.append(messages)
+                live, peak = live + 1, max(peak, live + 1)
+                await asyncio.sleep(0.04 - 0.01 * len(calls))
+                live -= 1
+                return json.dumps(GOOD)
+
+            run(C.run_shrink(out, ask, words, traces=3))
+            self.assertEqual([r["row_idx"] for r in C.read_jsonl(out / C.TRAIN)], [1, 2, 3, 4])
+            self.assertEqual((peak, len(calls)), (3, 4))
+            self.assertEqual([r["row_idx"] for r in C.read_jsonl(out / C.TURNS)], [1, 1, 2, 2, 3, 3, 4, 4])
+
+    def test_planned_shrinks_only_assigned_rows(self):
+        plan = C.Plan(("full", "ultra"), original=0.0, holdout=0.0)
+        ids = list(range(1, 9))
+        mine = [i for i in ids if plan.assign(i) == "full"]
+        self.assertTrue(0 < len(mine) < len(ids))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            C.write_jsonl(root / C.SOURCE, [row(i) for i in ids])
+            ask = scripted(GOOD)
+            run(C.run_shrink(root / "full", ask, words, source=root / C.SOURCE, level="full", plan=plan))
+            self.assertEqual([r["row_idx"] for r in C.read_jsonl(root / "full" / C.TRAIN)], mine)
+            self.assertEqual(len(ask.calls), len(mine))
+
+
+class Plans(unittest.TestCase):
+    def test_assign_is_seeded_and_shared(self):
+        plan = C.Plan(C.LEVELS, original=0.1, holdout=0.05, seed=0)
+        slots = [plan.assign(i) for i in range(3000)]
+        self.assertEqual(slots, [C.Plan(C.LEVELS, 0.1, 0.05, 0).assign(i) for i in range(3000)])
+        self.assertNotEqual(slots, [C.Plan(C.LEVELS, 0.1, 0.05, 1).assign(i) for i in range(3000)])
+        share = lambda slot: slots.count(slot) / len(slots)  # noqa: E731
+        self.assertAlmostEqual(share("eval"), 0.05, delta=0.015)
+        self.assertAlmostEqual(share("original"), 0.095, delta=0.02)
+        for level in C.LEVELS:
+            self.assertAlmostEqual(share(level), 0.855 / 3, delta=0.03)
+
+    def test_save_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = C.Plan(("lite", "ultra"), 0.2, 0.1, 7)
+            plan.save(Path(tmp) / "mix" / C.PLAN)
+            self.assertEqual(C.Plan.load(Path(tmp) / "mix" / C.PLAN), plan)
+
+    def test_line_offsets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "x.jsonl"
+            C.write_jsonl(path, [{"row_idx": 5, "a": "é"}, {"a": 2, "row_idx": 9}, {"row_idx": 5, "a": "dup"}])
+            offsets = C.line_offsets(path)
+            self.assertEqual(sorted(offsets), [5, 9])
+            with path.open("rb") as handle:
+                handle.seek(offsets[9])
+                self.assertEqual(json.loads(handle.readline()), {"a": 2, "row_idx": 9})
+            self.assertEqual(C.line_offsets(Path(tmp) / "missing.jsonl"), {})
+
+
+class Mix(unittest.TestCase):
+    def test_one_level_per_trace_originals_and_holdout(self):
+        plan = C.Plan(("full", "ultra"), original=0.25, holdout=0.2, seed=1)
+        ids = list(range(1, 41))
+        slots = {i: plan.assign(i) for i in ids}
+        self.assertTrue({"eval", "original", "full", "ultra"} <= set(slots.values()))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            C.write_jsonl(root / C.SOURCE, [row(i) for i in ids])
+            for level in ("full", "ultra"):
+                shrunk = [{**row(i), "caveman": {"level": level, "weight": 1.0}} for i in ids if i != 40]
+                C.write_jsonl(root / level / C.TRAIN, shrunk)
+            stats = C.run_mix(root, plan)
+            train = {r["row_idx"]: r for r in C.read_jsonl(root / C.MIX / C.TRAIN)}
+            held = [r["row_idx"] for r in C.read_jsonl(root / C.MIX / C.EVAL)]
+            self.assertEqual(held, [i for i in ids if slots[i] == "eval"])
+            self.assertFalse(set(held) & set(train))
+            for idx, item in train.items():
+                want = None if slots[idx] == "original" else slots[idx]
+                self.assertEqual(item["caveman"]["level"], want)
+            self.assertEqual(list(train), sorted(train))
+            missing = int(slots[40] in ("full", "ultra"))
+            self.assertEqual(stats["missing"], missing)
+            self.assertEqual(stats["train"] + stats["eval"] + stats["missing"], len(ids))
+            self.assertEqual(C.Plan.load(root / C.MIX / C.PLAN), plan)
+
+    def test_weight_rules_drop_originals(self):
+        plan = C.Plan(("full",), original=1.0, holdout=0.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            C.write_jsonl(root / C.SOURCE, [{**row(1), "result": "ContextLengthExceededError"}, row(2)])
+            stats = C.run_mix(root, plan, C.parse_weights(["result=ContextLengthExceededError:0"]))
+            self.assertEqual((stats["dropped"], stats["original"]), (1, 1))
+            (got,) = C.read_jsonl(root / C.MIX / C.TRAIN)
+            self.assertEqual((got["row_idx"], got["conversations"]), (2, row(2)["conversations"]))
+
+
+class ReplayStudent(unittest.TestCase):
+    RIGHT = {"commands": [{"keystrokes": c["keystrokes"]} for c in BODY["commands"]]}
+    WRONG = {"commands": [{"keystrokes": "apt-get install -y nginx\n"}]}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        C.write_jsonl(self.root / C.SOURCE, [row(1), row(2)])
+        _, records = run(C.shrink_trace(row(1), scripted(GOOD), words, verifier=scripted(self.RIGHT)))
+        C.write_jsonl(self.root / "full" / C.TURNS, records)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_student_passes(self):
+        verifier = scripted(self.RIGHT)
+        stats = run(C.run_replay(self.root / "full", self.root / C.SOURCE, verifier, name="tiny/4b"))
+        self.assertEqual((stats["checked"], stats["failed"], stats["pass_rate"]), (1, 0, 1.0))
+        self.assertIn(GOOD["plan"], verifier.calls[0][-1]["content"])
+        (got,) = C.read_jsonl(self.root / "full" / "replay-tiny_4b.jsonl")
+        self.assertEqual((got["row_idx"], got["turn"], got["recorded"]["ok"]), (1, 1, True))
+        self.assertTrue((self.root / "full" / "replay-tiny_4b.json").exists())
+
+    def test_student_fails_where_original_derives(self):
+        stats = run(C.run_replay(self.root / "full", self.root / C.SOURCE, scripted(self.WRONG, self.RIGHT)))
+        self.assertEqual((stats["failed"], stats["levels"]), (1, {"full": {"checked": 1, "failed": 1}}))
+        self.assertEqual(stats["base_p50"], 1.0)
+
+    def test_verifier_error_counted(self):
+        stats = run(C.run_replay(self.root / "full", self.root / C.SOURCE, scripted(OSError("down"))))
+        self.assertEqual((stats["checked"], stats["errors"]), (0, 1))
+
+
+class Eval(unittest.TestCase):
+    def test_cases_sampled_parsed_and_fit(self):
+        self.assertEqual([i for _, i in C.eval_cases([row()], 3, 0, 10**6)], [1])
+        self.assertEqual(list(C.eval_cases([row()], 3, 0, 5)), [])
+
+    def test_score_reply(self):
+        original = C.split_turn(CONTENT)
+        got = C.score_reply(C.join_turn(original.with_prose(GOOD)), original, words)
+        self.assertEqual((got["parsed"], got["similarity"], got["exact"], got["complete"]), (True, 1.0, True, True))
+        self.assertLess(got["prose_tokens"], words(C.prose_text(original)))
+        self.assertEqual(C.score_reply("I would run ls.", original, words)["parsed"], False)
+
+    def test_run_tags_and_resume(self):
+        reply = C.join_turn(C.split_turn(CONTENT).with_prose(GOOD))
+        with tempfile.TemporaryDirectory() as tmp:
+            source, out = Path(tmp) / "eval.jsonl", Path(tmp) / "eval" / "student.jsonl"
+            C.write_jsonl(source, [row(1), row(2)])
+            ask = scripted(reply)
+            stats = run(C.run_eval(source, out, ask, words, tags=["none", "full"]))
+            self.assertEqual(len(ask.calls), 4)
+            tagged = [c for c in ask.calls if c[0]["role"] == "system"]
+            self.assertEqual([c[0]["content"] for c in tagged], ["Reasoning budget: full"] * 2)
+            self.assertTrue(all(c[-1]["role"] == "user" for c in ask.calls))
+            self.assertEqual((stats["full"]["cases"], stats["full"]["exact"], stats["none"]["similarity"]), (2, 1.0, 1.0))
+            self.assertGreater(stats["none"]["teacher_prose_tokens"], stats["none"]["prose_tokens"])
+            run(C.run_eval(source, out, ask, words, tags=["none", "full"]))
+            self.assertEqual(len(ask.calls), 4)
+            self.assertTrue(out.with_suffix(".json").exists())
+
+    def test_endpoint_error_retried_next_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, out = Path(tmp) / "eval.jsonl", Path(tmp) / "x.jsonl"
+            C.write_jsonl(source, [row(1)])
+            run(C.run_eval(source, out, scripted(OSError("down")), words))
+            ask = scripted(CONTENT)
+            stats = run(C.run_eval(source, out, ask, words))
+            self.assertEqual((len(ask.calls), stats["none"]["cases"]), (1, 1))
+
+
+class TrainData(unittest.TestCase):
+    """util/caveman_train.py data path: pure, no torch."""
+
+    MESSAGES = [
+        {"role": "system", "content": "Reasoning budget: full"},
+        {"role": "user", "content": "Task"},
+        {"role": "assistant", "content": "<think>t</think>{}"},
+    ]
+
+    def test_segments_train_assistant_only(self):
+        got = Tn.segments(self.MESSAGES)
+        trained = [text for text, flag in got if flag]
+        self.assertEqual(trained, ["<think>t</think>{}<|im_end|>"])
+        self.assertEqual("".join(text for text, _ in got).count("<|im_start|>"), 3)
+        self.assertTrue("".join(text for text, _ in got).startswith("<|im_start|>system\nReasoning budget: full<|im_end|>\n"))
+
+    def test_encode_masks_and_cuts(self):
+        chars = lambda text: [ord(c) for c in text]  # noqa: E731
+        ids, labels = Tn.encode(Tn.segments(self.MESSAGES), chars, 10**6, prefix=[1])
+        self.assertEqual((len(ids), ids[0], labels[0]), (len(labels), 1, Tn.IGNORE))
+        kept = "".join(chr(t) for t in labels if t != Tn.IGNORE)
+        self.assertEqual(kept, "<think>t</think>{}<|im_end|>")
+        ids, labels = Tn.encode(Tn.segments(self.MESSAGES), chars, 20)
+        self.assertEqual((len(ids), set(labels)), (20, {Tn.IGNORE}))
+
+    def test_read_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "train.jsonl"
+            C.write_jsonl(path, [
+                {**row(1), "caveman": {"level": "full", "weight": 0.5}},
+                {"messages": self.MESSAGES},
+                {**row(3), "caveman": {"weight": 0.0}},
+                row(4),
+            ])
+            got = list(Tn.read_rows(path))
+            self.assertEqual([w for _, w in got], [0.5, 1.0, 1.0])
+            self.assertEqual(got[0][0][1], {"role": "assistant", "content": CONTENT})
+            self.assertEqual(len(list(Tn.read_rows(path, limit=2))), 2)
+
+    def test_schedule(self):
+        self.assertAlmostEqual(Tn.lr_at(0, 100, 10, 1.0), 0.1)
+        self.assertAlmostEqual(Tn.lr_at(10, 100, 10, 1.0), 1.0)
+        self.assertAlmostEqual(Tn.lr_at(100, 100, 10, 1.0), 0.1)
+        self.assertGreater(Tn.lr_at(40, 100, 10, 1.0), Tn.lr_at(80, 100, 10, 1.0))
+
+    def test_order_seeded_permutations(self):
+        got = Tn.order(5, 2, 0)
+        self.assertEqual((sorted(got[:5]), sorted(got[5:])), (list(range(5)), list(range(5))))
+        self.assertEqual(got, Tn.order(5, 2, 0))
+        self.assertNotEqual(got, Tn.order(5, 2, 1))
+
+
 class Cli(unittest.TestCase):
     ENV = {
-        "CAVEMAN_URL": "", "CAVEMAN_KEY": "", "CAVEMAN_LLM": "",
+        "CAVEMAN_URL": "", "CAVEMAN_KEY": "", "CAVEMAN_LLM": "", "CAVEMAN_VERIFIER": "", "CAVEMAN_VERIFIER_URL": "",
+        "CAVEMAN_VERIFIER_KEY": "", "CAVEMAN_EVAL_URL": "", "CAVEMAN_EVAL_KEY": "", "CAVEMAN_EVAL_LLM": "",
         "AGENTIC_INFERENCE_URL": "https://hosted/v1", "AGENTIC_INFERENCE_KEY": "sk-x", "AGENTIC_INFERENCE_LLM": "vendor/model",
     }
 
@@ -685,6 +911,33 @@ class Cli(unittest.TestCase):
         self.assertEqual((self.args("shrink").url, self.args("shrink").key), ("https://hosted/v1", "sk-x"))
         lan = self.args("shrink", CAVEMAN_URL="http://lan/v1", CAVEMAN_LLM="local:27b")
         self.assertEqual((lan.url, lan.key), ("http://lan/v1", ""))
+
+    def test_verifier_host_needs_its_own_model(self):
+        got = self.args("shrink", "--verifier-url", "http://lan/v1", "--verifier", "qwen3.5:4b")
+        self.assertEqual((got.verifier_url, got.verifier_key, got.traces, got.planned), ("http://lan/v1", "", 1, False))
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.args("replay", CAVEMAN_VERIFIER_URL="http://lan/v1")
+
+    def test_replay_on_own_host_without_compressor(self):
+        got = self.args(
+            "replay", "--verifier", "qwen3.5:4b", AGENTIC_INFERENCE_URL="", AGENTIC_INFERENCE_LLM="",
+            CAVEMAN_VERIFIER_URL="http://lan/v1",
+        )
+        self.assertEqual((got.verifier_url, got.limit), ("http://lan/v1", 50))
+
+    def test_eval_needs_student(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.args("eval")
+        got = self.args("eval", "--url", "http://gpu:8000/v1", "--model", "student")
+        self.assertEqual((got.tags, got.limit, got.turns, got.effort), (["none", *C.LEVELS], 20, 3, ""))
+
+    def test_mix_defaults(self):
+        got = self.args("mix")
+        self.assertEqual((got.levels, got.original, got.holdout, got.seed), (list(C.LEVELS), 0.1, 0.05, 0))
+
+    def test_planned_needs_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(C.cmd_shrink(self.args("--out", tmp, "shrink", "--planned")), 2)
 
     def test_every_row_needs_parquet(self):
         with tempfile.TemporaryDirectory() as tmp:

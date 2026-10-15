@@ -1,11 +1,13 @@
 """Caveman SFT data: shrink an agent's reasoning, keep every action.
 
-Pipeline: **fetch → shrink → check → replay → stats**
+Pipeline: **fetch → shrink → check → replay → mix → train → eval**
 - fetch:  seeded sample of agent traces (HF dataset viewer, or parquet shards for full scale)
 - shrink: an LLM rewrites each assistant turn's think / analysis / plan at a caveman level
 - check:  deterministic gates; a turn that fails keeps its original text byte for byte
 - replay: a verifier model must derive the same commands from the shrunk reasoning
-- stats:  token savings, shrink rate, failure reasons, levels, replay scores
+- mix:    one SFT set, one level per trace, a share of untagged originals, a held-out split
+- train:  LoRA SFT on a student (util/caveman_train.py, any CUDA box)
+- eval:   held-out next action per budget tag: command similarity vs reasoning tokens
 
 Run:
     uv run python util/caveman_data.py fetch --limit 50
@@ -19,7 +21,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import difflib
+import itertools
 import json
 import logging
 import os
@@ -30,6 +34,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from collections import deque
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Iterator
@@ -39,11 +44,11 @@ log = logging.getLogger("caveman")
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "data" / "caveman"
 SOURCE, TRAIN, TURNS, STATS = "source.jsonl", "train.jsonl", "turns.jsonl", "stats.json"
-SHARDS = "parquet"
+SHARDS, MIX, PLAN, EVAL = "parquet", "mix", "plan.json", "eval.jsonl"
 
 DATASET = "open-thoughts/OpenThoughts-Agent-SFT-100K"
 VIEWER = "https://datasets-server.huggingface.co"
-VERSION = "caveman-agent-v2"
+VERSION = "caveman-agent-v3"  # v3: hard turns from line-anchored failures in terminal output only
 # Compressor comes from .env (AGENTIC_INFERENCE_URL / _KEY / _LLM: OpenRouter); local Ollama via CAVEMAN_URL / CAVEMAN_LLM:
 # DEFAULT_URL = "http://10.0.0.6:11434/v1"
 # DEFAULT_LLM = "huihui_ai/Qwen3.8-abliterated:27b"
@@ -866,26 +871,33 @@ def token_counter() -> Count:
 
 
 def make_ask(
-    url: str, key: str, model: str, effort: str = "none", ctx: int = 0, timeout: float = 300.0, max_tokens: int = 2048
+    url: str,
+    key: str,
+    model: str,
+    effort: str = "none",
+    ctx: int = 0,
+    timeout: float = 300.0,
+    max_tokens: int = 2048,
+    as_json: bool = True,
 ) -> Ask:
+    """Chat call at temperature 0 / seed 0; `as_json` asks for a JSON object, else free text with any think kept."""
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(base_url=url, api_key=key or "none", timeout=timeout, max_retries=2)
+    client = AsyncOpenAI(base_url=url, api_key=key or "none", timeout=timeout, max_retries=5)  # 429s at --traces N
     extra: dict[str, Any] = {"reasoning_effort": effort} if effort else {}
     if ctx:
         extra["extra_body"] = {"options": {"num_ctx": ctx}}
+    if as_json:
+        extra["response_format"] = {"type": "json_object"}
 
     async def ask(messages: list[dict]) -> str:
         response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0,
-            seed=0,
-            max_tokens=max_tokens,
-            response_format={"type": "json_object"},
-            **extra,
+            model=model, messages=messages, temperature=0, seed=0, max_tokens=max_tokens, **extra
         )
-        return response.choices[0].message.content or ""
+        message = response.choices[0].message
+        text = message.content or ""
+        think = None if as_json else getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+        return f"<think>{think}</think>{text}" if think and "</think>" not in text else text  # vLLM / OpenRouter split it
 
     return ask
 
@@ -903,47 +915,331 @@ async def run_shrink(
     verifier: Ask | None = None,
     tag: bool = False,
     weights: Weights = (),
+    traces: int = 1,
+    plan: Plan | None = None,
 ) -> dict:
-    """Shrink source rows into train/turns JSONL under `out`; resumes past rows already written."""
+    """Shrink source rows into train/turns JSONL under `out`; resumes past rows already written.
+
+    `traces` run at once (each with `workers` concurrent turns); rows are written in source order.
+    `plan` keeps only the rows it assigns to `level`, so a mixed set shrinks each trace once.
+    """
     source = source or out / SOURCE
     out.mkdir(parents=True, exist_ok=True)
     done = row_ids(out / TRAIN)
-    pending = len(row_ids(source) - done)
+    planned = lambda idx: plan is None or plan.assign(idx) == level  # noqa: E731
+    pending = sum(1 for idx in row_ids(source) - done if planned(idx))
     pending = min(pending, limit) if limit else pending
     log.info(
-        "shrink: %d done, %d to do -> %s (level %s, model %s, replay %s, tag %s, %d weight rules)",
-        len(done), pending, out, level, model or "-", "on" if verifier else "off", tag, len(weights),
+        "shrink: %d done, %d to do -> %s (level %s, model %s, replay %s, tag %s, %d weight rules, %d traces x %d workers%s)",
+        len(done), pending, out, level, model or "-", "on" if verifier else "off", tag, len(weights), traces, workers,
+        ", planned" if plan else "",
     )
-    number = dropped = 0
-    for row in iter_jsonl(source):
-        if limit and number >= limit:
-            break
-        if row.get("row_idx") in done:
-            continue
-        weight = row_weight(row, weights)
-        if not weight:
-            dropped += 1
-            continue
-        number += 1
-        started = time.perf_counter()
-        shrunk, records = await shrink_trace(
-            row, ask, count, workers=workers, model=model, level=level, verifier=verifier, tag=tag, weight=weight
-        )
+    dropped = 0
+
+    def todo() -> Iterator[tuple[dict, float]]:
+        nonlocal dropped
+        taken = 0
+        for row in iter_jsonl(source):
+            if limit and taken >= limit:
+                return
+            if row.get("row_idx") in done or not planned(row.get("row_idx")):
+                continue
+            weight = row_weight(row, weights)
+            if not weight:
+                dropped += 1
+                continue
+            taken += 1
+            yield row, weight
+
+    gate = asyncio.Semaphore(max(1, traces))
+
+    async def one(row: dict, weight: float) -> tuple[dict, list[dict], float]:
+        async with gate:
+            started = time.perf_counter()
+            shrunk, records = await shrink_trace(
+                row, ask, count, workers=workers, model=model, level=level, verifier=verifier, tag=tag, weight=weight
+            )
+            return shrunk, records, time.perf_counter() - started
+
+    begun, number = time.perf_counter(), 0
+
+    def write(shrunk: dict, records: list[dict], secs: float) -> None:
+        nonlocal number
         write_jsonl(out / TURNS, records, mode="a")  # turns first: a train row marks the trace done
         write_jsonl(out / TRAIN, [shrunk], mode="a")
-        done.add(row.get("row_idx"))
+        done.add(shrunk.get("row_idx"))
+        number += 1
         meta = shrunk["caveman"]
         (pb, pa), (cb, ca) = meta["prose_tokens"], meta["content_tokens"]
         fails = sum(1 for r in records if "replay" in r["reasons"])
+        eta = (time.perf_counter() - begun) / number * max(0, pending - number)
         log.info(
-            "[%d/%d] row %s: %d/%d turns shrunk (%d hard, %d replay fails), prose %d->%d, content %d->%d tokens, %.0fs",
-            number, pending, row.get("row_idx"), meta["shrunk"], meta["parsed"], meta["hard"], fails,
-            pb, pa, cb, ca, time.perf_counter() - started,
+            "[%d/%d] row %s: %d/%d turns shrunk (%d hard, %d replay fails), prose %d->%d, content %d->%d tokens, %.0fs, eta %s",
+            number, pending, shrunk.get("row_idx"), meta["shrunk"], meta["parsed"], meta["hard"], fails,
+            pb, pa, cb, ca, secs, f"{eta / 3600:.1f}h" if eta >= 3600 else f"{eta / 60:.0f}m",
         )
+
+    window: deque[asyncio.Task] = deque()  # started traces, source order; the head is written first
+    for row, weight in todo():
+        window.append(asyncio.create_task(one(row, weight)))
+        while len(window) > 4 * max(1, traces) or (window and window[0].done()):
+            write(*await window.popleft())
+    while window:
+        write(*await window.popleft())
     if dropped:
         log.info("shrink: dropped %d rows by weight 0", dropped)
     stats = summarize(iter_jsonl(out / TURNS))
     (out / STATS).write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    return stats
+
+
+async def run_replay(
+    out: Path, source: Path, verifier: Ask, *, name: str = "", limit: int = 50, workers: int = 4
+) -> dict:
+    """Re-check the shrunk turns of a level with another verifier: does a student-sized model still derive the commands?"""
+    records: dict[Any, dict[int, dict]] = {}
+    for r in iter_jsonl(out / TURNS):
+        if r.get("ok") and r.get("replay") and (r["row_idx"] in records or not limit or len(records) < limit):
+            records.setdefault(r["row_idx"], {}).setdefault(r["turn"], r)
+    gate = asyncio.Semaphore(max(1, workers))
+
+    async def one(task: str, observation: str, original: Turn, record: dict) -> dict:
+        result = {"row_idx": record["row_idx"], "turn": record["turn"], "level": record["level"], "recorded": record["replay"]}
+        async with gate:
+            try:
+                replay = await make_verify(verifier, task, observation, original)(original.with_prose(record["after"]))
+            except Exception as error:  # a verifier outage is counted, not fatal
+                return {**result, "error": repr(error)}
+        return {**result, **asdict(replay)}
+
+    jobs = []
+    for row in iter_jsonl(source):
+        wanted = records.get(row.get("row_idx"))
+        if not wanted:
+            continue
+        conversation = row.get("conversations") or []
+        task = next((m.get("content") or "" for m in conversation if m.get("role") == "user"), "")
+        for index, record in sorted(wanted.items()):
+            original = split_turn(conversation[index].get("content") or "") if index < len(conversation) else None
+            if original and any(k.strip() for k in keystrokes(original.body)):  # no commands: nothing to derive
+                observation = (conversation[index - 1].get("content") or "") if index else ""
+                jobs.append(one(task, observation, original, record))
+    log.info("replay: %d shrunk turns of %d traces in %s, verifier %s", len(jobs), len(records), out, name or "-")
+    results = await asyncio.gather(*jobs)
+    slug = re.sub(r"[^\w.-]+", "_", name or "verifier")
+    write_jsonl(out / f"replay-{slug}.jsonl", results)
+    checked = [r for r in results if "error" not in r]
+    levels: dict[str, dict[str, int]] = {}
+    for r in checked:
+        entry = levels.setdefault(r["level"], {"checked": 0, "failed": 0})
+        entry["checked"] += 1
+        entry["failed"] += not r["ok"]
+    stats = {
+        "verifier": name,
+        "traces": len(records),
+        "checked": len(checked),
+        "errors": len(results) - len(checked),
+        "failed": sum(not r["ok"] for r in checked),
+        "pass_rate": round(sum(r["ok"] for r in checked) / len(checked), 3) if checked else 0.0,
+        "levels": {k: levels[k] for k in LEVELS if k in levels},
+        "score_p50": _pct([r["score"] for r in checked], 0.5),
+        "base_p50": _pct([r["base"] for r in checked if r["base"] is not None], 0.5),
+        "recorded_score_p50": _pct([r["recorded"]["score"] for r in checked], 0.5),
+    }
+    (out / f"replay-{slug}.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    return stats
+
+
+# ---------------------------------------------------------------- mix (one SFT set)
+
+
+@dataclass(frozen=True)
+class Plan:
+    """Seeded per-trace assignment: held out for eval, kept original (untagged), or one shrink level."""
+
+    levels: tuple[str, ...] = LEVELS
+    original: float = 0.1
+    holdout: float = 0.05
+    seed: int = 0
+
+    def unit(self, salt: str, idx: Any) -> float:
+        return random.Random(f"{self.seed}:{salt}:{idx}").random()  # str seed: stable across runs and processes
+
+    def assign(self, idx: Any) -> str:
+        if self.unit("holdout", idx) < self.holdout:
+            return "eval"
+        if self.unit("original", idx) < self.original:
+            return "original"
+        return self.levels[int(self.unit("level", idx) * len(self.levels))]
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: Path) -> Plan:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return cls(**{**data, "levels": tuple(data["levels"])})
+
+
+def line_offsets(path: Path) -> dict[Any, int]:
+    """Byte offset of each complete line by `row_idx` (first wins): random access into big JSONL."""
+    offsets: dict[Any, int] = {}
+    if not path.exists():
+        return offsets
+    with path.open("rb") as handle:
+        position = 0
+        for line in handle:
+            if line.endswith(b"\n") and line.strip():
+                match = _ROW_IDX.match(line[:48].decode("utf-8", "ignore"))
+                try:
+                    idx = int(match.group(1)) if match else json.loads(line).get("row_idx")
+                    offsets.setdefault(idx, position)
+                except ValueError:
+                    pass
+            position += len(line)
+    return offsets
+
+
+def _dump(handle, item: dict) -> None:
+    handle.write(json.dumps(item, ensure_ascii=False, default=_jsonable) + "\n")
+
+
+def run_mix(root: Path, plan: Plan, weights: Weights = ()) -> dict:
+    """`mix/train.jsonl`: each trace at its planned level, or original and untagged; `mix/eval.jsonl`: held out."""
+    out = root / MIX
+    plan.save(out / PLAN)
+    offsets = {level: line_offsets(root / level / TRAIN) for level in plan.levels}
+    stats: dict[str, Any] = {"plan": asdict(plan), "rows": 0, "train": 0, "eval": 0, "original": 0, "missing": 0, "dropped": 0}
+    levels = dict.fromkeys(plan.levels, 0)
+    with contextlib.ExitStack() as stack:
+        train = stack.enter_context((out / TRAIN).open("w", encoding="utf-8", newline="\n"))
+        held = stack.enter_context((out / EVAL).open("w", encoding="utf-8", newline="\n"))
+        files = {level: stack.enter_context((root / level / TRAIN).open("rb")) for level in plan.levels if offsets[level]}
+        for row in iter_jsonl(root / SOURCE):
+            idx, stats["rows"] = row.get("row_idx"), stats["rows"] + 1
+            slot = plan.assign(idx)
+            if slot == "eval":
+                _dump(held, row)
+                stats["eval"] += 1
+                continue
+            weight = row_weight(row, weights)
+            if not weight:
+                stats["dropped"] += 1
+            elif slot == "original":
+                _dump(train, {**row, "caveman": {"version": VERSION, "level": None, "weight": weight}})
+                stats["original"] += 1
+            elif idx in offsets[slot]:
+                files[slot].seek(offsets[slot][idx])
+                _dump(train, json.loads(files[slot].readline()))  # keeps the weight it got at shrink
+                levels[slot] += 1
+            else:
+                stats["missing"] += 1  # not shrunk at its level yet: `shrink --planned --level <level>`
+    stats["levels"] = levels
+    stats["train"] = stats["original"] + sum(levels.values())
+    (out / STATS).write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    return stats
+
+
+# ---------------------------------------------------------------- eval (next-action proxy)
+
+
+def eval_cases(rows: Iterable[dict], turns: int, seed: int, max_chars: int) -> Iterator[tuple[dict, int]]:
+    """Seeded sample of `turns` parseable assistant turns per trace whose prompt fits `max_chars`."""
+    for row in rows:
+        conversation = row.get("conversations") or []
+        sizes = [len(m.get("content") or "") for m in conversation]
+        fit = [
+            i for i, m in enumerate(conversation)
+            if m.get("role") == "assistant" and sum(sizes[:i]) <= max_chars and split_turn(m.get("content") or "")
+        ]
+        rng = random.Random(f"{seed}:eval:{row.get('row_idx')}")
+        for index in sorted(rng.sample(fit, min(turns, len(fit)))):
+            yield row, index
+
+
+def score_reply(reply: str, original: Turn, count: Count) -> dict:
+    """Command similarity, exact match, task_complete agreement and reasoning tokens of one predicted turn."""
+    turn = split_turn(reply)
+    if turn is None:
+        return {"parsed": False, "similarity": 0.0, "exact": False, "complete": False, "prose_tokens": count(reply)}
+    score = similarity(keystrokes(turn.body), keystrokes(original.body))
+    return {
+        "parsed": True,
+        "similarity": score,
+        "exact": score == 1.0,
+        "complete": bool(turn.body.get("task_complete")) == bool(original.body.get("task_complete")),
+        "prose_tokens": count(prose_text(turn)),
+    }
+
+
+def summarize_eval(records: Iterable[dict]) -> dict:
+    """Per budget tag: parse rate, command similarity, exact match, reasoning tokens."""
+    tags: dict[str, list[dict]] = {}
+    for r in records:
+        if "error" not in r:
+            tags.setdefault(r["tag"], []).append(r)
+    mean = lambda values: round(sum(values) / len(values), 3) if values else 0.0  # noqa: E731
+    out = {}
+    for tag, rs in tags.items():
+        out[tag] = {
+            "cases": len(rs),
+            "parsed": mean([r["parsed"] for r in rs]),
+            "similarity": mean([r["similarity"] for r in rs]),
+            "similarity_p50": _pct([r["similarity"] for r in rs], 0.5),
+            "exact": mean([r["exact"] for r in rs]),
+            "complete": mean([r["complete"] for r in rs]),
+            "prose_tokens": mean([r["prose_tokens"] for r in rs]),
+            "prose_tokens_p50": _pct([r["prose_tokens"] for r in rs], 0.5),
+            "teacher_prose_tokens": mean([r["teacher_prose_tokens"] for r in rs]),
+        }
+    return out
+
+
+async def run_eval(
+    source: Path,
+    out: Path,
+    ask: Ask,
+    count: Count,
+    *,
+    tags: Iterable[str] = ("none",),
+    limit: int = 20,
+    turns: int = 3,
+    seed: int = 0,
+    workers: int = 4,
+    max_chars: int = 48000,
+) -> dict:
+    """Held-out next action per budget tag (teacher history as context); resumes past cases in `out`."""
+    done = {(r["row_idx"], r["turn"], r["tag"]) for r in iter_jsonl(out) if "error" not in r}
+    gate = asyncio.Semaphore(max(1, workers))
+    rows = itertools.islice(iter_jsonl(source), limit or None)
+
+    async def one(row: dict, index: int, tag: str) -> dict:
+        conversation = [{"role": m["role"], "content": m.get("content") or ""} for m in row["conversations"][:index]]
+        original = split_turn(row["conversations"][index]["content"])
+        record = {"row_idx": row.get("row_idx"), "turn": index, "tag": tag, "teacher_prose_tokens": count(prose_text(original))}
+        async with gate:
+            started = time.perf_counter()
+            try:
+                reply = await ask(conversation if tag == "none" else tag_budget(conversation, tag))
+            except Exception as error:  # an endpoint failure is retried on the next run
+                return {**record, "error": repr(error)}
+            return {**record, **score_reply(reply, original, count), "secs": round(time.perf_counter() - started, 2)}
+
+    jobs = [
+        one(row, index, tag)
+        for row, index in eval_cases(rows, turns, seed, max_chars)
+        for tag in tags
+        if (row.get("row_idx"), index, tag) not in done
+    ]
+    log.info("eval: %d cases to run (%d done) -> %s", len(jobs), len(done), out)
+    for number, job in enumerate(asyncio.as_completed(jobs), 1):  # each case written as it lands: a crash loses none
+        record = await job
+        write_jsonl(out, [record], mode="a")
+        if number % max(1, len(jobs) // 20) == 0:
+            log.info("eval: %d/%d", number, len(jobs))
+    stats = summarize_eval(iter_jsonl(out))
+    out.with_suffix(".json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
     return stats
 
 
@@ -978,16 +1274,57 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+def make_verifier(args: argparse.Namespace) -> Ask:
+    """Verifier on its own host (`--verifier-url` + key, as a set) or on the compressor's."""
+    url, key = (args.verifier_url, args.verifier_key) if args.verifier_url else (args.url, args.key)
+    # commands past ~CONTEXT chars are never scored: cap the verifier's answer
+    return make_ask(url, key, args.verifier or args.model, args.effort, args.ctx, args.timeout, 1024)
+
+
 def cmd_shrink(args: argparse.Namespace) -> int:
     root = Path(args.out)
+    plan = None
+    if args.planned:
+        if not (root / MIX / PLAN).exists():
+            log.error("shrink --planned: no %s; run `mix` first", root / MIX / PLAN)
+            return 2
+        plan = Plan.load(root / MIX / PLAN)
     ask = make_ask(args.url, args.key, args.model, args.effort, args.ctx, args.timeout)
-    verifier = None
-    if args.replay:  # commands past ~CONTEXT chars are never scored: cap the verifier's answer
-        verifier = make_ask(args.url, args.key, args.verifier or args.model, args.effort, args.ctx, args.timeout, 1024)
     stats = asyncio.run(
         run_shrink(
             root / args.level, ask, token_counter(), source=root / SOURCE, limit=args.limit, workers=args.workers,
-            model=args.model, level=args.level, verifier=verifier, tag=args.tag, weights=args.weights,
+            model=args.model, level=args.level, verifier=make_verifier(args) if args.replay else None, tag=args.tag,
+            weights=args.weights, traces=args.traces, plan=plan,
+        )
+    )
+    print(json.dumps(stats, indent=2))
+    return 0
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    root = Path(args.out)
+    name = args.verifier or args.model
+    stats = asyncio.run(
+        run_replay(root / args.level, root / SOURCE, make_verifier(args), name=name, limit=args.limit, workers=args.workers)
+    )
+    print(json.dumps(stats, indent=2))
+    return 0
+
+
+def cmd_mix(args: argparse.Namespace) -> int:
+    plan = Plan(tuple(args.levels), args.original, args.holdout, args.seed)
+    print(json.dumps(run_mix(Path(args.out), plan, args.weights), indent=2))
+    return 0
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    root = Path(args.out)
+    ask = make_ask(args.url, args.key, args.model, args.effort, 0, args.timeout, args.max_tokens, as_json=False)
+    name = re.sub(r"[^\w.-]+", "_", args.name or args.model)
+    stats = asyncio.run(
+        run_eval(
+            Path(args.source) if args.source else root / MIX / EVAL, root / "eval" / f"{name}.jsonl", ask, token_counter(),
+            tags=args.tags, limit=args.limit, turns=args.turns, seed=args.seed, workers=args.workers, max_chars=args.max_chars,
         )
     )
     print(json.dumps(stats, indent=2))
@@ -1018,21 +1355,61 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     fetch.set_defaults(run=cmd_fetch)
 
     own = bool(env("CAVEMAN_URL"))  # CAVEMAN_URL brings its own key and model: never mix in AGENTIC_INFERENCE_*
+
+    def models(command: argparse.ArgumentParser) -> None:  # compressor + verifier hosts, shared by shrink and replay
+        command.add_argument("--url", default=env("CAVEMAN_URL") or env("AGENTIC_INFERENCE_URL") or "")
+        command.add_argument("--key", default=env("CAVEMAN_KEY") or ("" if own else env("AGENTIC_INFERENCE_KEY")) or "")
+        command.add_argument("--model", default=env("CAVEMAN_LLM") or ("" if own else env("AGENTIC_INFERENCE_LLM")) or "")
+        command.add_argument("--verifier", default=env("CAVEMAN_VERIFIER") or "", help="replay model (empty = --model)")
+        command.add_argument("--verifier-url", default=env("CAVEMAN_VERIFIER_URL") or "", help="replay host (empty = --url)")
+        command.add_argument("--verifier-key", default=env("CAVEMAN_VERIFIER_KEY") or "", help="key of --verifier-url only")
+        command.add_argument("--effort", default="none", help='reasoning_effort sent to the model ("" = omit)')
+        command.add_argument("--ctx", type=int, default=0, help="Ollama num_ctx (0 = omit; hosted APIs reject it)")
+        command.add_argument("--timeout", type=float, default=300.0)
+
     shrink = sub.add_parser("shrink", help="rewrite reasoning into <level>/train.jsonl + turns.jsonl")
     shrink.add_argument("--level", choices=LEVELS, default="full", help="target compression level")
     shrink.add_argument("--limit", type=int, default=0, help="traces this run (0 = all pending)")
     shrink.add_argument("--workers", type=int, default=2, help="concurrent model calls per trace")
+    shrink.add_argument("--traces", type=int, default=1, help="traces shrunk at once (calls in flight: traces x workers)")
+    shrink.add_argument("--planned", action="store_true", help="only rows mix/plan.json assigns to --level")
     shrink.add_argument("--replay", action=argparse.BooleanOptionalAction, default=True, help="verifier replay gate")
     shrink.add_argument("--tag", action=argparse.BooleanOptionalAction, default=True, help="budget tag system prompt")
     shrink.add_argument("--weight", action="append", default=[], metavar="FIELD=VALUE:W", help="row weight rule; 0 drops")
-    shrink.add_argument("--url", default=env("CAVEMAN_URL") or env("AGENTIC_INFERENCE_URL") or "")
-    shrink.add_argument("--key", default=env("CAVEMAN_KEY") or ("" if own else env("AGENTIC_INFERENCE_KEY")) or "")
-    shrink.add_argument("--model", default=env("CAVEMAN_LLM") or ("" if own else env("AGENTIC_INFERENCE_LLM")) or "")
-    shrink.add_argument("--verifier", default=env("CAVEMAN_VERIFIER") or "", help="replay model (empty = --model)")
-    shrink.add_argument("--effort", default="none", help='reasoning_effort sent to the model ("" = omit)')
-    shrink.add_argument("--ctx", type=int, default=0, help="Ollama num_ctx (0 = omit; hosted APIs reject it)")
-    shrink.add_argument("--timeout", type=float, default=300.0)
+    models(shrink)
     shrink.set_defaults(run=cmd_shrink)
+
+    replay = sub.add_parser("replay", help="re-check a level's shrunk turns with another (student-sized) verifier")
+    replay.add_argument("--level", choices=LEVELS, default="full")
+    replay.add_argument("--limit", type=int, default=50, help="traces to re-check (0 = all)")
+    replay.add_argument("--workers", type=int, default=4, help="concurrent verifier calls")
+    models(replay)
+    replay.set_defaults(run=cmd_replay)
+
+    mix = sub.add_parser("mix", help="one SFT set: per-trace level, untagged originals, held-out eval split")
+    mix.add_argument("--levels", nargs="+", choices=LEVELS, default=list(LEVELS))
+    mix.add_argument("--original", type=float, default=0.1, help="share of traces kept original and untagged")
+    mix.add_argument("--holdout", type=float, default=0.05, help="share of traces held out for eval")
+    mix.add_argument("--seed", type=int, default=0)
+    mix.add_argument("--weight", action="append", default=[], metavar="FIELD=VALUE:W", help="weight of original rows")
+    mix.set_defaults(run=cmd_mix)
+
+    evaluate = sub.add_parser("eval", help="next-action proxy on held-out traces: similarity vs reasoning tokens")
+    evaluate.add_argument("--url", default=env("CAVEMAN_EVAL_URL") or "", help="student endpoint (OpenAI-compatible)")
+    evaluate.add_argument("--key", default=env("CAVEMAN_EVAL_KEY") or "")
+    evaluate.add_argument("--model", default=env("CAVEMAN_EVAL_LLM") or "")
+    evaluate.add_argument("--name", default="", help="result name under eval/ (empty = --model)")
+    evaluate.add_argument("--tags", nargs="+", choices=("none", *LEVELS), default=["none", *LEVELS])
+    evaluate.add_argument("--source", default="", help="held-out traces (empty = mix/eval.jsonl)")
+    evaluate.add_argument("--limit", type=int, default=20, help="held-out traces (0 = all)")
+    evaluate.add_argument("--turns", type=int, default=3, help="sampled turns per trace")
+    evaluate.add_argument("--seed", type=int, default=0)
+    evaluate.add_argument("--workers", type=int, default=4)
+    evaluate.add_argument("--max-chars", type=int, default=48000, help="longest prompt (conversation chars)")
+    evaluate.add_argument("--max-tokens", type=int, default=4096)
+    evaluate.add_argument("--effort", default="", help='reasoning_effort ("" = omit)')
+    evaluate.add_argument("--timeout", type=float, default=600.0)
+    evaluate.set_defaults(run=cmd_eval)
 
     stats = sub.add_parser("stats", help="summarize <level>/turns.jsonl into stats.json")
     stats.add_argument("--level", choices=LEVELS, default="full")
@@ -1044,6 +1421,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error(str(error))
     if args.command == "shrink" and not (args.url and args.model):
         parser.error("no compressor: set AGENTIC_INFERENCE_URL + _LLM (.env), CAVEMAN_URL + CAVEMAN_LLM, or --url + --model")
+    if args.command in ("shrink", "replay") and args.verifier_url and not args.verifier:
+        parser.error("--verifier-url (CAVEMAN_VERIFIER_URL) needs its own model: --verifier (CAVEMAN_VERIFIER)")
+    if args.command == "replay" and not ((args.verifier_url or args.url) and (args.verifier or args.model)):
+        parser.error("no verifier: set --verifier-url + --verifier, or a compressor host (see shrink)")
+    if args.command == "eval" and not (args.url and args.model):
+        parser.error("no student: set --url + --model (CAVEMAN_EVAL_URL + CAVEMAN_EVAL_LLM)")
     return args
 
 

@@ -1589,7 +1589,7 @@ that copies the finished story out of the session workspace.
 
 `util/caveman_data.py` turns agent traces into SFT data that teaches a small agentic model (Qwen3.5 4B/9B, LFM2.5 class) to reason in fewer tokens. A standalone script: it never imports `agentic.py`.
 
-**trace → shrink think / analysis / plan → gates → replay → SFT JSONL**
+**trace → shrink think / analysis / plan → gates → replay → mix → LoRA SFT → eval**
 
 ```mermaid
 flowchart LR
@@ -1601,6 +1601,11 @@ flowchart LR
   G -- fail twice --> O[original turn]
   K --> T["level/train.jsonl"]
   O --> T
+  T --> M["mix/train.jsonl"]
+  S -- held out --> V["mix/eval.jsonl"]
+  M --> L[LoRA SFT]
+  L --> E[eval]
+  V --> E
 ```
 
 - Rules adapted from [caveman](https://github.com/JuliusBrussee/caveman) (Apache-2.0, `skills/caveman/SKILL.md`)
@@ -1632,7 +1637,9 @@ One compressor call per assistant turn, one retry:
 - `commands`, `task_complete` and every other key are re-assembled from the original JSON, never from the model
 - failed turn keeps its content byte for byte; unparseable turn passes through (`reasons: ["unparsed"]`)
 - retry feedback names lost facts, lost negations, "shorter", or the replay miss
-- turns of a trace run concurrently (`--workers 2`, 4 on a hosted API); traces run in order, so output order is deterministic
+- turns of a trace run concurrently (`--workers 2`, 4 on a hosted API)
+- `--traces N` shrinks N traces at once (N × workers calls in flight); rows are written in source order, so output order is deterministic; the log carries an ETA
+- the client retries a call 5 times (`Retry-After` honoured): 429s at high concurrency
 - temperature 0, seed 0, `response_format=json_object`, `reasoning_effort: "none"` (thinking on: 8× slower, and it invented a fact); `--ctx N` → `options.num_ctx` for Ollama only (off by default)
 - `RULES` (the system prompt) is the same for every turn and level, so a provider's prefix cache holds it
 
@@ -1642,7 +1649,10 @@ One compressor call per assistant turn, one retry:
 - `lite`: keep articles and full sentences; cut filler, hedging, repetition
 - `full`: short words, fragments; drop articles where a sentence still reads in one pass
 - `ultra`: telegraphic; short forms (dir, config, env, repo, deps); `->` for cause or sequence
-- hard turn starts one level gentler: the output before it shows an error (`Traceback`, `*Error`, `command not found`, `FAILED`…) or its prose runs past 400 tokens (~p90)
+- hard turn starts one level gentler: the terminal shows a failure, or its prose runs past 400 tokens (~p90)
+- failure: line-anchored signals only: `Traceback`, `KeyError: x` / pytest `E   KeyError` at line start, `error:` / `E:` / `fatal:` / `error[E0599]:`, `a.c:1:2: error`, `bash: syntax error`, `FAIL:` / `... FAIL` / `1 failed`, `command not found`, `No such file or directory`, `make: ***`, `npm ERR!`
+- read in terminal output only: text after `New Terminal Output:` / `Current terminal state:` (not the task), minus prompt lines with the typed command, heredoc `> ` lines and harness format warnings
+- v2 matched any `error` word (printed source, the task text, a `grep error` command): 40% of turns hard; v3: 21% (12% failure, 10% long)
 - a replay miss retries one level gentler; every other failure retries at the same level, its feedback naming what was lost (a gentler retry after a lost fact ran `longer` on short turns: 3 of 29 lost)
 - budget tag: a system message `Reasoning budget: <level>` heads each trace (`--no-tag` skips it), so one student can learn every level; `turn` in `turns.jsonl` stays the source index
 
@@ -1666,6 +1676,16 @@ A verifier model must reach the same commands from the shrunk reasoning:
 - output: `{"commands": [{"keystrokes"}]}`; score = difflib ratio of whitespace-squashed keystrokes
 - pass at ≥ 0.8, else when no worse than the original reasoning's score − 0.1 (scored once per turn, only when needed): a plan that never named its heredoc is not the shrink's fault
 - a turn without commands skips the verifier; `--verifier` picks the model (default the compressor), `--no-replay` turns the gate off
+- `--verifier-url` + `--verifier-key` put the verifier on its own host, as a set (`--verifier` required there): the compressor's key never goes to it
+
+Student-sized check, `replay`: re-runs the gate on a level's shrunk turns with another verifier:
+- question: does a student-sized model still derive the commands from the terse text the student is trained on?
+- input: `<level>/turns.jsonl` (`ok` turns with commands) joined to `source.jsonl`; same pass rule as the gate
+- output: `<level>/replay-<model>.jsonl` per turn (`score`, `base`, `ok`, the recorded result) and `.json` (pass rate per level, score p50s)
+
+```bash
+uv run python util/caveman_data.py replay --level full --verifier qwen/qwen3.5-9b --workers 8
+```
 
 ### Filter / weight
 
@@ -1678,6 +1698,68 @@ uv run python util/caveman_data.py shrink --weight result=ContextLengthExceededE
 - matching rules multiply; `None` matches a null or missing field
 - weight 0 drops the row before any model call; the rest carry `caveman.weight` for the trainer
 
+### Mix
+
+One SFT set from every level; a seeded plan assigns each trace one slot:
+
+**holdout → original → one level**, per `row_idx`, from `seed`:
+- `eval` (`--holdout 0.05`): the source row, never trained on, into `mix/eval.jsonl`
+- `original` (`--original 0.1`): the source row, untagged, `caveman.level: null`: the student still acts without a tag
+- a level of `--levels` (uniform): that level's shrunk row, budget tag and shrink weight kept
+- `mix/plan.json` holds the plan; `shrink --planned` shrinks only the rows a level gets, so each trace is shrunk once, not once per level
+- missing: a row whose level has not shrunk it yet; `--weight` rules apply to original rows (shrunk rows keep their shrink weight)
+- rows stream in source order; level rows are read by byte offset (`line_offsets`), so 94k rows never sit in memory
+
+```bash
+uv run python util/caveman_data.py mix                              # writes the plan first
+uv run python util/caveman_data.py shrink --planned --level ultra --traces 8
+uv run python util/caveman_data.py mix                              # again once levels are shrunk
+```
+
+### Train
+
+`util/caveman_train.py`: LoRA SFT, one script, any CUDA box; PEP 723 header (`torch`, `transformers>=5`, `peft`), so `uv run` needs no project:
+- input: `mix/train.jsonl` (or any `{"messages"}` JSONL); `caveman.weight` scales a row's loss
+- ChatML rendered by hand (Qwen, LFM2): every assistant turn trained, `<think>` kept; Qwen templates drop history thinking, Terminus-2 replays whole turns
+- rows cut at `--max-len 16384` tokens; a task prompt past it leaves no trained token (row skipped, counted)
+- LoRA all-linear, r 32, alpha 64, dropout 0.05; AdamW, lr 1e-4, 3% warmup, cosine to 10%; batch 1 × `--accum 16`; 2 epochs; gradient checkpointing; bf16 on GPU
+- out: `adapter/` (every `--save-steps 200` and at the end), `train_log.jsonl` (loss, lr, tok/s), `train.json`; `--merge` adds `merged/` for serving without LoRA
+- students: `Qwen/Qwen3.5-4B` / `Qwen/Qwen3.5-9B` (image-text checkpoints; `AutoModelForCausalLM` loads the text model)
+
+```bash
+uv run util/caveman_train.py --model Qwen/Qwen3.5-4B --out runs/caveman-4b --merge  # one 80 GB GPU
+```
+
+> ❗ No TRL: one loop, per-row weights, no template magic; a smoke run (tiny Qwen2, CPU, 4 rows of 4,096 tokens) takes ~1.5 min
+
+### Eval
+
+Proxy, `eval`: held-out next action per budget tag, teacher history as context:
+- cases: `--turns 3` sampled assistant turns per held-out trace (`--limit 20`), prompt ≤ `--max-chars 48000`
+- per tag (`none` untagged, `lite` / `full` / `ultra` as the system tag): the student writes the next turn
+- scores: parsed, command similarity (as replay), exact, `task_complete` agreement, reasoning tokens (o200k, think + analysis + plan) vs the teacher's
+- endpoint: `--url` + `--model` (`CAVEMAN_EVAL_URL` / `_LLM` / `_KEY`), OpenAI-compatible; split `reasoning_content` is put back as `<think>`
+- out: `eval/<name>.jsonl` (resumable per case) and `.json`; baseline = the base model, `--tags none`
+
+```bash
+vllm serve Qwen/Qwen3.5-4B --enable-lora --lora-modules caveman=runs/caveman-4b/adapter --max-lora-rank 32
+uv run python util/caveman_data.py eval --url http://gpu:8000/v1 --model Qwen/Qwen3.5-4B --name base --tags none
+uv run python util/caveman_data.py eval --url http://gpu:8000/v1 --model caveman --name student
+```
+
+> ❗ History is the teacher's verbose turns; a deployed student sees its own terse ones
+
+Agentic benchmarks, against the served student (Docker, [Harbor](https://harborframework.com)):
+
+```bash
+harbor run --dataset openthoughts-tblite --agent terminus-2 --model hosted_vllm/caveman --ak api_base=http://gpu:8000/v1 --n-concurrent 4
+bfcl generate --model MODEL_NAME --backend vllm --enable-lora --lora-modules caveman=runs/caveman-4b/adapter  # then bfcl evaluate
+```
+
+- OpenThoughts-TBLite: 100 Terminal-Bench tasks that track TB2; `--dataset terminal-bench@2.0` for the full set
+- BFCL: a regression check (function calling not trained on); `MODEL_NAME` is the base's entry in BFCL's model list
+- these harnesses send no budget tag: they measure the untagged student
+
 ### Outputs
 
 `data/caveman/` (gitignored):
@@ -1686,6 +1768,9 @@ uv run python util/caveman_data.py shrink --weight result=ContextLengthExceededE
 - `<level>/train.jsonl`: source schema, tagged conversation, `caveman` meta (`version`, `model`, `level`, `weight`, `turns`, `parsed`, `shrunk`, `hard`, `prose_tokens`, `content_tokens`)
 - `<level>/turns.jsonl`: per turn before / after / draft, `reasons`, `attempts` (reasons per try), `missing`, `level`, `hard`, `replay`, tokens, `secs` (the review file)
 - `<level>/stats.json`: shrink rate, reasons, levels, replay, token savings, prose ratio p10 / p50 / p90
+- `<level>/replay-<model>.jsonl` / `.json`: the student-sized re-check
+- `mix/plan.json`, `mix/train.jsonl`, `mix/eval.jsonl`, `mix/stats.json` (slots, levels, missing)
+- `eval/<name>.jsonl` / `.json`: next-action cases and per-tag summary
 - resume: a row in `train.jsonl` is done; turns are written before it; a half-written last line is trimmed on the next append; `stats` counts a turn once
 
 ### Tests
@@ -1696,14 +1781,29 @@ uv run python util/caveman_data.py shrink --weight result=ContextLengthExceededE
 uv run python -m unittest discover -s util -p "caveman_data_bdd.py" -v
 ```
 
-- covers: sampling, turn split / join (fences), facts, negations, gates, reply parsing, levels and hard turns, retries and their levels, replay (scoring, the base, hidden commands, clipping), the budget tag, weights, the CLI, crash-safe JSONL, parquet rows and downloads, resume
+- covers: sampling, turn split / join (fences), facts, negations, gates, reply parsing, levels and hard turns (failures vs error words, echoed input), retries and their levels, replay (scoring, the base, hidden commands, clipping, the student re-check), the budget tag, weights, traces at once (order, peak), the plan and `--planned`, mix, eval (cases, scores, tags, resume), the trainer's data path (ChatML pieces, masks, weights, schedule), the CLI, crash-safe JSONL, parquet rows and downloads, resume
 - `test/` has no `__init__.py` and stdlib ships a `test` package: run by `discover`, the file puts the repo root on `sys.path`
 
 > ❗ PowerShell reports exit code 1 when retry warnings reach stderr: read the `OK` line
 
 ### Results
 
-50 traces (seed 0), 613 assistant turns, 2026-10-15, `deepseek/deepseek-v4.1-flash` on OpenRouter as compressor and verifier, `--workers 4`, 11 min:
+v3 (narrowed hard turns), same 50 traces, 2026-10-15, `--traces 4 --workers 4`, 2.9 min:
+- `full`: 496 of 588 parsed turns shrunk (84.4%); prose −22.2%, content −9.0%; prose ratio p50 0.69
+- 122 hard turns (21%, was 235): the 115 that moved to `full` saved 28.1% of their prose (16.3% at `lite` in v2)
+- total flat (−22.2% vs −22.8%): the long turns, still `lite`, saved 12.8% (18.6% in v2); 56 long turns hold 29% of all prose
+- kept: facts 39, longer 27, replay 16, negation 10, reply 8; 82 of 174 retries rescued
+
+Student-sized re-check (`replay`) of the v2 `full` shrunk turns, 48 traces, 419 turns with commands:
+- `qwen/qwen3.5-9b`: 91% pass (`lite` 95%, `full` 88%); score p50 0.34 (compressor's 0.55), original's p50 0.22; 4.4 min
+- `mistralai/ministral-3b-2512`: 76% pass (`lite` 76%, `full` 75%); score p50 0.31, original's p50 0.31; 3 min
+- 9B misses grow with compression; 3B misses do not: at 3B the gate measures the verifier, not the shrink
+
+Eval baseline (`eval`), untrained `qwen/qwen3.5-9b` on OpenRouter, 20 source traces × 3 turns, 1.4 min:
+- untagged: 100% parsed, similarity 0.68 (p50 0.77), 25% exact, `task_complete` 95%, 195 reasoning tokens (teacher 220)
+- `full` tag: 0.68 / 22% exact / 197 tokens: no effect before training
+
+v2, 50 traces (seed 0), 613 assistant turns, 2026-10-15, `deepseek/deepseek-v4.1-flash` on OpenRouter as compressor and verifier, `--workers 4`, 11 min:
 - `full`: 504 of 588 parsed turns shrunk (85.7%); prose tokens −22.8%, whole content −9.3%; prose ratio p10 / p50 / p90: 0.55 / 0.72 / 0.93
 - 235 hard turns (40%) ran at `lite` and saved 22.8%; the `full` turns saved 35.5%
 - kept: facts 36, replay 22, longer 19, reply 6 (the model answered `{"think":", "}` twice), negation 5; 73 of 157 retries rescued
