@@ -7,21 +7,11 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 ---
 
-- [ ] Add support for decision models like jev and clef.
+- [ ] Ensure complete implemntation of decision models
 
 - [ ] Move the text copy button on the markdown editor to the top right corner of the editor view.
 - [ ] implement an efficient way for token text that fades in quickly when displayed.
-- [ ] Redesign the context usage meter so it is communicated through the main icon (maybe a ring around the icon that fills up like in vscode) 
-
-- [ ] **Caveman SFT, runs.** The pipeline shrinks, mixes, trains and evals
-      (see DESIGN.md §24); what is left needs a GPU, money or a served student:
-  - [ ] Train on a rented GPU: `util/caveman_train.py` on Qwen3.5 4B, then 9B (the local GTX 1070 only smoke-tests)
-  - [ ] Shrink at full scale: `fetch --parquet --limit 0`, `mix`, `shrink --planned --traces 8` per level; ~1.1M turns, each once: ~3 days at 4 × 4 for all levels (50 traces in 2.9 min)
-  - [ ] Long turns: 10% of turns hold 29% of the prose and run at `lite`; try `full` on long-only turns, keep `lite` after a failure
-  - [ ] Benchmarks per level: Harbor and BFCL send no budget tag; a chat template per level or a tag-injecting proxy
-  - [ ] A real 4B verifier: OpenRouter serves no Qwen3.5 4B (9B: 91% pass; a 3B of another family: 76%, noise); serve one and `replay --verifier-url`
-  - [ ] Eval on the student's own history (rollout), not the teacher's verbose turns
-  - [ ] Rows past `--max-len` 16k tokens are cut; a chunked loss would fit 32k on one GPU
+- [ ] Redesign the context usage meter so it is communicated through the main icon (maybe a ring around the icon that fills up like in vscode)
 
 - [ ] **Context compaction, extended scope.** Compaction is token aware,
       tiered and runs before every model call (see CHANGES.md). Still open:
@@ -31,13 +21,6 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
   - [ ] Compaction quality evals (`test/agentic_eval.py`): recall of facts and files after N compactions
   - [ ] Clip a giant user message (a pasted file) the way a giant tool output is clipped
   - [ ] OpenAI Responses path with server side compaction when the endpoint is api.openai.com
-
-- [ ] **Authentication and authorization on the web layer.** The server binds
-      without any identity: whoever reaches the port gets a session with shell,
-      file and git tools and the configured credentials. It needs a token or
-      session cookie on both the HTTP and websocket handshake, ownership of
-      sessions per principal, an origin check on the socket, and rate limiting
-      before it is exposed anywhere but localhost.
 
 - [ ] **Concurrency limits and fairness.** Nothing bounds how many sessions,
       workspaces, subprocesses or runs exist at once; a handful of clients can
@@ -72,7 +55,10 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       end to end, error paths and most of `app/agentic_ui.js` (markdown, hints,
       themes) under assertion rather than photographs.
 
-- [ ] **Questions, extended scope.** `ask_user` covers one question with optional choices, answered by the session that asked. Still open: multi-select and structured answers (a number, a path, a yes/no), an optional `ask_timeout` after which the tool answers for the user, and a way for a one shot `--input` run to answer on stdin.
+- [ ] **Questions, extended scope.** `ask_user` covers one question with optional choices,
+      answered by the session that asked. Still open: multi-select and structured answers
+      (a number, a path, a yes/no), an optional `ask_timeout` after which the tool answers for the user,
+      and a way for a one shot `--input` run to answer on stdin.
 
 - [ ] **Repl ergonomics.** The terminal reads plain lines: there is no history
       across restarts, no editing beyond what the platform's `input()` gives,
@@ -100,6 +86,23 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 - [ ] **Rule review.** A vote keeps whatever rule the model distils. Show the
       rule for a one click keep or discard, let a second vote undo the first,
       and list, edit and drop rules from the page rather than only `/rules`.
+
+- [ ] **Caveman SFT, runs.** The pipeline shrinks, mixes, trains and evals
+      (see DESIGN.md §24); what is left needs a GPU, money or a served student:
+  - [ ] Train on a rented GPU: `util/caveman_train.py` on Qwen3.5 4B, then 9B (the local GTX 1070 only smoke-tests)
+  - [ ] Shrink at full scale: `fetch --parquet --limit 0`, `mix`, `shrink --planned --traces 8` per level; ~1.1M turns, each once: ~3 days at 4 × 4 for all levels (50 traces in 2.9 min)
+  - [ ] Long turns: 10% of turns hold 29% of the prose and run at `lite`; try `full` on long-only turns, keep `lite` after a failure
+  - [ ] Benchmarks per level: Harbor and BFCL send no budget tag; a chat template per level or a tag-injecting proxy
+  - [ ] A real 4B verifier: OpenRouter serves no Qwen3.5 4B (9B: 91% pass; a 3B of another family: 76%, noise); serve one and `replay --verifier-url`
+  - [ ] Eval on the student's own history (rollout), not the teacher's verbose turns
+  - [ ] Rows past `--max-len` 16k tokens are cut; a chunked loss would fit 32k on one GPU
+
+- [ ] **Authentication and authorization on the web layer.** The server binds
+      without any identity: whoever reaches the port gets a session with shell,
+      file and git tools and the configured credentials. It needs a token or
+      session cookie on both the HTTP and websocket handshake, ownership of
+      sessions per principal, an origin check on the socket, and rate limiting
+      before it is exposed anywhere but localhost.
 
 - [ ] **Decision models, as a role.** `SystemOneClient` asks Ollama
       `clef-flash` / `clef` typed questions (`Noul` / `Choice` / `Score`) and
