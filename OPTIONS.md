@@ -7,7 +7,9 @@ Inference API URL
 - Environment variable: `AGENTIC_INFERENCE_URL`
 - Expected format `http:{{SERVER_HOST}}:{{SERVER_PORT?}}/v1`
 - OpenRouter URL: `https://openrouter.ai/api/v1`
-- Ollama URL: `http://127.0.0.1:11434/v1 `
+- Ollama URL: `http://127.0.0.1:11434/v1`
+- LAN access: use the server's current LAN IP; DHCP changes can leave a saved URL pointing at an old address
+- Check reachability at the same host's `/api/version` (without `/v1`); context lookup timeouts followed by connection errors require fixing connectivity before changing context or retry settings
 
 ### `inference_key`
 Inference API key.

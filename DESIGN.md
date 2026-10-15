@@ -1862,3 +1862,116 @@ Earlier runs:
 > ❗ Hosted models are not deterministic at temperature 0 / seed 0: the same trace shrank 26, then 25 of 29 turns
 
 > ❗ Compressor and verifier default to the `.env` inference config (OpenRouter); `CAVEMAN_URL` + `CAVEMAN_LLM` switch both to another host as a set, and `AGENTIC_INFERENCE_KEY` is never sent to it
+
+## 25. EC2 inference deployment
+
+### ▶️ Study (Source)
+
+Read-only inventory of `i-0664c0b49e2148ee6`, `us-east-1`, 2026-10-15, through EC2/IAM APIs and approved SSM shell commands:
+
+- Private Ubuntu 22.04.5, x86-64, `g6e.2xlarge`, one NVIDIA L40S, 64 GiB host RAM
+- Private account-owned AMI; encrypted 200 GiB gp3 root, 3,000 IOPS / 125 MiB/s; unused 450 GB ephemeral disk
+- IMDSv2 required, hop limit 1; no public IP; private-subnet outbound access through NAT
+- vLLM 0.29.0, Python 3.12.14, PyTorch 2.13.0+cu130, CUDA runtime 13.0, NVIDIA driver 595.91.07
+- Transformers 5.17.0, Triton 3.7.1, FlashInfer 0.6.18, Hugging Face Hub 1.31.0, uv 0.12.14
+- `Qwen/Qwen3.8-27B-FP8`, revision `017b9c7af6b5689d5dd426a76e0bc077eb5ca20a`, about 29 GB
+- Port 8000; aliases `qwen3.8-27b` / `qwen3.8`; 98,304-token context; FP8 KV cache; GPU utilization 0.92; 16 sequences; prefix caching
+- Thinking disabled by default; `qwen3` reasoning parser; automatic tool choice / `qwen3_coder`; two images, no video; image bounds 65,536–4,194,304 pixels
+
+Approved scope excludes dormant and account-owned integrations:
+
+- Ollama 0.34.0 disabled; cached `ornith-1.5:35b` about 22 GB; unused `ornith-ai/Ornith-1.5-35B-A3B` about 67 GB
+- Corporate Falcon, Qualys, Inspector/CloudWatch configuration, corporate SSM associations, application-specific S3/SQS/SNS/Secrets Manager permissions
+- Existing private AMI/snapshots, IAM roles, SSH keys, KMS keys, VPN/NAT/peering/routes and VPC endpoints are not cloned
+- Approved corporate controls belong in a target-account Ubuntu 22.04 GPU base AMI supplied with `--ami-id`
+
+Implementation phases:
+
+- [x] Minimum Scope — inspect source AWS resources, OS, active services, package versions and model provenance
+- [x] Complete Scope — portable create-only launcher, private networking, minimal SSM role, pinned bootstrap and usage guide
+- [x] Extended Scope — offline validation and failure-path tests; read-only AWS template/preflight checks; no live deployment
+
+### ▶️ Configure (Target)
+
+**Existing network → new stack → pinned OS bootstrap → verified inference**:
+
+- Launcher: `util/ec2_setup.py`; Python 3.12+, AWS CLI v2, authenticated target-account credentials; no Python packages required
+- Required arguments: `--vpc-id`, `--subnet-id`, and `--allow-cidr` for trusted inference clients
+- Always supply `--region`; `--profile` selects target credentials, otherwise AWS CLI's normal credential chain applies
+- Subnet must belong to the VPC, support the requested GPU type and provide DNS plus outbound HTTPS through existing NAT/egress infrastructure
+- Downloads require Ubuntu repositories, Astral/GitHub, PyPI, PyTorch and Hugging Face/CDN access; AWS access requires SSM endpoints and the CloudFormation wait-condition S3 URL
+- No VPC, subnet, VPN, routes, NAT gateways, DNS records or shared endpoints are created or modified
+- `--security-group-id` may repeat to reuse target groups instead of creating one; cannot combine with CIDR flags, existing ingress/egress must be configured by their owner
+- `--instance-profile` reuses a target IAM instance-profile **name** with EC2 trust and SSM permissions; otherwise creates a stack-owned role/profile with only `AmazonSSMManagedInstanceCore`
+- `--permissions-boundary` supplies an existing target policy ARN for the newly created role; cannot combine with a reused instance profile
+- `--ami-id` selects an accessible, clean Ubuntu 22.04 x86-64 GPU base AMI in the target region; default resolves AWS's public regional GPU AMI parameter, not the private source AMI
+- Base AMI must provide NVIDIA drivers compatible with CUDA 13.0; bootstrap checks actual CUDA availability, FP8-capable GPU architecture and at least 44 GiB GPU memory
+- `--instance-type` defaults to `g6e.2xlarge`; preflight requires one GPU with at least 45,000 MiB; regional GPU quotas, billing permission and zonal capacity remain prerequisites
+- `--volume-size` defaults to 200 GiB, gp3 / 3,000 IOPS / 125 MiB/s, encrypted; `--kms-key-id` optionally supplies a target EBS key ID/ARN/alias with appropriate grants
+- `--key-name` optionally supplies an existing target SSH key pair; port 22 is opened only with explicit `--ssh-cidr`
+- `--tag KEY=VALUE` may repeat for organizational tags, up to 50 including `Name`; `--timeout` defaults to 7,200 seconds for bootstrap
+- Caller needs CloudFormation create/describe/event access, target resource discovery, EC2 provisioning/tagging, `iam:PassRole`, SSM discovery and optional KMS discovery/use permissions; creating the default role/profile also requires IAM create/delete/attach-policy permissions
+
+> ❗ Inference has no API authentication or TLS, matching the source: restrict port 8000 to trusted clients and private connectivity; world-open CIDRs are rejected for new security groups.
+
+### ▶️ Run (Preview)
+
+Render a portable CloudFormation template without AWS calls or resource changes:
+
+```bash
+uv run --no-project python util/ec2_setup.py --region us-east-1 --vpc-id vpc-REPLACE --subnet-id subnet-REPLACE --allow-cidr 10.0.0.0/8 > /tmp/agentic-ec2.json
+```
+
+- Replace placeholders with resources belonging to the target account and region
+- `--check` performs read-only target discovery, validates subnet/GPU/image/shared resources, resolves the actual AMI/root device and emits the resolved template
+- Plain preview assumes the official AMI root name `/dev/sda1`; `--check` / `--apply` discover custom AMI root-device names
+- Credentials, source account IDs, source private keys, source model caches and local `.env` values are never embedded
+
+### ▶️ Run (Create)
+
+Create a new stack and wait for bootstrap, inference checks and SSM registration:
+
+```bash
+uv run --no-project python util/ec2_setup.py --apply --profile target --region us-east-1 --stack-name agentic-inference --vpc-id vpc-REPLACE --subnet-id subnet-REPLACE --allow-cidr 10.0.0.0/8
+```
+
+- Explicit `--apply` required; existing stack names are rejected by CloudFormation, never updated or replaced
+- Creates one private EC2 instance, encrypted root EBS, optional stack-owned security group and IAM role/profile, plus bootstrap wait-condition resources
+- No public IP even if the subnet normally assigns one; IMDSv2 required; hop limit 1
+- Installs uv 0.12.14, Python 3.12.14 and the source's pinned inference packages; downloads only the active model at the recorded commit
+- Writes `vllm.service` with the source's active parameters, runs as dedicated `vllm` user rather than root, enables restart on reboot
+- Source context is **98,304 tokens**, not the separate local Ollama model's 256K setting; increasing it on a 48 GB GPU is not assumed safe
+- Stack completion requires model aliases, exact context, text generation and tool-call smoke tests; launcher additionally waits for SSM `Online`
+- Outputs: `InstanceId`, `PrivateIp`, `InferenceUrl`; endpoint is `http://PRIVATE_IP:8000/v1` from an allowed private network
+
+> ❗ Deployment incurs EC2/EBS charges. Failure or interruption retains resources for diagnosis; inspect the printed stack ID/name before retrying. There is no automatic cleanup, rollback, source modification or live deployment during this script's development.
+
+### ▶️ Inspect (Failure)
+
+Use CloudFormation events and SSM for diagnostics:
+
+- Bootstrap log: `/var/log/agentic-ec2-setup.log`; cloud-init log: `/var/log/cloud-init-output.log`
+- Service log: `journalctl -u vllm.service --no-pager -n 100`
+- Failure signals contain a log location, not credentials; unreachable wait-condition URLs fail the stack by timeout
+- SSM offline after healthy bootstrap: check reused role permissions, VPC endpoints, DNS and outbound HTTPS
+- Missing public AMI parameter in another partition/region: supply `--ami-id`; no source-account AMI fallback
+- Stack deletion is a separate, deliberate AWS operation; deleting its EC2 instance also deletes the model-bearing root volume
+
+### ▶️ Test (Provisioner)
+
+Run fast offline tests without AWS credentials, network access or deployment:
+
+```bash
+uv run --no-project python -m unittest discover -s util -p ec2_setup_bdd.py -v
+```
+
+- Covers explicit deployment opt-in, trusted ingress, shared-resource arguments, private networking, encryption, portable IAM, bootstrap Bash syntax/size, pinned model/context, AWS failures and stack failure reporting
+- AWS template validation and `--check` are read-only; live GPU launch and full bootstrap remain an explicit operator action
+
+Verified on 2026-10-15:
+
+- 31 offline tests pass in under 0.1 seconds; generated Bash and embedded Python compile; provisioner Python compiles
+- Read-only preflight passes against source VPC/subnet; AWS accepts generated CloudFormation template; current EC2 resource schema supports generated properties
+- Pinned Linux/CUDA package set resolves without installation
+- Generated readiness checks pass against the existing source service: both model aliases, exact 98,304-token context, text output and structured tool call
+- No new GPU instance launched; clean-machine bootstrap and deployment in a second account remain untested
