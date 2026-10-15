@@ -7,8 +7,6 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 ---
 
-- [ ] Add support for decision models like jev and clef.
-
 - [ ] Move the text copy button on the markdown editor to the top right corner of the editor view.
 - [ ] implement an efficient way for token text that fades in quickly when displayed.
 - [ ] Redesign the context usage meter so it is communicated through the main icon (maybe a ring around the icon that fills up like in vscode) 
