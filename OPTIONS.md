@@ -172,6 +172,13 @@ Give the leader the `plan` tool and end every model call with a budget note.
 - The note: context in use, the slice one step may read, the model's measured read and write speeds and the open plan
 - The plan is written through to the store, so `/resume` and a restart continue it
 
+### `fold_enabled`
+Give the leader `branch` and `return`: the steps of a finished sub-task are folded out of its context, its summary stays.
+- Environment variable: `AGENTIC_FOLD_ENABLED`
+- Expected format `true` or `false`, default `true`
+- Needs compaction on (`context_trigger` > 0); a worker never gets it
+- The fold is journaled: the next run starts from the folded context
+
 ### `slice_share`
 Share of the budget one plan step may read.
 - Environment variable: `AGENTIC_SLICE_SHARE`

@@ -17,6 +17,7 @@ is what has been built and why, and [`TODO.md`](TODO.md) is what is left.
 | `app/agentic.py`      | The library: every subsystem and the CLI         |
 | `test/agentic_bdd.py` | Unit tests                                       |
 | `test/agentic_e2e.py` | Browser capture of the page, scripted end to end |
+| `test/agentic_eval.py`| Evals of long tasks: success, peak context, time |
 | `app/agentic_ui.html` | Chat page markup                                 |
 | `app/agentic_ui.css`  | Mobile first, theme driven styles                |
 | `app/agentic_ui.js`   | Client: blocks, markdown, editor, commands, hub  |
@@ -216,6 +217,7 @@ genre: noir
 | `AGENTIC_CONTEXT_KEEP`, `AGENTIC_CONTEXT_SUMMARY`                             | Outputs never cleared; summarise or drop    |
 | `AGENTIC_CONTEXT_TOKENIZER`                                                   | tiktoken encoding (empty: byte estimate)    |
 | `AGENTIC_PLAN_ENABLED`, `AGENTIC_SLICE_SHARE`, `AGENTIC_SLICE_STALL`          | Plan tool + note; slice; read-time cap      |
+| `AGENTIC_FOLD_ENABLED`                                                        | `branch` / `return` (context folding)       |
 | `AGENTIC_PLAN_ASK_SLICES`, `AGENTIC_PLAN_ASK_MINUTES`, `AGENTIC_PLAN_ASK_COST` | Sizing question thresholds (`0` off)        |
 | `AGENTIC_DELEGATE_ENABLED`                                                    | `delegate` tool (workers)                   |
 | `AGENTIC_WORKER_MODEL`, `AGENTIC_WORKER_API_URL`, `AGENTIC_WORKER_API_KEY`    | Worker role (defaults to the leader)        |
@@ -457,6 +459,18 @@ flowchart LR
   C -- no --> K[clip giant outputs] --> S
   S --> U[provider usage] --> Q[calibrate ratio]
 ```
+
+Folding (`branch` / `return`, `Folder`, `ContextState.folds`, `Compactor.hidden()`):
+
+**`branch(goal)` → the sub-task's steps → `return(summary)` → from the next call on, the steps are hidden and the `return` call stands for them.**
+
+- the model folds its own sub-task: it writes the summary in `return`, no summarizer call; built when `fold_enabled` and compaction is on (`context_trigger` > 0); a worker gets neither
+- `Folder` keeps the branches open in the run, innermost last: `return` closes the innermost (`Error: no branch is open in this run` without one), so branches nest and never span runs
+- a fold is sticky like any decision: `state.folds[return call id] = branch call id`; `hidden()` finds both by call id in every call's items and hides from the first safe cut after the branch's output up to the safe cut that opens the response which called `return`
+- what stays: the prefix up to the branch output (the cached prefix holds), and the `return` call with its summary and output (`Folded the branch 'goal': ~N tokens of its steps are hidden …`)
+- hidden items cost nothing and are never compacted: no clearing, clipping or reasoning stub touches them, and a summary segment leaves them out
+- the call after a fold reads a shorter input, so it is not timed (the growth is negative)
+- across runs: `settle_context()` marks the run's turns whose items were hidden (`mark_folded()`: tool turns by call id, others by item digest) `meta["folded"]`, and `Turn.replay()` leaves them out, so the next run starts from the folded context
 
 ### Slicing
 
@@ -1494,7 +1508,11 @@ workers in a fresh context with their own tools, a capped answer, their steps
 nested under the leader's call with heartbeats, refusal, failure and tokens;
 `map`: cutting by lines and tokens, ranges, long lines, images, the part
 limit, answers in order sharing the slice, `map_parallel`, a failed part, a
-plan step; the console indenting a worker's steps),
+plan step; the console indenting a worker's steps), context folding (the
+steps hidden between safe cuts, nested branches, compaction leaving folded
+steps alone, the fold journaled for the next run, the switch), the evals
+(every task solved offline by the scripted policy and measured, seeded
+workspaces, the checks, targets, the summary),
 workspace path scoping (including symlinks and
 shell timeouts), tool assembly (vision on and off, guarded errors), repository
 URL normalization, git operations against local fixture repositories, pull
@@ -1528,6 +1546,14 @@ the steps done and opens into them with what is left and the speeds, the
 mark's label says both, the delegated step nests the worker's read (folded) and
 answer (no vote), a reload keeps the plan; captured as `*-slicing.png` and
 `*-worker.png` on the desktop and the phone, not committed yet).
+
+`test/agentic_eval.py` measures long tasks, run by hand against real models:
+
+- tasks (`TASKS`), each a workspace built from a seed, a question and a check: `needle` (find one line in `docs/`), `tally` (count `ERROR` lines in `logs/`, every line counts), `trail` (follow `Next:` lines across `hops/`)
+- per run (`Outcome`): success, peak context of the leader (`context.usage`, tokens and fill), wall time, requests, tokens, cost, tool calls of the leader and of its workers, map parts, compactions, folds; one log line each, `--out` appends JSON lines
+- `summarize()` / `table()`: per task and target, success rate, median and worst peak, median time, cost
+- targets `MODEL[@URL][#KEY_ENV]`; a loopback endpoint gets no key; `--window` runs a model in a smaller window, `--shell` gives it the shell (off: a model could grep past the reading)
+- `--scripted`: a policy model (`Policy`, `ScriptedModel` responders) solves every task with the harness's tools (`map`, `branch`, `return`) in a 16k window, offline and deterministic; the unit suite runs it, and a scripted failure exits 1
 
 ## 23. Example consumer
 

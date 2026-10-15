@@ -460,6 +460,20 @@ miss) took longer than the guard allowed. The constraints that shaped it:
   one worker per part, the answers sized so all of them fit one slice of the
   leader; one at a time by default, since a local server answers one request
   at a time anyway.
+- **Fold what is done.** Compaction summarises the oldest turns whatever
+  they hold; the model knows better which steps stop mattering once a
+  sub-task is done. `branch` opens a sub-task and `return` closes it with the
+  model's own summary: from the next call on the steps between are hidden.
+  The fold is one more sticky decision, found again by call id in every
+  call's items: the prefix up to the branch stays as cached, the `return`
+  call carries the summary, pairs are never split (safe cuts at both ends),
+  compaction leaves hidden steps alone, and the journal marks them so the
+  next run starts folded. No summarizer call, and branches nest.
+- **Measured on long tasks, not argued.** Peak context, success and wall
+  time are what slicing, `map` and folding are for, so `test/agentic_eval.py`
+  measures them per task and model on seeded workspaces. A scripted policy
+  solves every task offline with the same tools, so the eval itself is under
+  test and runs in the unit suite; real models are a target string away.
 - **Written ahead, like the journal.** Plans lived in memory, so a crash or
   `/resume` lost where the work stood and the model re-planned from the
   transcript. An `Agent` keeps them in a `PlanBook`, written through to the
@@ -1079,7 +1093,7 @@ harness.
       `question` / `options` of `plan`), `PlanBook` written through to the
       store and recited by `/resume`, `SizingTest`, `PlanJournalTest`,
       `WorkerTest` and the docs.
-    - [ ] Extended scope, in three parts:
+    - [x] Extended scope, in three parts:
       - [x] Minimum: the time to write a reply in the cap (`Throughput.replies`,
         `readable`, `READ_SHARE`), `Plan.view` and `plan.update` on every
         change (`Planner.notify`), the slice and the speeds on
@@ -1094,8 +1108,11 @@ harness.
         `map_parts()`, `map_answer()`, `map_prompt()`, `MAP_LIMIT`,
         `map_parallel`), `MapTest`, the nested worker in the `slicing` check
         and the docs.
-      - [ ] Extended: context folding (`branch` / `return`), evals
-        (`test/agentic_eval.py`).
+      - [x] Extended: context folding (`Folder`, `branch` / `return`,
+        `ContextState.folds`, `Compactor.hidden()`, `mark_folded()`,
+        `fold_enabled`), evals (`test/agentic_eval.py`: tasks, `Outcome`,
+        `Recorder`, `Policy`, targets, summary), `FoldTest`, `EvalTest` and
+        the docs.
 
 ## Fixes worth remembering
 

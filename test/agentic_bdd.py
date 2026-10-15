@@ -3061,6 +3061,217 @@ class MapTest(unittest.TestCase):
         self.assertIsNone(engine.build_map(off, A.RunResult(), self.ws))
 
 
+class FoldTest(unittest.TestCase):
+    """Context folding: `branch` opens a sub-task, `return` folds its steps into its summary."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "a.md").write_text("x" * 2000, encoding="utf-8")
+
+    def scripted(self, steps, **overrides):
+        return SliceTest.scripted(self, steps, **overrides)
+
+    @staticmethod
+    def calls(model_call):
+        """The call ids of the calls in the input of a model call, in order."""
+        return [i["call_id"] for i in model_call.input if i.get("type") == "function_call"]
+
+    @staticmethod
+    def call(call_id, name="tool"):
+        return {"type": "function_call", "call_id": call_id, "name": name, "arguments": "{}"}
+
+    @staticmethod
+    def output(call_id, text="ok"):
+        return {"type": "function_call_output", "call_id": call_id, "output": text}
+
+    def test_the_steps_between_a_branch_and_its_return_are_hidden(self):
+        items = [
+            {"role": "user", "content": "go"},
+            self.call("b1", "branch"), self.output("b1", "Branch opened"),
+            self.call("r1"), self.output("r1", "x" * 4000),
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hm"}]},
+            self.call("r2"), self.output("r2", "y" * 4000),
+            self.call("t1", "return"), self.output("t1", "Folded"),
+        ]
+        compactor = A.Compactor(A.TokenCounter(None), A.ContextBudget.of(100_000))
+        state = A.ContextState()
+        before = compactor.tokens(items, state)
+        state.folds["t1"] = "b1"
+        self.assertEqual(compactor.hidden(items, state), {3, 4, 5, 6, 7})
+        view = compactor.view(items, state)
+        self.assertEqual([i.get("call_id") for i in view], [None, "b1", "b1", "t1", "t1"])
+        self.assertLess(compactor.tokens(items, state), before - 2000)
+        state.folds["t9"] = "b9"  # a fold whose calls are not in the list hides nothing
+        self.assertEqual(compactor.hidden(items, state), {3, 4, 5, 6, 7})
+
+    def test_a_compaction_never_summarises_or_clears_what_a_fold_hid(self):
+        seen = []
+
+        async def summarize(previous, segment, focus=""):
+            seen.append(segment)
+            return "summary"
+
+        items = [
+            {"role": "user", "content": "go"},
+            self.call("b1", "branch"), self.output("b1", "Branch opened"),
+            self.call("r1", "read"), self.output("r1", "secret " * 400),
+            self.call("t1", "return"), self.output("t1", "Folded"),
+            self.call("c1", "read"), self.output("c1", "z " * 400),
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "done"}]},
+        ]
+        compactor = A.Compactor(A.TokenCounter(None), A.ContextBudget.of(100_000), summarize=summarize, keep=0)
+        state = A.ContextState(folds={"t1": "b1"})
+        report = run(compactor.compact(items, state, force=True))
+        self.assertNotIn("r1", report.cleared)
+        self.assertNotIn("secret", "".join(seen))
+        self.assertIn("Branch opened", "".join(seen))
+
+    def test_a_returned_branch_is_folded_from_the_next_call_on(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted([
+            [function_call("branch", {"goal": "Count the x"}, call_id="b1")],
+            [function_call("read_text_file", {"path": "a.md"}, call_id="r1")],
+            [function_call("list_directory", {"path": "."}, call_id="r2")],
+            [function_call("return", {"summary": "a.md holds 2000 x."}, call_id="t1")],
+            [assistant_message("done")],
+            [assistant_message("again")],
+        ])
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(self.calls(model.calls[3]), ["b1", "r1", "r2"])  # not folded yet
+        self.assertEqual(self.calls(model.calls[4]), ["b1", "t1"])
+        outputs = WorkerTest.outputs(model.calls[4])
+        self.assertTrue(outputs["b1"].startswith("Branch opened: Count the x."), outputs["b1"])
+        self.assertTrue(outputs["t1"].startswith("Folded the branch 'Count the x': ~"), outputs["t1"])
+        self.assertEqual(result.context.state.folds, {"t1": "b1"})
+
+    def test_branches_nest_and_return_closes_the_innermost(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted([
+            [function_call("branch", {"goal": "outer"}, call_id="b1")],
+            [function_call("read_text_file", {"path": "a.md"}, call_id="r1")],
+            [function_call("branch", {"goal": "inner"}, call_id="b2")],
+            [function_call("list_directory", {"path": "."}, call_id="r2")],
+            [function_call("return", {"summary": "inner done"}, call_id="t2")],
+            [function_call("return", {"summary": "outer done"}, call_id="t1")],
+            [function_call("return", {"summary": "nothing open"}, call_id="t0")],
+            [assistant_message("done")],
+        ])
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(self.calls(model.calls[5]), ["b1", "r1", "b2", "t2"])
+        self.assertEqual(self.calls(model.calls[6]), ["b1", "t1"])
+        self.assertEqual(
+            WorkerTest.outputs(model.calls[7])["t0"], "Error: no branch is open in this run"
+        )
+
+    def test_a_fold_is_kept_by_the_journal_for_the_next_run(self):
+        from agents.testing import ScriptedModel, assistant_message, function_call
+
+        model = ScriptedModel([
+            [function_call("branch", {"goal": "Count the x"}, call_id="b1")],
+            [function_call("read_text_file", {"path": "a.md"}, call_id="r1")],
+            [function_call("return", {"summary": "a.md holds 2000 x."}, call_id="t1")],
+            [assistant_message("done")],
+            [assistant_message("again")],
+        ])
+
+        class Scripted(A.Agent):
+            def build_model(self, config, role=A.LEADER_ROLE):
+                return model
+
+        agent = quiet_agent(Scripted, shell_enabled=False, workspace_root=self.root / "ws")
+        self.addCleanup(agent.close)
+        session = agent.sessions.create()
+        (session.workspace / "a.md").write_text("x" * 2000, encoding="utf-8")
+        first = run(agent.run("{{ config.input }}", session=session, input="go"))
+        self.assertTrue(first.ok, first.error)
+        turns = agent.memory.transcript(session.id).turns
+        folded = [t.call_id for t in turns if t.meta.get("folded")]
+        self.assertEqual(folded, ["r1"])
+        second = run(agent.run("{{ config.input }}", session=session, input="next"))
+        self.assertTrue(second.ok, second.error)
+        self.assertEqual(self.calls(model.calls[-1]), ["b1", "t1"])
+
+    def test_folding_needs_the_switch_and_a_context(self):
+        ws = A.Workspace(self.root)
+        engine = A.Engine(env=False, config_file=False, shell_enabled=False)
+        self.addCleanup(engine.close)
+        names = {tool.name for tool in run(engine.build_run_tools(ws, engine.config, A.RunResult()))}
+        self.assertTrue({"branch", "return"} <= names)
+        for off in (dict(fold_enabled=False), dict(context_trigger=0)):
+            config = engine.config.merge(**off)
+            names = {tool.name for tool in run(engine.build_run_tools(ws, config, A.RunResult()))}
+            self.assertFalse({"branch", "return"} & names, off)
+        self.assertFalse(engine.worker_config(engine.config).fold_enabled)
+
+
+class EvalTest(unittest.TestCase):
+    """`test/agentic_eval.py`: seeded workspaces, checks, measuring, offline policy."""
+
+    def setUp(self):
+        import test.agentic_eval as V
+
+        self.V = V
+
+    def test_every_task_is_solved_offline_and_measured(self):
+        outcomes = {o.task: o for o in run(self.V.evaluate(self.V.TASKS, [self.V.SCRIPTED], scripted=True))}
+        self.assertEqual(set(outcomes), {task.name for task in self.V.TASKS})
+        for outcome in outcomes.values():
+            self.assertTrue(outcome.success, (outcome.task, outcome.answer, outcome.error))
+            self.assertGreater(outcome.peak, 0)
+            self.assertGreater(outcome.requests, 1)
+            self.assertEqual(outcome.usable, self.V.SCRIPTED_WINDOW - 4096)
+        needle, tally, trail = outcomes["needle"], outcomes["tally"], outcomes["trail"]
+        self.assertEqual((needle.calls, tally.calls), (1, 1))  # one map each
+        self.assertGreater(needle.parts, 1)
+        self.assertGreaterEqual(needle.nested, needle.parts)  # every worker read its part
+        self.assertEqual(trail.folds, 1)
+        self.assertEqual(trail.calls, trail.facts["hops"] + 2)  # branch, a read a hop, return
+
+    def test_a_seed_builds_the_same_workspace_and_another_seed_another(self):
+        import random
+
+        def build(seed, where):
+            path = Path(self.enterContext(tempfile.TemporaryDirectory())) / where
+            facts = self.V.build_needle(path, random.Random(f"needle:{seed}"), 1)
+            return facts, sorted((p.name, p.read_text()) for p in path.rglob("*.md"))
+
+        self.assertEqual(build(0, "a"), build(0, "b"))
+        self.assertNotEqual(build(0, "a")[1], build(1, "a")[1])
+
+    def test_the_checks_read_answers_as_people_write_them(self):
+        self.assertTrue(self.V.check_code("The code is 4721.", None, {"code": "4721"}))
+        self.assertFalse(self.V.check_code("47210", None, {"code": "4721"}))
+        self.assertTrue(self.V.check_count("There are 1,204 such lines: 1204", None, {"count": 1204}))
+        self.assertFalse(self.V.check_count("none", None, {"count": 3}))
+
+    def test_a_target_parses_and_keeps_a_key_from_a_local_server(self):
+        target = self.V.Target.parse("qwen3:8b@http://localhost:11434/v1")
+        self.assertEqual(target.overrides(), {"inference_llm": "qwen3:8b", "inference_url": "http://localhost:11434/v1", "inference_key": ""})
+        with unittest.mock.patch.dict(os.environ, {"EVAL_KEY": "k"}):
+            hosted = self.V.Target.parse("m@https://api.example/v1#EVAL_KEY")
+            self.assertEqual(hosted.overrides()["inference_key"], "k")
+        self.assertEqual(self.V.Target.parse("").overrides(), {})
+        self.assertEqual(self.V.Target.parse("").label, "configured")
+
+    def test_runs_are_summarised_per_task_and_target(self):
+        outcomes = [
+            self.V.Outcome("t", "m", 0, success=True, peak=1000, fill=0.5, seconds=2.0, cost=0.1),
+            self.V.Outcome("t", "m", 1, success=False, peak=3000, fill=0.9, seconds=4.0, cost=0.1),
+        ]
+        rows = self.V.summarize(outcomes)
+        self.assertEqual(rows, [{
+            "task": "t", "target": "m", "runs": 2, "success": 0.5, "peak": 2000,
+            "peak_max": 3000, "fill_max": 0.9, "seconds": 3.0, "cost": 0.2,
+        }])
+        self.assertIn("50%", self.V.table(rows))
+
+
 class PlanViewTest(unittest.TestCase):
     """The plan and the measured speed, shown: `plan.update`, `/plan`, hello, the console."""
 

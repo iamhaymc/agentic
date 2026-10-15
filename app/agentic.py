@@ -600,6 +600,10 @@ class AgentConfig:
     # (local) model is compacted before a cold read could stall. 0 turns the
     # time cap off.
     plan_enabled: bool = True
+    # Context folding. With `fold_enabled` (and compaction on) the leader gets
+    # `branch` and `return`: the steps between the two are folded out of its
+    # context, and the summary it writes in `return` stands for them.
+    fold_enabled: bool = True
     slice_share: float = 0.25
     slice_stall: float = 0.5
     # Sizing question. A plan whose estimate passes one of these (slices to
@@ -1542,9 +1546,11 @@ class Turn:
         turn is left out when `tools` is false, and so is one without items,
         since a tool result means nothing without the call that asked for it.
         A cleared tool output is replayed as its stub, and a compaction never:
-        its summary is placed by `Transcript.window`.
+        its summary is placed by `Transcript.window`. A turn a branch folded
+        away (`folded`) is not replayed: the `return` that closed it stands
+        for it.
         """
-        if self.role == "compact":
+        if self.role == "compact" or self.meta.get("folded"):
             return []
         if self.role == "tool":
             if not tools:
@@ -2332,6 +2338,10 @@ class ContextState:
     clipped: dict[str, str] = field(default_factory=dict)
     #: Digests of the reasoning items cleared.
     thoughts: set[tuple[int, int]] = field(default_factory=set)
+    #: Branches folded (`branch` / `return`): the call id of each `return`,
+    #: to the call id of the `branch` it closed. The steps between the two
+    #: are hidden (see `Compactor.hidden`).
+    folds: dict[str, str] = field(default_factory=dict)
 
     def text(self) -> str:
         """The summary as shown to the model, the pinned request included."""
@@ -2428,16 +2438,58 @@ class Compactor:
         text = state.text()
         return self.counter.item(summary_message(text)) if text else 0
 
+    def hidden(self, items: list[Any], state: ContextState) -> set[int]:
+        """Indices of the items folded away by the branches of `state`.
+
+        From the first safe cut after the output of a `branch` call up to the
+        response that called `return` on it: the prefix up to the branch stays
+        as the provider cached it, and the `return` call, which carries the
+        summary, stands for what is hidden. A fold whose calls are not in
+        `items` hides nothing.
+        """
+        if not state.folds:
+            return set()
+        outputs: dict[str, int] = {}
+        calls: dict[str, int] = {}
+        for index, item in enumerate(items):
+            kind = item_kind(item)
+            if is_output(kind):
+                outputs[str(item.get("call_id") or "")] = index
+            elif is_call(kind):
+                calls[str(item.get("call_id") or "")] = index
+        cuts = safe_cuts(items)
+        hidden: set[int] = set()
+        for back, branch in state.folds.items():
+            opened, closing = outputs.get(branch), calls.get(back)
+            if opened is None or closing is None or closing <= opened:
+                continue
+            start = next((cut for cut in cuts if cut > opened), None)
+            end = max((cut for cut in cuts if cut <= closing), default=None)
+            if start is not None and end is not None and end > start:
+                hidden.update(range(start, end))
+        return hidden
+
     def view(self, items: list[Any], state: ContextState) -> list[Any]:
-        """The input sent: the summary, then the kept items, masked."""
+        """The input sent: the summary, then the kept items, masked, the
+        folded ones left out."""
         cut = self.locate(items, state)
+        hidden = self.hidden(items, state)
         head = [summary_message(state.text())] if state.text() else []
-        return head + [self.masked(item, state) for item in items[cut:]]
+        return head + [
+            self.masked(item, state)
+            for index, item in enumerate(items[cut:], cut)
+            if index not in hidden
+        ]
 
     def tokens(self, items: list[Any], state: ContextState, fixed: int = 0) -> int:
         """Uncalibrated tokens of the input `view` would send."""
         cut = self.locate(items, state)
-        return fixed + self.head_cost(state) + sum(self.cost(i, state) for i in items[cut:])
+        hidden = self.hidden(items, state)
+        return fixed + self.head_cost(state) + sum(
+            self.cost(item, state)
+            for index, item in enumerate(items[cut:], cut)
+            if index not in hidden
+        )
 
     # -- deciding ------------------------------------------------------------
 
@@ -2465,7 +2517,8 @@ class Compactor:
         needed.
         """
         state.cut = self.locate(items, state)
-        costs = [self.cost(item, state) for item in items]
+        hidden = self.hidden(items, state)  # folded: never sent, never compacted
+        costs = [0 if index in hidden else self.cost(item, state) for index, item in enumerate(items)]
         current = fixed + self.head_cost(state) + sum(costs[state.cut:])
         high = self.counter.raw(self.budget.high)
         goal = self.counter.raw(self.budget.low)
@@ -2480,21 +2533,24 @@ class Compactor:
 
         def settle(index: int) -> None:
             nonlocal current
-            cost = self.cost(items[index], state)
+            cost = 0 if index in hidden else self.cost(items[index], state)
             current -= costs[index] - cost
             costs[index] = cost
 
         # 1. reasoning before the newest response
         if self.reasoning:
             for index in range(state.cut, latest):
-                if item_kind(items[index]) == "reasoning":
+                if index not in hidden and item_kind(items[index]) == "reasoning":
                     key = self.counter.key(items[index])
                     if key not in state.thoughts:
                         state.thoughts.add(key)
                         report.thoughts += 1
                         settle(index)
         # 2. tool outputs, oldest first, the newest `keep` spared
-        outputs = [i for i in range(state.cut, len(items)) if is_output(item_kind(items[i]))]
+        outputs = [
+            i for i in range(state.cut, len(items))
+            if i not in hidden and is_output(item_kind(items[i]))
+        ]
         spared = set(outputs[-self.keep:]) if self.keep else set()
         for index in outputs:
             if current <= goal and not force:
@@ -2515,11 +2571,11 @@ class Compactor:
             if cut > state.cut and (force or sum(costs[state.cut:cut]) >= worth):
                 if on_summary is not None:
                     await on_summary(report)
-                segment = items[state.cut:cut]
+                segment = [items[i] for i in range(state.cut, cut) if i not in hidden]
                 state.summary = await self.fold(state.summary, segment, focus, items)
                 if pinned and 0 <= pinned_at < cut:
                     state.pinned = self.bounded(pinned)
-                report.summarized = len(segment)
+                report.summarized = cut - state.cut
                 report.summary = state.text()
                 report.cut = state.cut = cut
                 state.anchor = self.counter.key(items[cut]) if cut < len(items) else None
@@ -2531,7 +2587,7 @@ class Compactor:
             tail = [
                 i
                 for i in range(state.cut, len(items))
-                if is_output(item_kind(items[i])) and items[i].get("call_id")
+                if i not in hidden and is_output(item_kind(items[i])) and items[i].get("call_id")
             ]
             for index in sorted(tail, key=lambda i: -costs[i]):
                 if current <= usable:
@@ -5731,6 +5787,68 @@ class Planner:
         return self.counter.text(text) + -(-skipped // TokenCounter.BYTES_PER_TOKEN)
 
 
+class Folder:
+    """Context folding for one run: `branch` opens a sub-task, `return` folds it.
+
+    The steps between a `branch` and its `return` are hidden from the next
+    model call on (`ContextState.folds`, applied by `Compactor.hidden`); the
+    `return` call, which carries the model's own summary of the sub-task,
+    stands for them. Branches nest: `return` closes the innermost one open in
+    this run. `context` returns the run's `ContextRun` (built after the tools).
+    """
+
+    def __init__(self, context: Callable[[], "ContextRun | None"]) -> None:
+        self.context = context
+        #: The branches open in this run, innermost last: (call id, goal).
+        self.open: list[tuple[str, str]] = []
+
+    def branch(self, call_id: str | None, goal: str) -> str:
+        goal = " ".join(goal.split())
+        if not goal:
+            return "Error: branch needs a goal"
+        self.open.append((str(call_id or ""), goal))
+        return (
+            f"Branch opened: {goal}. Work on it, then call return with what it found: "
+            "every step from here to that call is folded out of your context and the "
+            "summary stands for them."
+        )
+
+    def back(self, call_id: str | None, summary: str) -> str:
+        if not self.open:
+            return "Error: no branch is open in this run"
+        if not summary.strip():
+            return "Error: return needs a summary of what the branch found"
+        context = self.context()
+        if context is None:
+            return "Error: folding needs context compaction (context_trigger > 0)"
+        branch, goal = self.open.pop()
+        context.state.folds[str(call_id or "")] = branch
+        tokens = self.size(context, branch)
+        return (
+            f"Folded the branch '{goal}': ~{compact_tokens(tokens)} tokens of its steps are "
+            "hidden from the next call on; your summary in this call stands for them."
+        )
+
+    @staticmethod
+    def size(context: "ContextRun", branch: str) -> int:
+        """Tokens the steps after `branch` take in the newest input (provider units)."""
+        items = context.items
+        opened = next(
+            (
+                index for index, item in enumerate(items)
+                if is_output(item_kind(item)) and str(item.get("call_id") or "") == branch
+            ),
+            None,
+        )
+        if opened is None:
+            return 0
+        start = next((cut for cut in safe_cuts(items) if cut > opened), len(items))
+        compactor = context.compactor
+        return context.counter.scaled(
+            sum(compactor.cost(item, context.state) for item in items[start:])
+        )
+
+
 class ToolRegistry:
     """Builds the model facing tool list for a workspace.
 
@@ -5762,6 +5880,7 @@ class ToolRegistry:
         planner: "Planner | None" = None,
         delegate: Delegator | None = None,
         mapper: Mapper | None = None,
+        folder: Folder | None = None,
     ) -> list[Any]:
         """Build the tools for `workspace`.
 
@@ -5779,6 +5898,8 @@ class ToolRegistry:
         puts its sizing question through `ask`. `delegate` runs one step in a
         fresh context; when it is given the leader gets `delegate`. `mapper`
         runs one task over the parts of some inputs; the leader gets `map`.
+        `folder` folds sub-tasks out of the context; the leader gets `branch`
+        and `return`.
         """
         tools = (
             list(self._build_defaults(workspace, vision, progress, read_limit))
@@ -5795,6 +5916,8 @@ class ToolRegistry:
             tools.append(self._build_delegate_tool(delegate))
         if mapper is not None:
             tools.append(self._build_map_tool(mapper))
+        if folder is not None:
+            tools.extend(self._build_fold_tools(folder))
         tools.extend(factory(workspace) for factory in self._factories.values())
         return tools
 
@@ -5994,6 +6117,44 @@ class ToolRegistry:
                 "'tools' names the only tools the workers get."
             ),
         )
+
+    def _build_fold_tools(self, folder: Folder) -> list[Any]:
+        """The tools that fold a finished sub-task out of the context."""
+        from agents import function_tool
+        from agents.tool_context import ToolContext
+
+        @self.guard
+        async def branch(ctx: Any, goal: str) -> str:
+            return folder.branch(ctx.tool_call_id, goal)
+
+        @self.guard
+        async def return_branch(ctx: Any, summary: str) -> str:
+            return folder.back(ctx.tool_call_id, summary)
+
+        branch.__annotations__["ctx"] = ToolContext
+        return_branch.__annotations__["ctx"] = ToolContext
+        return [
+            function_tool(
+                branch,
+                name_override="branch",
+                description_override=(
+                    "Open a sub-task whose steps will not matter once it is done: "
+                    "searching, reading around, trying things. Work on it, then call "
+                    "return with what it found: every step between the two calls is "
+                    "folded out of your context, and only the goal and the summary "
+                    "stay. Branches nest."
+                ),
+            ),
+            function_tool(
+                return_branch,
+                name_override="return",
+                description_override=(
+                    "Close the innermost open branch. 'summary' must hold everything "
+                    "later steps need from it (findings, paths, decisions, open "
+                    "problems): the branch's steps are folded out of your context."
+                ),
+            ),
+        ]
 
     def _build_ask_tool(self, ask: Asker) -> Any:
         """The tool that lets the leader ask the person behind the run."""
@@ -6959,6 +7120,7 @@ class Engine:
         planner: Planner | None = None,
         delegate: Delegator | None = None,
         mapper: Mapper | None = None,
+        folder: Folder | None = None,
     ) -> list[Any]:
         resolved = config or self.config
         vision = self.build_vision(resolved, usage=usage, session_id=session_id)
@@ -6972,6 +7134,7 @@ class Engine:
             planner=planner,
             delegate=delegate,
             mapper=mapper,
+            folder=folder,
         )
 
     async def build_run_tools(
@@ -6983,7 +7146,7 @@ class Engine:
     ) -> list[Any]:
         """The built-in tools of one run over `workspace`, wired to the run:
         its progress reporter, its asker, its read page, its planner, its
-        delegate and its map (each only when the config enables it)."""
+        delegate, its map and its folder (each only when the config enables it)."""
         planner = self.build_planner(config, result, workspace)
         return self.build_tools(
             workspace,
@@ -6997,6 +7160,7 @@ class Engine:
             planner=planner,
             delegate=self.build_delegate(config, result, workspace, planner),
             mapper=self.build_map(config, result, workspace, planner),
+            folder=self.build_folder(config, result),
         )
 
     def build_sdk_agent(self, config: AgentConfig, tools: list[Any]) -> Any:
@@ -7055,6 +7219,13 @@ class Engine:
             AskLimits.of(config),
             notify,
         )
+
+    def build_folder(self, config: AgentConfig, result: RunResult) -> Folder | None:
+        """The folder behind `branch` and `return`, or ``None`` when folding is
+        off or the run compacts nothing (`context_trigger` 0)."""
+        if not config.fold_enabled or config.context_trigger <= 0:
+            return None
+        return Folder(lambda: result.context)
 
     def plan_view(self, session_id: str | None) -> dict[str, Any] | None:
         """The plan of a session as a client shows it, outside any run."""
@@ -7846,6 +8017,7 @@ class Engine:
             plan_enabled=False,
             ask_enabled=False,
             delegate_enabled=False,
+            fold_enabled=False,
         )
 
     def fork(self, events: EventBus) -> "Engine":
@@ -8644,6 +8816,7 @@ class Agent(Engine):
                 self.context_fixed[session_id] = context.fixed
             transcript = self.memory.transcript(session_id)
             changed = self.mark_cleared(transcript.turns, context.state)
+            changed += self.mark_folded(transcript.run_of(result.run_id), context)
             for turn in transcript.run_of(result.run_id):
                 keep = turn.meta.get("keep") if turn.role == "compact" else None
                 if isinstance(keep, dict) and keep.get("calls"):
@@ -8666,6 +8839,31 @@ class Agent(Engine):
             stub = state.cleared.get(turn.call_id) if turn.call_id else None
             if stub and turn.meta.get("cleared") != stub:
                 turn.meta["cleared"] = stub
+                changed.append(turn)
+        return changed
+
+    @staticmethod
+    def mark_folded(turns: Iterable[Turn], context: ContextRun) -> list[Turn]:
+        """Mark the turns of a run whose items its branches folded away, so the
+        next run replays the fold; returns those changed."""
+        items, state = context.items, context.state
+        hidden = context.compactor.hidden(items, state)
+        if not hidden:
+            return []
+        calls = {
+            str(items[index].get("call_id") or "")
+            for index in hidden
+            if is_call(item_kind(items[index]))
+        }
+        keys = {TokenCounter.key(items[index]) for index in hidden}
+        changed: list[Turn] = []
+        for turn in turns:
+            if turn.meta.get("folded") or not turn.items:
+                continue
+            if turn.call_id in calls if turn.role == "tool" else all(
+                TokenCounter.key(item) in keys for item in turn.items
+            ):
+                turn.meta["folded"] = True
                 changed.append(turn)
         return changed
 

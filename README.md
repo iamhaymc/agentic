@@ -178,6 +178,8 @@ Work too large for one pass is planned in steps that fit:
 ```yaml
 plan:
   enabled: true  # the plan tool and the budget note
+fold:
+  enabled: true  # branch / return fold a finished sub-task into its summary
   ask_slices: 8  # a larger plan asks the user once (also ask_minutes, ask_cost)
 slice:
   share: 0.25    # one step reads at most this share of the budget
@@ -196,6 +198,7 @@ map:
 - `delegate` runs one step in a fresh context with its own tools; only its capped answer returns
 - `map` cuts inputs by tokens at line boundaries and runs one worker per part; the answers come back in order, sized to fit one slice
 - a worker's steps show nested under its call on the page and indented in the repl
+- `branch` / `return` fold a finished sub-task out of the context; only its goal and summary stay
 - every call ends with a budget note: context in use, the slice, the open plan
 - the plan is written through to the store: `/resume` and a restart continue it
 - the plan rings the mark (one arc per step) and sits in the bar; `/plan` lists it with the speeds
@@ -206,6 +209,13 @@ BDD Test(s):
 
 ```bash
 python -m unittest test.agentic_bdd -v
+```
+
+Eval(s) (slow; `--scripted` runs offline):
+
+```bash
+python -m test.agentic_eval --scripted
+python -m test.agentic_eval --model qwen3:8b@http://localhost:11434/v1 --runs 3  # or the configured leader
 ```
 
 E2E Test(s):
