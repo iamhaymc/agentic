@@ -100,3 +100,32 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 - [ ] **Rule review.** A vote keeps whatever rule the model distils. Show the
       rule for a one click keep or discard, let a second vote undo the first,
       and list, edit and drop rules from the page rather than only `/rules`.
+
+- [ ] **Decision models, as a role.** `SystemOneClient` asks Ollama
+      `clef-flash` / `clef` typed questions (`Noul` / `Choice` / `Score`) and
+      the `decision` role resolves from `inference_ldm` (see DESIGN.md §12). A
+      decision model never drives the loop: it is a specialist behind a tool,
+      like vision, and confidence, not the prompt, gates acting on its answer.
+      Still open:
+  - Minimum Scope (the leader decides through a tool):
+    - [ ] `ModelPool.decide(spec, state, questions, …)` over one cached `SystemOneClient` per endpoint, with `policy` / `usage` / `on_retry`; no window or `num_ctx` probes for this role
+    - [ ] `Decisioner` type beside `Asker` / `Delegator`, and `Engine.build_decision(config)` mirroring `build_vision` (`None` when the role is off)
+    - [ ] `decide` tool in `ToolRegistry.build` (`decision=` delegate), offered only with a decision model; `decision_enabled` withholds it
+    - [ ] `render_answers`: one line per question, probabilities highest first, `conf 0.95`; an empty answer says so
+    - [ ] A failing decision model returns an `Error: …` line and never breaks the leader
+  - Complete Scope (the harness keeps the typed answers):
+    - [ ] `decision.end` event carrying the answers, and `Engine.decisions` (the run's answers by call id)
+    - [ ] `decision_confidence`: below it the rendered line adds "unsure, decide for yourself" (`0` accepts all)
+    - [ ] `build_distiller` on the decision role: a `Choice` keep / discard plus a `Score` of how general the rule is
+    - [ ] DESIGN.md §21 (Extending): the decision role and the `decide` tool
+  - Extended Scope (the harness judges with it):
+    - [ ] `Compactor`: a `Noul` on whether a segment is worth summarising; `Planner`: a `Score` against `AskLimits`
+    - [ ] Guardrail before writes and shell commands (70–500 ms, input-only pricing)
+    - [ ] Clef images: `view_image` feeds `decide` (`images=`) instead of a vision model
+    - [ ] `Decider`: a sibling of `Engine` (pool, policy, events; no `stream()`, tools or blocks) for a consumer that wants decisions without a loop
+  - Tests:
+    - [ ] `render_answers`: all three types, the confidence floor, an empty answer
+    - [ ] The tool is absent without a decision model and present with one
+    - [ ] A 429 is retried and a 401 is not (the client tests cover 503 and 404)
+    - [ ] Eval (`test/agentic_eval.py`): a scripted decision responder, so the loop is asserted offline
+    - [ ] Eval: one live run against Ollama `clef-flash` and one against TypeSafe `jev`, latency and cost per call
