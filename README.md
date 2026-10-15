@@ -156,6 +156,18 @@ uv run python util/caveman_data.py eval --url http://gpu:8000/v1 --model caveman
 - `replay --verifier qwen/qwen3.5-9b` re-checks shrunk turns with a student-sized verifier
 - Terminal-Bench (Harbor) and BFCL runs against the served student: [DESIGN](DESIGN.md#eval)
 
+## ▶️ Run (GPU)
+
+Preview a private AWS GPU inference stack; no resources created without `--apply`:
+
+```bash
+uv run --no-project python util/ec2_setup.py --region us-east-1 --vpc-id vpc-REPLACE --subnet-id subnet-REPLACE --allow-cidr 10.0.0.0/8
+```
+
+- Existing target VPC/subnet required; Ubuntu 22.04 GPU AMI, encrypted EBS, minimal SSM role, vLLM and pinned Qwen3.8 FP8 model configured automatically
+- `--check` validates target resources read-only; `--apply` creates a new billed stack and waits for inference readiness
+- [DESIGN](DESIGN.md#25-ec2-inference-deployment) — Shared Resource Arguments, Source Inventory And Operations
+
 ## ▶️ Write (Editor)
 
 Long prompts get a markdown editor with highlighting:
