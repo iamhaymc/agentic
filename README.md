@@ -141,6 +141,21 @@ uv run python util/caveman_data.py stats --level full  # re-summarize turns.json
 
 > Compressor: the `.env` inference config (OpenRouter), or `CAVEMAN_URL` + `CAVEMAN_LLM` ([OPTIONS](OPTIONS.md#caveman-data)); depth in [DESIGN](DESIGN.md#24-caveman-sft-data)
 
+## ▶️ Run (Student)
+
+Mix levels into one SFT set, train a student remotely, eval it:
+
+```bash
+uv run python util/caveman_data.py mix                                          # plan + mix/train.jsonl + mix/eval.jsonl
+uv run python util/caveman_data.py shrink --planned --level ultra --traces 8    # each trace once, at its planned level
+uv run util/caveman_train.py --model Qwen/Qwen3.5-4B --out runs/caveman-4b      # LoRA, any CUDA box (80 GB)
+uv run python util/caveman_data.py eval --url http://gpu:8000/v1 --model caveman  # similarity vs reasoning tokens per tag
+```
+
+- plan: 5% held out, 10% original and untagged, the rest one level each (`lite` / `full` / `ultra`)
+- `replay --verifier qwen/qwen3.5-9b` re-checks shrunk turns with a student-sized verifier
+- Terminal-Bench (Harbor) and BFCL runs against the served student: [DESIGN](DESIGN.md#eval)
+
 ## ▶️ Write (Editor)
 
 Long prompts get a markdown editor with highlighting:
@@ -226,7 +241,7 @@ BDD Test(s):
 
 ```bash
 python -m unittest test.agentic_bdd -v
-uv run python -m unittest discover -s util -p "caveman_data_bdd.py"  # caveman data, ~1 s
+uv run python -m unittest discover -s util -p "caveman_data_bdd.py"  # caveman data + trainer data path, ~2 s
 ```
 
 Eval(s) (slow; `--scripted` runs offline):

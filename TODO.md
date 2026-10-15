@@ -13,14 +13,15 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 - [ ] implement an efficient way for token text that fades in quickly when displayed.
 - [ ] Redesign the context usage meter so it is communicated through the main icon (maybe a ring around the icon that fills up like in vscode) 
 
-- [ ] **Caveman SFT data, extended scope.** `util/caveman_data.py` shrinks
-      agent reasoning with gates and a replay check (see DESIGN.md §24). Still open:
-  - [ ] LoRA SFT on a small student (Qwen3.5 4B/9B); the local GPU is a GTX 1070 8 GB, so train remotely
-  - [ ] Eval accuracy vs reasoning tokens: OpenThoughts-TBLite / Terminal-Bench, BFCL; baseline vs shrunk, per level
-  - [ ] Shrink at full scale: 94k traces, ~1.1M turns; OpenRouter ran 50 traces in 11 min (~14 days for all, traces in order): shrink several traces at once
-  - [ ] Narrow the hard-turn rule: 40% of turns count as hard (any `error` word in the output) and save 23% at `lite` vs 36% at `full`
-  - [ ] A student-sized verifier for the replay check (does a 4B still derive the commands?)
-  - [ ] Mix levels into one SFT set (per-trace level sampling) and keep a share of untagged original traces
+- [ ] **Caveman SFT, runs.** The pipeline shrinks, mixes, trains and evals
+      (see DESIGN.md §24); what is left needs a GPU, money or a served student:
+  - [ ] Train on a rented GPU: `util/caveman_train.py` on Qwen3.5 4B, then 9B (the local GTX 1070 only smoke-tests)
+  - [ ] Shrink at full scale: `fetch --parquet --limit 0`, `mix`, `shrink --planned --traces 8` per level; ~1.1M turns, each once: ~3 days at 4 × 4 for all levels (50 traces in 2.9 min)
+  - [ ] Long turns: 10% of turns hold 29% of the prose and run at `lite`; try `full` on long-only turns, keep `lite` after a failure
+  - [ ] Benchmarks per level: Harbor and BFCL send no budget tag; a chat template per level or a tag-injecting proxy
+  - [ ] A real 4B verifier: OpenRouter serves no Qwen3.5 4B (9B: 91% pass; a 3B of another family: 76%, noise); serve one and `replay --verifier-url`
+  - [ ] Eval on the student's own history (rollout), not the teacher's verbose turns
+  - [ ] Rows past `--max-len` 16k tokens are cut; a chunked loss would fit 32k on one GPU
 
 - [ ] **Context compaction, extended scope.** Compaction is token aware,
       tiered and runs before every model call (see CHANGES.md). Still open:
