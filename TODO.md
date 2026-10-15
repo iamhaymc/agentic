@@ -21,6 +21,14 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       (a number, a path, a yes/no), an optional `ask_timeout` after which the tool answers for the user,
       and a way for a one shot `--input` run to answer on stdin.
 
+- [ ] **Response pacing.** Generation ran out of the response-time window twice:
+      a long read left the context heavy, and the following turn generated a large
+      edit (or a long explanation) at ~283 tokens/s, which exceeded the budget.
+      Big edits must go out as short, targeted patches — one section per call —
+      after slicing reads, never one giant read-then-write turn. The harness
+      should surface the pacing limits (`read_output_limit`, the response
+      timeout) in its `[budget]` note so a run can plan around them.
+
 - [ ] **Decision models, as a role.** `SystemOneClient` asks Ollama
       `clef-flash` / `clef` typed questions (`Noul` / `Choice` / `Score`) and
       the `decision` role resolves from `inference_ldm` (see DESIGN.md §12). A
