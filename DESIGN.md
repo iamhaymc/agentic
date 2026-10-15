@@ -221,6 +221,7 @@ genre: noir
 | `AGENTIC_WORKER_MODEL`, `AGENTIC_WORKER_API_URL`, `AGENTIC_WORKER_API_KEY`    | Worker role (defaults to the leader)        |
 | `AGENTIC_WORKER_INSTRUCTIONS`, `AGENTIC_WORKER_MAX_TURNS`                     | Worker system prompt and turn limit         |
 | `AGENTIC_WORKER_MAX_TOKENS`                                                   | Worker answer cap (`0` uncapped)            |
+| `AGENTIC_MAP_PARALLEL`                                                        | `map` workers at once                       |
 | `AGENTIC_RULES_ENABLED`, `AGENTIC_RULES_MAX_CHARS`                            | Learned rules; size that raises a warning   |
 | `AGENTIC_RULES_INSTRUCTIONS`, `AGENTIC_RULES_MAX_TOKENS`                      | Rule distiller prompt and answer budget     |
 | `AGENTIC_SUMMARY_MODEL`, `AGENTIC_SUMMARY_API_URL`, `AGENTIC_SUMMARY_API_KEY` | Summary role (defaults to the leader)       |
@@ -276,6 +277,7 @@ Handlers may be sync or async; exceptions are printed to stderr and swallowed.
 | `tool.start`                   | `id`, `kind`, `name`, `call_id`, `arguments`, `text` |
 | `tool.progress`                | `id`, `kind`, `name`, `call_id`, `text` (output, empty for a heartbeat), `duration` |
 | `tool.end`                     | the above plus `ok`, `result`, `duration`  |
+| `block.*`, `tool.*`, `context.compact` of a worker | as above plus `parent` (the block of the call that started it) and `depth` |
 | `model.retry`                  | `role`, `error_kind`, `attempt`, `attempts`, `delay`, `error` |
 | `model.wait`                   | `role`, `elapsed` (seconds silent), `timeout` (the stall budget, `0` unbounded) |
 | `context.usage`                | `tokens`, `window`, `usable`, `high`, `low`, `fill` (tokens / usable), `estimated` (false when the provider counted), `slice`, `prefill` / `decode` once measured |
@@ -532,9 +534,20 @@ Workers (`delegate`, `Engine.build_delegate()`, `run_worker()`):
 - `worker_config()` — the `worker` role (`worker_model`, else the leader) as the leader of a config with `worker_instructions` + `Answer within about N words.`, `worker_max_turns`, and `plan_enabled` / `ask_enabled` / `delegate_enabled` off
 - `fork(bus)` — a shallow copy of the engine on a private `EventBus`: same pool, counters, speeds and class overrides; the worker's `RunResult` has no session, so `Agent.checkpoint()` journals nothing of it
 - `build_run_tools()` builds the worker's own tools (a fresh `ReadRepeats`, its own read page); `tools` keeps only those named (an unknown name is an error listing the rest)
-- `WorkerRelay` turns the private bus into `tool.progress` on the `delegate` block: `-> call(...)`, `!! name failed: …`, `~~ compacted …` as lines, anything else a heartbeat at most once a second; each report keeps the leader's stall guard satisfied
+- `WorkerRelay` relays the private bus: the worker's blocks, calls and compactions (`NESTED`) are published on the leader's bus by `nest()` with `parent` (the `delegate` block) and `depth` (1), and the call gets a heartbeat (`tool.progress`, empty) at most once a second; each keeps the leader's stall guard satisfied; the worker's `agent.*`, `context.usage`, waits and retries never reach the leader's bus (without a parent block it falls back to `-> call(...)`, `!! name failed: …`, `~~ compacted …` lines)
 - answer: `worker.output`, clipped to `worker_max_tokens` (head and tail), then `[worker: N tool calls in Ss]`; a failure is `Error: the worker failed (kind) after N tool calls: …`, never raised
 - tokens: the worker's calls are recorded on the run's `Usage` through `current_usage()`, so `agent.end` prices them
+- shown: the page nests the worker's blocks in the `delegate` block (a thread down the left edge, each step folded to its head once done, no votes on its answer); the console indents its calls, outcomes, compactions and answer under the call (`  | `, two spaces a level), leaving out what it streams so parallel workers never interleave within a line; nothing of it is journaled, so a reload shows the `delegate` answer alone
+
+Map (`map`, `Engine.build_map()`, `Planner.chunks()`, `map_parts()`):
+
+- `map(task, inputs, chunk_tokens=0, step=0, tools=[])` runs one task over inputs too large for one worker; built with `delegate` (`delegate_enabled`)
+- cut: `Planner.chunks(inputs, limit, most)` — each file (or range `path:A-B`) at line boundaries into parts of at most `limit` tokens (`worker_budget()`, or `chunk_tokens` when smaller): `path:A-B` with its tokens, a file that fits whole named alone, a longer line a part of its own, an image one part; counted while 4 MiB last, then estimated; reading stops once past `most`
+- more than `MAP_LIMIT` (64) parts is refused: map fewer inputs at a time
+- answers share the leader's slice: each worker is told `Answer within about N words` for `map_answer()` = slice / parts, within `worker_max_tokens`, at least `MAP_ANSWER` (100)
+- each part: `map_prompt()` (the task, `Your part (k of n): path, lines A-B (~T tokens)` and the `read_text_file` call that reads it), one worker (`run_worker`, no trailer), `map_parallel` (1) at once (`asyncio.Semaphore`); a `part k/n` tool block nested under the `map` call, its worker's steps at depth 2
+- answer: `Mapped n parts (~T tokens) of inputs in Ss[, f failed]:` then `## k/n path:A-B` and each answer in order; a failed part is marked `(failed)` with its error, the others kept
+- `step` lends its inputs and is marked like a delegated step (`done` only when no part failed)
 
 ```mermaid
 flowchart LR
@@ -546,7 +559,9 @@ flowchart LR
   Q -- no --> B[(PlanBook)]
   A --> B
   B --> D[delegate a step: fresh context]
+  B --> M[map a step: one worker a part]
   D --> B
+  M --> B
   L --> N[note on the next call]
   B --> N
 ```
@@ -1170,9 +1185,12 @@ differs.
 - **Clipboard** — `writeText` where the page is allowed it, a hidden selection
   and `execCommand` where it is not, which is what the copy button on a block
   uses over plain http.
-- **Blocks** — `Blocks.ensure(id, kind, role)` creates a block on first sight and
+- **Blocks** — `Blocks.ensure(id, kind, role, parent)` creates a block on first sight and
   returns it thereafter, so `block.delta` messages may arrive interleaved and out
-  of order. `append` and `set` mark the body dirty and paint it on the next
+  of order. With a `parent` the page holds, the block is a worker's step,
+  nested in that block's `.block-nest`; it folds to its head once done (an
+  answer stays open) and offers no vote. Kind styles apply to a block's own
+  head and body only (`>`), so a nested answer is not drawn as its tool. `append` and `set` mark the body dirty and paint it on the next
   animation frame, so a hundred tokens a second cost one render a frame rather
   than a render a token; `end` paints immediately. The view auto-scrolls only
   when the reader is already near the bottom. Every block has a head that
@@ -1472,8 +1490,11 @@ the plan and its refusals; the plan viewed and published on every change,
 `/plan`, the plan in `hello`, the console lines; the sizing
 question, once per plan and through a real run; plans written through, read
 back by a restarted agent, recited by `/resume`, dropped with their session;
-workers in a fresh context with their own tools, a capped answer, progress
-relayed to the leader's call, refusal, failure and tokens),
+workers in a fresh context with their own tools, a capped answer, their steps
+nested under the leader's call with heartbeats, refusal, failure and tokens;
+`map`: cutting by lines and tokens, ranges, long lines, images, the part
+limit, answers in order sharing the slice, `map_parallel`, a failed part, a
+plan step; the console indenting a worker's steps),
 workspace path scoping (including symlinks and
 shell timeouts), tool assembly (vision on and off, guarded errors), repository
 URL normalization, git operations against local fixture repositories, pull
@@ -1504,8 +1525,9 @@ gauge, `/compact` leaves a folded marker holding the summary, a reload replays
 it; captured as `desktop-compact.png`, not committed yet) and the plan
 (`slicing`: a planned run rings the mark with an arc per step, the strip counts
 the steps done and opens into them with what is left and the speeds, the
-mark's label says both, a reload keeps the plan; captured as
-`desktop-slicing.png` and `phone-portrait-slicing.png`, not committed yet).
+mark's label says both, the delegated step nests the worker's read (folded) and
+answer (no vote), a reload keeps the plan; captured as `*-slicing.png` and
+`*-worker.png` on the desktop and the phone, not committed yet).
 
 ## 23. Example consumer
 

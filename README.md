@@ -185,6 +185,8 @@ slice:
 worker:
   model: ""      # delegate runs on this model (empty: the leader)
   max_tokens: 1000  # a worker's answer is clipped to this
+map:
+  parallel: 1    # map workers at once (raise for a hosted model)
 ```
 
 - **measure → cap → plan → ask → delegate → recite**, enforced by the harness, not left to the model
@@ -192,6 +194,8 @@ worker:
 - `plan` takes steps and their inputs (paths, globs, `notes.md:1-400`), measures each and refuses a step over one slice
 - a large plan (slices, minutes, cost) or a split that depends on intent asks the user once
 - `delegate` runs one step in a fresh context with its own tools; only its capped answer returns
+- `map` cuts inputs by tokens at line boundaries and runs one worker per part; the answers come back in order, sized to fit one slice
+- a worker's steps show nested under its call on the page and indented in the repl
 - every call ends with a budget note: context in use, the slice, the open plan
 - the plan is written through to the store: `/resume` and a restart continue it
 - the plan rings the mark (one arc per step) and sits in the bar; `/plan` lists it with the speeds

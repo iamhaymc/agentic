@@ -2686,7 +2686,7 @@ class WorkerTest(unittest.TestCase):
         self.assertTrue(outputs["d1"].startswith("A is all x.\n[worker: 1 tool calls in "), outputs["d1"])
         self.assertEqual([call.name for call in result.tools], ["delegate"])
 
-    def test_the_worker_is_shown_as_progress_of_its_call(self):
+    def test_the_workers_steps_are_nested_under_its_call(self):
         from agents.testing import assistant_message, function_call
 
         engine, _ = self.scripted([
@@ -2699,13 +2699,45 @@ class WorkerTest(unittest.TestCase):
         engine.events.on(A.EventType.ALL, seen.append)
         result = run(engine.run("go", workspace=self.root, session_id="s1"))
         self.assertTrue(result.ok, result.error)
-        lines = [e.data["text"] for e in seen if e.type == A.EventType.TOOL_PROGRESS]
-        self.assertTrue(lines, "nothing relayed")
-        self.assertTrue(all(e.data["id"] == result.tools[0].id for e in seen if e.type == A.EventType.TOOL_PROGRESS))
-        self.assertIn('-> read_text_file(path="a.md")\n', lines)
-        started = [e.data["name"] for e in seen if e.type == A.EventType.TOOL_START]
-        self.assertEqual(started, ["delegate"])  # the worker's calls stay off the leader's bus
+        call = result.tools[0].id
+        own = [e for e in seen if "parent" not in e.data]
+        nested = [e for e in seen if "parent" in e.data]
+        self.assertEqual([e.data["name"] for e in own if e.type == A.EventType.TOOL_START], ["delegate"])
+        self.assertTrue(nested and all(e.data["parent"] == call and e.data["depth"] == 1 for e in nested))
+        self.assertTrue(all(e.session_id == "s1" for e in nested))
+        self.assertIn("read_text_file", [e.data["name"] for e in nested if e.type == A.EventType.TOOL_START])
+        answer = [e for e in nested if e.type == A.EventType.BLOCK_END and e.data["kind"] == "output"]
+        self.assertEqual(answer[0].data["text"], "A is all x.")
+        kinds = {e.type for e in nested}
+        self.assertFalse(kinds & {A.EventType.AGENT_START, A.EventType.AGENT_END, A.EventType.CONTEXT_USAGE})
+        beats = [e for e in own if e.type == A.EventType.TOOL_PROGRESS]
+        self.assertTrue(beats and all(e.data["id"] == call and e.data["text"] == "" for e in beats))
         self.assertEqual(sum(e.type == A.EventType.AGENT_END for e in seen), 1)
+        self.assertEqual([b.kind for b in result.blocks], ["tool", "output"])  # the run keeps its own
+
+    def test_a_relay_with_a_forward_nests_and_beats_without_lines(self):
+        reports, forwarded = [], []
+        clock = [0.0]
+
+        async def report(call_id, text):
+            reports.append(text)
+
+        async def forward(event):
+            forwarded.append(event.type)
+
+        relay = A.WorkerRelay(report, "c1", clock=lambda: clock[0], forward=forward)
+
+        async def drive():
+            await relay(A.Event(A.EventType.AGENT_START, {}))
+            await relay(A.Event(A.EventType.TOOL_START, {"text": "read()"}))
+            await relay(A.Event(A.EventType.CONTEXT_USAGE, {"tokens": 1}))
+            clock[0] = 2.0
+            await relay(A.Event(A.EventType.CONTEXT_COMPACT, {"message": "Compacted"}))
+            await relay(A.Event(A.EventType.MODEL_WAIT, {}))
+
+        run(drive())
+        self.assertEqual(forwarded, [A.EventType.TOOL_START, A.EventType.CONTEXT_COMPACT])
+        self.assertEqual(reports, ["", ""])  # paced heartbeats, no lines
 
     def test_a_long_answer_is_clipped(self):
         from agents.testing import assistant_message, function_call
@@ -2888,6 +2920,147 @@ class WorkerTest(unittest.TestCase):
         self.assertTrue(all(call_id == "c1" for call_id, _ in reports))
 
 
+class MapTest(unittest.TestCase):
+    """`map`: inputs cut into parts by tokens, one worker per part, answers in order."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.ws = A.Workspace(self.root)
+        # ten lines of 100 tokens each
+        (self.root / "a.md").write_text("".join(f"{n:02d}" + "x" * 397 + "\n" for n in range(10)), encoding="utf-8")
+
+    def cutter(self):
+        return A.Planner(self.ws, A.TokenCounter(None), None, A.LruCache(1), "")
+
+    def scripted(self, steps, **overrides):
+        return SliceTest.scripted(self, steps, **overrides)
+
+    def test_inputs_are_cut_at_lines_into_parts_of_at_most_the_limit(self):
+        parts, missing = self.cutter().chunks(["a.md", "nope.md"], 250)
+        self.assertEqual(parts, [(f"a.md:{n}-{n + 1}", 200) for n in range(1, 10, 2)])
+        self.assertEqual(missing, ["nope.md"])
+        whole, _ = self.cutter().chunks(["a.md"], 5000)
+        self.assertEqual(whole, [("a.md", 1000)])  # a file that fits is named alone
+
+    def test_a_range_is_cut_within_itself_and_a_long_line_is_a_part_of_its_own(self):
+        parts, _ = self.cutter().chunks(["a.md:3-7"], 250)
+        self.assertEqual([name for name, _ in parts], ["a.md:3-4", "a.md:5-6", "a.md:7-7"])
+        (self.root / "b.md").write_text("short\n" + "y" * 4000 + "\nshort", encoding="utf-8")
+        parts, _ = self.cutter().chunks(["b.md"], 250)
+        self.assertEqual([name for name, _ in parts], ["b.md:1-1", "b.md:2-2", "b.md:3-3"])
+        (self.root / "c.png").write_bytes(b"\x89PNG")
+        self.assertEqual(self.cutter().chunks(["c.png"], 250)[0], [("c.png", A.TokenCounter.IMAGE_TOKENS)])
+
+    def test_cutting_stops_past_the_most_parts(self):
+        parts, _ = self.cutter().chunks(["a.md"], 100, most=3)
+        self.assertEqual(len(parts), 4)
+
+    def test_each_part_runs_in_a_worker_and_the_answers_come_back_in_order(self):
+        from agents.testing import assistant_message, function_call
+
+        args = {"task": "Count the x", "inputs": ["a.md"], "chunk_tokens": 450}
+        engine, model = self.scripted([
+            [function_call("map", args, call_id="m1")],
+            [assistant_message("part one")],
+            [assistant_message("part two")],
+            [assistant_message("part three")],
+            [assistant_message("done")],
+        ])
+        seen: list[A.Event] = []
+        engine.events.on(A.EventType.ALL, seen.append)
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        prompts = [call.input[0]["content"] for call in model.calls[1:4]]
+        self.assertTrue(prompts[0].startswith("Count the x\n\nYour part (1 of 3): a.md, lines 1-4 (~400 tokens)"), prompts[0])
+        self.assertIn('read_text_file(path="a.md", offset=5, limit=4)', prompts[1])
+        output = WorkerTest.outputs(model.calls[-1])["m1"]
+        self.assertTrue(output.startswith("Mapped 3 parts (~1.0k tokens) of a.md in "), output)
+        self.assertLess(output.index("## 1/3 a.md:1-4\npart one"), output.index("## 2/3 a.md:5-8\npart two"))
+        self.assertIn("## 3/3 a.md:9-10\npart three", output)
+        self.assertNotIn("[worker:", output)
+        call = result.tools[0].id
+        parts = [e for e in seen if e.type == A.EventType.TOOL_START and e.data.get("parent") == call]
+        self.assertEqual([e.data["name"] for e in parts], ["part 1/3", "part 2/3", "part 3/3"])
+        self.assertEqual(parts[0].data["text"], "part 1/3: a.md:1-4")
+        inner = [e for e in seen if e.data.get("parent") == parts[1].data["id"]]
+        self.assertTrue(inner and all(e.data["depth"] == 2 for e in inner))
+        ends = [e for e in seen if e.type == A.EventType.TOOL_END and e.data.get("parent") == call]
+        self.assertEqual([e.data["ok"] for e in ends], [True] * 3)
+
+    def test_the_answers_share_the_slice_of_the_leader(self):
+        engine = A.Engine(env=False, config_file=False, worker_max_tokens=1000)
+        self.addCleanup(engine.close)
+        self.assertEqual(engine.map_answer(engine.config, 8000, 4), 1000)
+        self.assertEqual(engine.map_answer(engine.config, 8000, 40), 200)
+        self.assertEqual(engine.map_answer(engine.config, 8000, 400), A.Engine.MAP_ANSWER)
+
+    def test_too_many_parts_are_refused(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted(
+            [
+                [function_call("map", {"task": "t", "inputs": ["a.md"], "chunk_tokens": 100}, call_id="m1")],
+                [assistant_message("done")],
+            ],
+        )
+        with unittest.mock.patch.object(A.Engine, "MAP_LIMIT", 5):
+            run(engine.run("go", workspace=self.root, session_id="s1"))
+        output = WorkerTest.outputs(model.calls[-1])["m1"]
+        self.assertTrue(output.startswith("Not mapped: the inputs make more than 5 parts"), output)
+
+    def test_parts_run_at_most_map_parallel_at_once_and_a_failure_is_kept_apart(self):
+        running, peak = [0], [0]
+
+        class Counting(A.Engine):
+            async def run_worker(self, config, result, workspace, task, sizes=(), missing=(), **kwargs):
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+                await asyncio.sleep(0.01)
+                running[0] -= 1
+                if "(2 of" in task:
+                    return "Error: the worker failed (timeout) after 0 tool calls: slow", False
+                return "fine", True
+
+        for parallel, expected in ((1, 1), (3, 3)):
+            peak[0] = 0
+            engine = Counting(env=False, config_file=False, map_parallel=parallel, shell_enabled=False)
+            self.addCleanup(engine.close)
+            mapper = engine.build_map(engine.config, A.RunResult(session_id="s"), self.ws)
+            output = run(mapper(None, "t", ["a.md"], 250, 0, []))
+            self.assertEqual(peak[0], expected)
+            self.assertIn("## 2/5 a.md:3-4 (failed)\nError: the worker failed (timeout)", output)
+            self.assertIn("## 3/5 a.md:5-6\nfine", output)
+            self.assertIn("1 failed", output.splitlines()[0])
+
+    def test_a_plan_step_lends_its_inputs_and_is_marked_done(self):
+        from agents.testing import assistant_message, function_call
+
+        plan = {"steps": [{"title": "Count", "inputs": ["a.md"], "status": "pending"}]}
+        engine, model = self.scripted([
+            [function_call("plan", plan, call_id="p1")],
+            [function_call("map", {"task": "Count the x", "step": 1}, call_id="m1")],
+            [assistant_message("all of it")],
+            [assistant_message("done")],
+        ])
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        self.assertTrue(WorkerTest.outputs(model.calls[-1])["m1"].endswith("[plan] step 1 marked done"))
+        self.assertEqual(engine.plans.get("s1").steps[0].status, "done")
+
+    def test_map_needs_inputs_and_is_built_with_delegate(self):
+        engine = A.Engine(env=False, config_file=False, shell_enabled=False)
+        self.addCleanup(engine.close)
+        mapper = engine.build_map(engine.config, A.RunResult(), self.ws)
+        self.assertEqual(run(mapper(None, "t", [], 0, 0, [])), "Error: map needs inputs (paths, globs or line ranges)")
+        self.assertEqual(run(mapper(None, "t", ["nope.md"], 0, 0, [])), "Error: nothing to map: nope.md not found")
+        names = {tool.name for tool in run(engine.build_run_tools(self.ws, engine.config, A.RunResult()))}
+        self.assertIn("map", names)
+        off = engine.config.merge(delegate_enabled=False)
+        self.assertIsNone(engine.build_map(off, A.RunResult(), self.ws))
+
+
 class PlanViewTest(unittest.TestCase):
     """The plan and the measured speed, shown: `plan.update`, `/plan`, hello, the console."""
 
@@ -2985,6 +3158,30 @@ class PlanViewTest(unittest.TestCase):
         other = agent.sessions.create()
         run(server.on_hello(connection, {"session": other.id}))
         self.assertIsNone(connection.ws.sent[-1]["plan"])
+
+    def test_the_console_indents_a_workers_steps_under_its_call(self):
+        buffer = ConsoleRendererTest.Buffer()
+        renderer = A.ConsoleRenderer(color=False, stream=buffer)
+        nest = {"parent": "d", "depth": 1}
+
+        def handle(event_type, **data):
+            renderer.handle(A.Event(type=event_type, data=data))
+
+        handle(A.EventType.TOOL_START, text="delegate(task=\"x\")", name="delegate")
+        handle(A.EventType.TOOL_PROGRESS, text="")
+        handle(A.EventType.TOOL_START, text='read_text_file(path="a.md")', name="read_text_file", **nest)
+        handle(A.EventType.TOOL_END, name="read_text_file", ok=True, duration=0.003, result="lots of x", **nest)
+        handle(A.EventType.BLOCK_DELTA, kind="output", text="A is ", **nest)
+        handle(A.EventType.BLOCK_END, kind="output", text="A is\nall x.", **nest)
+        handle(A.EventType.TOOL_START, text="part 1/2: a.md:1-4", name="part", parent="d", depth=2)
+        handle(A.EventType.TOOL_END, name="delegate", ok=True, duration=1.0, result="A is all x.")
+        text = buffer.text
+        self.assertIn('-> delegate(task="x")\n.\n  | -> read_text_file(path="a.md")\n', text)
+        self.assertIn("  | <- read_text_file: ok in 3 ms\n", text)
+        self.assertNotIn("lots of x", text)  # a nested call shows its outcome, not its output
+        self.assertIn("  | A is\n  | all x.\n", text)
+        self.assertIn("    | -> part 1/2: a.md:1-4\n", text)
+        self.assertIn("<- delegate: ok in 1000 ms\nA is all x.", text)
 
     def test_the_console_prints_plan_progress_and_speeds(self):
         buffer = ConsoleRendererTest.Buffer()

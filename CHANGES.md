@@ -447,6 +447,19 @@ miss) took longer than the guard allowed. The constraints that shaped it:
   rings the mark with one arc per step and keeps a strip in the bar that
   opens into the steps, the repl prints a `[plan]` line per change and the
   speeds after a run, and `/plan` lists both.
+- **A worker's steps belong to its call.** Progress lines in the `delegate`
+  block said what a worker did, not what it found, and the repl showed only
+  dots. Its blocks and calls are now published on the leader's bus with the
+  call's block as `parent`: the page nests them under the call and folds each
+  finished step, the repl indents its calls and answer. Its start, end and
+  context use stay off the bus, so a worker can neither end the run on the
+  page nor move the leader's gauge, and the call still gets a heartbeat.
+- **The harness cuts, the model does not.** A file larger than one worker
+  may read had to be split by the model, by hand, into line ranges. `map`
+  cuts inputs at line boundaries by the same counter the plan uses and runs
+  one worker per part, the answers sized so all of them fit one slice of the
+  leader; one at a time by default, since a local server answers one request
+  at a time anyway.
 - **Written ahead, like the journal.** Plans lived in memory, so a crash or
   `/resume` lost where the work stood and the model re-planned from the
   transcript. An `Agent` keeps them in a `PlanBook`, written through to the
@@ -1074,8 +1087,13 @@ harness.
         lines of the console, the plan ring and strip on the page,
         `PlanViewTest`, the `slicing` check of `test/agentic_e2e.py` and the
         docs.
-      - [ ] Complete: a worker's steps as nested blocks on the page and in the
-        repl, the `map` tool (`map_parallel`).
+      - [x] Complete: a worker's steps nested under its call (`WorkerRelay`
+        `forward`, `Engine.nest()`, `parent` / `depth`, the page's
+        `.block-nest`, the console's indent, CSS kind styles scoped to a
+        block's own head and body), `map` (`Planner.chunks()`, `build_map()`,
+        `map_parts()`, `map_answer()`, `map_prompt()`, `MAP_LIMIT`,
+        `map_parallel`), `MapTest`, the nested worker in the `slicing` check
+        and the docs.
       - [ ] Extended: context folding (`branch` / `return`), evals
         (`test/agentic_eval.py`).
 

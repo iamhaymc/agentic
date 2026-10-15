@@ -18,11 +18,11 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       longest reply, `plan` measures and refuses oversized steps, asks the user
       once about a large plan, is written through to the store and shown on the
       mark, in a strip and by `/plan`, `delegate` runs a step in a fresh
-      context, and a note recites budget and plan (see CHANGES.md). Still open:
-  - [ ] `map` tool: the harness chunks files by tokens and runs one worker per chunk
+      context and `map` one worker per part, their steps nested under the call,
+      and a note recites budget and plan (see CHANGES.md). Still open:
   - [ ] Context folding: `branch` / `return` fold a finished sub-task into its summary
   - [ ] Evals: peak context, success and wall time on long tasks, local and hosted models
-  - [ ] Show a worker's steps as nested blocks on the page and in the repl (today: progress lines on the `delegate` block)
+  - [ ] Replay a worker's steps after a reload (they are not journaled: a reload shows the `delegate` answer alone)
 
 - [ ] **Context compaction, extended scope.** Compaction is token aware,
       tiered and runs before every model call (see CHANGES.md). Still open:

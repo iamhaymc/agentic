@@ -618,7 +618,7 @@ body {
   transition: transform 0.15s ease;
 }
 
-.block[data-collapsed="true"] .chevron {
+.block[data-collapsed="true"] > .block-head .chevron {
   transform: rotate(-90deg);
 }
 
@@ -650,12 +650,13 @@ body {
   transition: opacity 0.15s ease;
 }
 
-.block:hover .block-actions,
+.block:hover > .block-head .block-actions,
 .block-actions:focus-within {
   opacity: 1;
 }
 
-.block[data-collapsed="true"] .block-body {
+.block[data-collapsed="true"] > .block-body,
+.block[data-collapsed="true"] > .block-nest {
   display: none;
 }
 
@@ -684,7 +685,7 @@ body {
   border-color: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
-.block[data-kind="reasoning"] .block-body {
+.block[data-kind="reasoning"] > .block-body {
   color: var(--muted);
   font-style: italic;
 }
@@ -695,24 +696,24 @@ body {
   border-color: var(--border);
 }
 
-.block[data-kind="compact"] .block-body {
+.block[data-kind="compact"] > .block-body {
   color: var(--muted);
   font-size: 0.86rem;
 }
 
-.block[data-kind="tool"] .block-body,
-.block[data-kind="log"] .block-body {
+.block[data-kind="tool"] > .block-body,
+.block[data-kind="log"] > .block-body {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.82rem;
 }
 
-.block[data-kind="tool"] .block-body {
+.block[data-kind="tool"] > .block-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.block[data-kind="tool"] .block-toggle .label {
+.block[data-kind="tool"] > .block-head .label {
   font-family: var(--mono);
 }
 
@@ -720,9 +721,38 @@ body {
   border-color: var(--error);
 }
 
-.block[data-kind="tool"][data-status="failed"] .block-head .label,
-.block[data-kind="tool"][data-status="failed"] .block-head .kind {
+.block[data-kind="tool"][data-status="failed"] > .block-head .label,
+.block[data-kind="tool"][data-status="failed"] > .block-head .kind {
   color: var(--error);
+}
+
+/* A worker's steps, nested in the call that started it: a thread down the
+   left edge, compact heads, each step folded to its head once it is done. */
+.block-nest {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0.4rem 0 0 0.3rem;
+  padding-left: 0.55rem;
+  border-left: 1px solid var(--border);
+}
+
+.block[data-nested="true"] {
+  padding: 0.1rem 0.3rem 0.2rem;
+  border-radius: calc(var(--radius) * 0.7);
+}
+
+.block[data-nested="true"] > .block-head {
+  font-size: 0.68rem;
+}
+
+.block[data-nested="true"] > .block-body {
+  margin-top: 0.2rem;
+  font-size: 0.85rem;
+}
+
+.block[data-nested="true"][data-kind="tool"] > .block-body {
+  font-size: 0.76rem;
 }
 
 /* A question is the one block that waits on the reader, so it is the one
@@ -732,7 +762,7 @@ body {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
-.block[data-kind="question"] .block-toggle .kind {
+.block[data-kind="question"] > .block-head .kind {
   color: var(--accent);
 }
 
@@ -813,8 +843,8 @@ body {
   font-style: italic;
 }
 
-.block[data-collapsed="true"] .choices,
-.block[data-collapsed="true"] .reply {
+.block[data-collapsed="true"] > .choices,
+.block[data-collapsed="true"] > .reply {
   display: none;
 }
 
@@ -866,8 +896,8 @@ body {
   border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
 }
 
-.block[data-kind="warning"] .block-head,
-.block[data-kind="warning"] .block-body {
+.block[data-kind="warning"] > .block-head,
+.block[data-kind="warning"] > .block-body {
   color: var(--warn);
 }
 
@@ -875,12 +905,12 @@ body {
   border-color: var(--error);
 }
 
-.block[data-kind="error"] .block-head,
-.block[data-kind="error"] .block-body {
+.block[data-kind="error"] > .block-head,
+.block[data-kind="error"] > .block-body {
   color: var(--error);
 }
 
-.block[data-streaming="true"] .block-toggle::after {
+.block[data-streaming="true"] > .block-head .block-toggle::after {
   content: "";
   flex: none;
   width: 0.45rem;

@@ -207,7 +207,8 @@ Cost of reading a plan once (at `cost_input`) past which it asks the user.
 Give the leader the `delegate` tool: one step runs in a fresh context and only its answer comes back.
 - Environment variable: `AGENTIC_DELEGATE_ENABLED`
 - Expected format `true` or `false`, default `true`
-- The worker gets the workspace tools; no plan, no `ask_user`, no `delegate` of its own
+- The worker gets the workspace tools; no plan, no `ask_user`, no `delegate` or `map` of its own
+- Also builds `map`: one worker per part of inputs cut by tokens (see `map_parallel`)
 
 ### `worker_model`
 Model ID of the worker role (`delegate`).
@@ -232,6 +233,12 @@ Tokens of a worker's answer that reach the leader.
 - Environment variable: `AGENTIC_WORKER_MAX_TOKENS`
 - Expected format `{{TOKENS}}` (integer), default `1000`, `0` uncapped
 - A longer answer is clipped (head and tail kept); files the worker wrote are not affected
+
+### `map_parallel`
+Workers one `map` runs at once.
+- Environment variable: `AGENTIC_MAP_PARALLEL`
+- Expected format `{{COUNT}}` (integer), default `1`
+- `map` is built with `delegate` (`delegate_enabled`); a local server answers one request at a time, so raise it for a hosted model
 
 ### `summary_max_tokens`
 Tokens a summary may grow to.

@@ -158,6 +158,9 @@ Asker = Callable[[str | None, str, list[str]], Awaitable[str]]
 #: Runs one step in a fresh context: ``(call_id, task, inputs, step, tools)``
 #: and returns the worker's answer, capped, or an ``Error: ...`` line.
 Delegator = Callable[[str | None, str, list[str], int, list[str]], Awaitable[str]]
+#: Runs one task over the parts of some inputs:
+#: ``(call_id, task, inputs, chunk_tokens, step, tools) -> answers``.
+Mapper = Callable[[str | None, str, list[str], int, int, list[str]], Awaitable[str]]
 
 # ---------------------------------------------------------------------------
 # Config
@@ -619,6 +622,10 @@ class AgentConfig:
     worker_instructions: str = DEFAULT_WORKER_INSTRUCTIONS
     worker_max_turns: int = 30
     worker_max_tokens: int = 1000
+    # `map` (built with `delegate`) cuts its inputs into parts a worker may read
+    # and runs one worker per part, at most `map_parallel` at once: a local
+    # server answers one request at a time anyway; raise it for a hosted model.
+    map_parallel: int = 1
     summary_model: str = ""
     summary_api_url: str = ""
     summary_api_key: str = ""
@@ -5519,6 +5526,96 @@ class Planner:
                 found.append((spec, tokens))
         return found, missing
 
+    def chunks(
+        self, inputs: Iterable[str], limit: int, most: int = 0
+    ) -> tuple[list[tuple[str, int]], list[str]]:
+        """Cut `inputs` at line boundaries into parts of at most `limit`
+        tokens (provider units): ``path:A-B`` with the tokens of each, and the
+        inputs not found.
+
+        A file that fits whole is named alone, a line longer than `limit` is a
+        part of its own and an image is one part. Cutting stops once there are
+        more than `most` parts (0: no bound), so a giant input is not read to
+        the end only to be refused.
+        """
+        self.spare = self.COUNT_TOTAL
+        bound = max(self.counter.raw(limit), 1)
+        parts: list[tuple[str, int]] = []
+        missing: list[str] = []
+        for spec in inputs:
+            text = spec.strip().strip("\"'")
+            start = end = 0
+            match = self.RANGE.fullmatch(text)
+            if match:
+                text, start, end = match.group(1), int(match.group(2)), int(match.group(3))
+            files = self.expand(text)
+            if not files:
+                missing.append(spec)
+                continue
+            for path in files:
+                parts.extend(self.cut(path, bound, start, end, most - len(parts) if most else None))
+                if most and len(parts) > most:
+                    return parts, missing
+        return parts, missing
+
+    def cut(
+        self, path: Path, bound: int, start: int = 0, end: int = 0, most: int | None = None
+    ) -> list[tuple[str, int]]:
+        """The parts of one file (or of its lines `start`-`end`) of at most
+        `bound` uncalibrated tokens each; past `most` parts (``None``: no
+        bound) it stops reading."""
+        name = self.display(path)
+        if guess_mime(path).startswith("image/"):
+            return [(name, self.counter.scaled(TokenCounter.IMAGE_TOKENS))]
+        spans: list[tuple[int, int, int]] = []
+        first = tokens = line = last = 0
+        number, open_line = 1, False
+
+        def close(number: int, line: int) -> None:
+            nonlocal first, tokens, last
+            if first and tokens + line > bound:
+                spans.append((first, last, tokens))
+                first, tokens = 0, 0
+            first = first or number
+            tokens += line
+            last = number
+
+        with path.open("rb") as handle:
+            while (not end or number <= end) and (most is None or len(spans) <= most):
+                piece = handle.readline(self.CHUNK)
+                if not piece:
+                    break
+                inside = number >= max(start, 1)
+                if inside:
+                    line += self.piece_tokens(piece)
+                    open_line = True
+                if piece.endswith(b"\n"):
+                    if inside:
+                        close(number, line)
+                    number, line, open_line = number + 1, 0, False
+        if open_line:
+            close(number, line)
+        if first and (most is None or len(spans) <= most):
+            spans.append((first, last, tokens))
+        if len(spans) == 1 and not start:
+            return [(name, self.counter.scaled(spans[0][2]))]
+        return [(f"{name}:{a}-{b}", self.counter.scaled(size)) for a, b, size in spans]
+
+    def piece_tokens(self, piece: bytes) -> int:
+        """Tokens of a piece of a file: counted while the spare bytes last,
+        else estimated from its size."""
+        if len(piece) <= self.spare:
+            self.spare -= len(piece)
+            return self.counter.text(piece.decode("utf-8", "replace"))
+        return -(-len(piece) // TokenCounter.BYTES_PER_TOKEN)
+
+    def display(self, path: Path) -> str:
+        """`path` as a worker names it: relative to the workspace when inside it."""
+        try:
+            return path.relative_to(self.workspace.root).as_posix()
+        except ValueError:
+            return str(path)
+
     def refusal(self, plan: Plan, over: list[PlanStep], limits: SliceBudget) -> str:
         lines = [
             f"Plan not kept: {len(over)} step(s) read more than one slice "
@@ -5664,6 +5761,7 @@ class ToolRegistry:
         read_limit: int | Callable[[], int] = 0,
         planner: "Planner | None" = None,
         delegate: Delegator | None = None,
+        mapper: Mapper | None = None,
     ) -> list[Any]:
         """Build the tools for `workspace`.
 
@@ -5679,7 +5777,8 @@ class ToolRegistry:
         on every read when the budget moves during a run. `planner` sizes the
         plan of the session; when it is given the leader gets `plan`, which
         puts its sizing question through `ask`. `delegate` runs one step in a
-        fresh context; when it is given the leader gets `delegate`.
+        fresh context; when it is given the leader gets `delegate`. `mapper`
+        runs one task over the parts of some inputs; the leader gets `map`.
         """
         tools = (
             list(self._build_defaults(workspace, vision, progress, read_limit))
@@ -5694,6 +5793,8 @@ class ToolRegistry:
             tools.append(self._build_plan_tool(planner, ask))
         if delegate is not None:
             tools.append(self._build_delegate_tool(delegate))
+        if mapper is not None:
+            tools.append(self._build_map_tool(mapper))
         tools.extend(factory(workspace) for factory in self._factories.values())
         return tools
 
@@ -5850,6 +5951,47 @@ class ToolRegistry:
                 "number of a plan step: its inputs are used when you give none, and "
                 "it is marked done when the worker finishes. 'tools' names the only "
                 "tools the worker gets (default: all workspace tools)."
+            ),
+        )
+
+    def _build_map_tool(self, mapper: Mapper) -> Any:
+        """The tool that runs one task over the parts of inputs too large for one worker."""
+        from agents import function_tool
+        from agents.tool_context import ToolContext
+
+        @self.guard
+        async def map_parts(
+            ctx: Any,
+            task: str,
+            inputs: list[str] | None = None,
+            chunk_tokens: int = 0,
+            step: int = 0,
+            tools: list[str] | None = None,
+        ) -> str:
+            return await mapper(
+                ctx.tool_call_id,
+                task,
+                list(inputs or []),
+                int(chunk_tokens or 0),
+                int(step or 0),
+                list(tools or []),
+            )
+
+        map_parts.__annotations__["ctx"] = ToolContext
+        return function_tool(
+            map_parts,
+            name_override="map",
+            description_override=(
+                "Run the same task over inputs too large for one worker: the harness "
+                "cuts them at line boundaries into parts a worker can read, runs one "
+                "worker per part in a fresh context and returns every part's answer "
+                "in order, each kept short so together they fit one slice. Use it to "
+                "summarise, search or extract across a long file or many files. 'task' "
+                "must say everything a worker needs and what to answer: each sees only "
+                "its part. 'inputs' are paths, globs or line ranges; 'chunk_tokens' "
+                "caps a part (default: what a worker may read). 'step' names a plan "
+                "step: its inputs are used when you give none, and it is marked done. "
+                "'tools' names the only tools the workers get."
             ),
         )
 
@@ -6106,6 +6248,9 @@ class ConsoleRenderer:
         return bus.on(EventType.ALL, self.handle)
 
     def handle(self, event: Event) -> None:
+        if event.data.get("parent"):
+            self.nested(event)
+            return
         kind = event.data.get("kind", "output")
         if event.type == EventType.BLOCK_DELTA:
             self.gather(kind, event.data.get("text", ""))
@@ -6141,6 +6286,29 @@ class ConsoleRenderer:
                 self.write("\n")
             self._prev_kind = None
             self._trailing_newlines = 0
+
+    def nested(self, event: Event) -> None:
+        """A worker's step, indented under the call that started it by its
+        `depth`: its calls with their outcome, its compactions and its answer.
+        What it streams is left out, so parallel workers never interleave
+        within a line."""
+        data = event.data
+        if event.type == EventType.TOOL_START:
+            lines = [f"-> {data.get('text') or data.get('name') or 'tool'}"]
+        elif event.type == EventType.TOOL_END:
+            lines = [self.tool_outcome(data).split("\n", 1)[0]]
+        elif event.type == EventType.CONTEXT_COMPACT:
+            lines = [f"~~ {data.get('message') or 'compacted'}"]
+        elif event.type == EventType.BLOCK_END and data.get("kind") == "output":
+            lines = str(data.get("text") or "").strip().splitlines()
+        else:
+            return
+        if not lines:
+            return
+        self.flush()
+        prefix = "  " * max(int(data.get("depth") or 1), 1) + "| "
+        lead = "\n" if self._prev_kind is not None and not self._trailing_newlines else ""
+        self.emit("tool", lead + "".join(f"{prefix}{line}\n" for line in lines))
 
     @staticmethod
     def usage_line(usage: dict[str, Any]) -> str:
@@ -6510,11 +6678,15 @@ class RunResult:
 class WorkerRelay:
     """Relays what a worker streams as progress of the call that delegated it.
 
-    A tool call of the worker becomes a line (``-> read_text_file(...)``), so
-    does a failed one (``!!``) and a compaction (``~~``); anything else it
-    streams (text, waits, tool heartbeats) becomes a heartbeat, at most one
-    every `BEAT` seconds. Each report keeps the delegating call alive for the
-    leader's stall guard, as a busy shell command does.
+    With `forward`, the worker's blocks, calls and compactions (`NESTED`) are
+    handed to it whole, to be shown nested under that call, and the call gets
+    a heartbeat for them. Without, a tool call of the worker becomes a line
+    (``-> read_text_file(...)``), so does a failed one (``!!``) and a
+    compaction (``~~``). Anything else it streams (waits, retries, its context
+    use) is a heartbeat; heartbeats come at most one every `BEAT` seconds.
+    Each report keeps the delegating call alive for the leader's stall guard,
+    as a busy shell command does; the worker's own start and end, and its
+    context use, never reach the leader's bus.
     """
 
     #: Seconds between heartbeats relayed for a worker that streams.
@@ -6532,16 +6704,28 @@ class WorkerRelay:
         EventType.MODEL_RETRY,
         EventType.CONTEXT_USAGE,
     )
+    #: What a worker streams that is shown nested under its call (`forward`).
+    NESTED = (
+        EventType.BLOCK_START,
+        EventType.BLOCK_DELTA,
+        EventType.BLOCK_END,
+        EventType.TOOL_START,
+        EventType.TOOL_PROGRESS,
+        EventType.TOOL_END,
+        EventType.CONTEXT_COMPACT,
+    )
 
     def __init__(
         self,
         report: ToolReporter,
         call_id: str | None,
         clock: Callable[[], float] = time.monotonic,
+        forward: Callable[[Event], Awaitable[None]] | None = None,
     ) -> None:
         self.report = report
         self.call_id = call_id
         self.clock = clock
+        self.forward = forward
         self.beat_at: float | None = None
 
     def line(self, prefix: str, text: str) -> str:
@@ -6551,6 +6735,13 @@ class WorkerRelay:
         return f"{prefix} {text}\n"
 
     async def __call__(self, event: Event) -> None:
+        if self.forward is not None:
+            if event.type in self.NESTED:
+                await self.forward(event)
+            elif event.type not in self.BEATS:
+                return
+            await self.beat()
+            return
         data = event.data
         if event.type == EventType.TOOL_START:
             text = self.line("->", str(data.get("text") or data.get("name") or "tool"))
@@ -6567,6 +6758,13 @@ class WorkerRelay:
             return
         self.beat_at = self.clock()
         await self.report(self.call_id, text)
+
+    async def beat(self) -> None:
+        """Report a heartbeat, unless one went out within `BEAT` seconds."""
+        if self.beat_at is not None and self.clock() - self.beat_at < self.BEAT:
+            return
+        self.beat_at = self.clock()
+        await self.report(self.call_id, "")
 
 
 class Engine:
@@ -6760,6 +6958,7 @@ class Engine:
         read_limit: int | Callable[[], int] = 0,
         planner: Planner | None = None,
         delegate: Delegator | None = None,
+        mapper: Mapper | None = None,
     ) -> list[Any]:
         resolved = config or self.config
         vision = self.build_vision(resolved, usage=usage, session_id=session_id)
@@ -6772,6 +6971,7 @@ class Engine:
             read_limit=read_limit,
             planner=planner,
             delegate=delegate,
+            mapper=mapper,
         )
 
     async def build_run_tools(
@@ -6782,8 +6982,8 @@ class Engine:
         checkout: "Checkout | None" = None,
     ) -> list[Any]:
         """The built-in tools of one run over `workspace`, wired to the run:
-        its progress reporter, its asker, its read page, its planner and its
-        delegate (each only when the config enables it)."""
+        its progress reporter, its asker, its read page, its planner, its
+        delegate and its map (each only when the config enables it)."""
         planner = self.build_planner(config, result, workspace)
         return self.build_tools(
             workspace,
@@ -6796,6 +6996,7 @@ class Engine:
             read_limit=self.page_limit(config, result, await self.read_limit(config)),
             planner=planner,
             delegate=self.build_delegate(config, result, workspace, planner),
+            mapper=self.build_map(config, result, workspace, planner),
         )
 
     def build_sdk_agent(self, config: AgentConfig, tools: list[Any]) -> Any:
@@ -7754,17 +7955,27 @@ class Engine:
         *,
         call_id: str | None = None,
         tools: Iterable[str] = (),
+        parent: str | None = None,
+        depth: int = 1,
+        trailer: bool = True,
     ) -> tuple[str, bool]:
         """Run `task` in a fresh context: the worker's answer, and whether it finished.
 
         `config` is the worker's (`worker_config`). It streams onto a bus of
-        its own, relayed as progress of the call that delegated it
-        (`WorkerRelay`), so the page shows what it does and the leader's stall
+        its own, relayed by `WorkerRelay`: its blocks and calls are published
+        on this bus nested under block `parent` (by default the block of the
+        call that delegated it) at `depth`, and that call gets a heartbeat for
+        them, so the page and the repl show what it does and the leader's stall
         guard sees it alive. It journals nothing; its tokens count to the run
-        (`current_usage`). The answer is clipped to `worker_max_tokens`.
+        (`current_usage`). The answer is clipped to `worker_max_tokens` and,
+        with `trailer`, followed by how many calls it took and how long.
         """
+        if parent is None and call_id is not None:
+            call = self.pending_tool(result, call_id)
+            parent = call.id if call is not None else None
+        forward = self.nest(result, parent, depth) if parent else None
         bus = EventBus()
-        bus.on(EventType.ALL, WorkerRelay(self.tool_reporter(result), call_id))
+        bus.on(EventType.ALL, WorkerRelay(self.tool_reporter(result), call_id, forward=forward))
         twin = self.fork(bus)
         worker = RunResult(run_id=f"{result.run_id}w{uuid.uuid4().hex[:4]}")
         built = await twin.build_run_tools(workspace, config, worker)
@@ -7796,8 +8007,200 @@ class Engine:
         limit = int(config.worker_max_tokens)
         if limit > 0 and self.counter(config).text(reply) > limit:
             reply = clip_output(reply, limit * TokenCounter.BYTES_PER_TOKEN)
+        if not trailer:
+            return reply, True
         seconds = time.monotonic() - started
         return f"{reply}\n[worker: {len(worker.tools)} tool calls in {seconds:.0f}s]", True
+
+    def nest(
+        self, result: RunResult, parent: str, depth: int = 1
+    ) -> Callable[[Event], Awaitable[None]]:
+        """Publish an event a worker streamed on this bus, for the session of
+        `result`, nested under block `parent` at `depth`."""
+
+        async def forward(event: Event) -> None:
+            data = {**event.data, "parent": parent, "depth": depth}
+            await self.events.publish(event.type, session_id=result.session_id, **data)
+
+        return forward
+
+    #: Parts one `map` may cut its inputs into, at most.
+    MAP_LIMIT = 64
+    #: Tokens the answer of one part keeps at least, however many share a slice.
+    MAP_ANSWER = 100
+
+    def map_answer(self, config: AgentConfig, share: int, parts: int) -> int:
+        """Tokens each of `parts` answers may take so that together they fit
+        `share` (the leader's slice): within `worker_max_tokens`, at least
+        `MAP_ANSWER`."""
+        each = int(share) // max(int(parts), 1)
+        if config.worker_max_tokens > 0:
+            each = min(each, int(config.worker_max_tokens))
+        return max(each, self.MAP_ANSWER)
+
+    @staticmethod
+    def map_prompt(task: str, number: int, count: int, spec: str, tokens: int) -> str:
+        """What the worker of one part is told: the task, its part and how to read it."""
+        match = Planner.RANGE.fullmatch(spec)
+        if match:
+            path, first, last = match.group(1), int(match.group(2)), int(match.group(3))
+            where = f"{path}, lines {first}-{last}"
+            how = f'read_text_file(path="{path}", offset={first}, limit={last - first + 1})'
+        elif guess_mime(spec).startswith("image/"):
+            where, how = spec, "the image tool"
+        else:
+            where, how = spec, f'read_text_file(path="{spec}")'
+        return (
+            f"{task}\n\nYour part ({number} of {count}): {where} (~{compact_tokens(tokens)} "
+            f"tokens). Read it with {how} and work on that part alone: the other parts "
+            "go to other workers."
+        )
+
+    def build_map(
+        self,
+        config: AgentConfig,
+        result: RunResult,
+        workspace: Workspace,
+        planner: Planner | None = None,
+    ) -> Mapper | None:
+        """The `map` of a run, or ``None`` unless `delegate_enabled`.
+
+        The inputs are cut at line boundaries into parts a worker may read
+        (`worker_budget`, or `chunk_tokens` when smaller); more than
+        `MAP_LIMIT` parts is refused. Each part runs in a worker of its own,
+        `map_parallel` at once, its answer sized so that together they fit the
+        leader's slice (`map_answer`); the answers come back in order, a failed
+        part marked and the rest kept. With a `planner`, `step` lends its
+        inputs and is marked like a delegated one.
+        """
+        if not config.delegate_enabled:
+            return None
+
+        async def map_inputs(
+            call_id: str | None,
+            task: str,
+            inputs: list[str],
+            chunk_tokens: int,
+            step: int,
+            tools: list[str],
+        ) -> str:
+            task = task.strip()
+            if not task:
+                return "Error: map needs a task"
+            numbered: PlanStep | None = None
+            if step:
+                plan = planner.plan if planner is not None else None
+                if plan is None or not 1 <= step <= len(plan.steps):
+                    return f"Error: there is no plan step {step}"
+                numbered = plan.steps[step - 1]
+                inputs = inputs or list(numbered.inputs)
+            if not inputs:
+                return "Error: map needs inputs (paths, globs or line ranges)"
+            worker = self.worker_config(config)
+            limit = await self.worker_budget(worker)
+            size = min(chunk_tokens, limit) if chunk_tokens > 0 else limit
+            cutter = Planner(workspace, self.counter(worker), None, LruCache(1), "")
+            parts, missing = await asyncio.to_thread(cutter.chunks, inputs, size, self.MAP_LIMIT)
+            if not parts:
+                return f"Error: nothing to map: {', '.join(missing) or 'no input'} not found"
+            if len(parts) > self.MAP_LIMIT:
+                return (
+                    f"Not mapped: the inputs make more than {self.MAP_LIMIT} parts of up to "
+                    f"{compact_tokens(size)} tokens. Map fewer inputs at a time."
+                )
+            share = result.context.limits().slice if result.context is not None else limit
+            answer = self.map_answer(config, share, len(parts))
+            worker = self.worker_config(config.merge(worker_max_tokens=answer))
+            before = numbered.status if numbered is not None else ""
+            if planner is not None and numbered is not None:
+                if planner.mark(step, "active", numbered.title) is not None:
+                    await planner.changed()
+            started = time.monotonic()
+            replies = await self.map_parts(
+                worker, result, workspace, task, parts,
+                call_id=call_id, tools=tools, parallel=config.map_parallel,
+            )
+            failed = sum(1 for _, ok in replies if not ok)
+            count = len(parts)
+            head = (
+                f"Mapped {count} part{'s' if count != 1 else ''} "
+                f"(~{compact_tokens(sum(tokens for _, tokens in parts))} tokens) of "
+                f"{', '.join(inputs)} in {time.monotonic() - started:.0f}s"
+            )
+            if failed:
+                head += f", {failed} failed"
+            if missing:
+                head += f" (not found: {', '.join(missing)})"
+            sections = [
+                f"## {number}/{count} {spec}{'' if ok else ' (failed)'}\n{reply}"
+                for number, ((spec, _), (reply, ok)) in enumerate(zip(parts, replies), 1)
+            ]
+            text = f"{head}:\n\n" + "\n\n".join(sections)
+            if planner is not None and numbered is not None:
+                marked = planner.mark(step, "done" if not failed else before, numbered.title)
+                if marked is not None:
+                    await planner.changed()
+                if not failed and marked is not None:
+                    text += f"\n[plan] step {step} marked done"
+            return text
+
+        return map_inputs
+
+    async def map_parts(
+        self,
+        config: AgentConfig,
+        result: RunResult,
+        workspace: Workspace,
+        task: str,
+        parts: list[tuple[str, int]],
+        *,
+        call_id: str | None = None,
+        tools: Iterable[str] = (),
+        parallel: int = 1,
+    ) -> list[tuple[str, bool]]:
+        """Run one worker per part, `parallel` at once: each answer and
+        whether it finished, in the order of `parts`. Each part is a block
+        (``part n/N``) nested under the `map` call, its worker's steps under it."""
+        gate = asyncio.Semaphore(max(int(parallel), 1))
+        call = self.pending_tool(result, call_id) if call_id is not None else None
+        count = len(parts)
+
+        async def publish(event_type: str, **data: Any) -> None:
+            if call is not None:
+                await self.events.publish(
+                    event_type, session_id=result.session_id, parent=call.id, depth=1, **data
+                )
+
+        async def one(number: int, spec: str, tokens: int) -> tuple[str, bool]:
+            async with gate:
+                part = f"{call.id}-p{number}" if call is not None else None
+                name = f"part {number}/{count}"
+                title = f"{name}: {spec}"
+                await publish(EventType.TOOL_START, id=part, kind="tool", name=name, text=title)
+                started = time.monotonic()
+                reply, ok = await self.run_worker(
+                    config, result, workspace, self.map_prompt(task, number, count, spec, tokens),
+                    call_id=call_id, tools=tools, parent=part, depth=2, trailer=False,
+                )
+                seconds = time.monotonic() - started
+                status = "ok" if ok else "failed"
+                await publish(
+                    EventType.TOOL_END,
+                    id=part,
+                    kind="tool",
+                    name=name,
+                    ok=ok,
+                    result=redact(reply, self.TOOL_VALUE_LIMIT),
+                    duration=seconds,
+                    text=f"{title} -> {status} in {seconds * 1000:.0f} ms\n{reply}",
+                )
+                return reply, ok
+
+        return list(
+            await asyncio.gather(
+                *(one(number, spec, tokens) for number, (spec, tokens) in enumerate(parts, 1))
+            )
+        )
 
     @staticmethod
     def cancel_stream(streamed: Any) -> None:

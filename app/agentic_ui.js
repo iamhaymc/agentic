@@ -630,11 +630,13 @@
     el.app.dataset.underFoot = String(room - view.scrollTop > 1);
   };
 
-  /** A block subscribes to content and re-renders itself when it changes. */
+  /** A block subscribes to content and re-renders itself when it changes. A
+   *  nested block is a worker's step, held by the call that started it. */
   class Block {
-    constructor(id, kind, role) {
+    constructor(id, kind, role, nested) {
       this.id = id;
       this.kind = kind || "output";
+      this.nested = Boolean(nested);
       this.text = "";
       this.streaming = true;
       this.frame = 0;
@@ -643,6 +645,7 @@
       this.node.dataset.kind = this.kind;
       this.node.dataset.streaming = "true";
       this.node.dataset.collapsed = "false";
+      this.node.dataset.nested = String(this.nested);
       this.node.innerHTML =
         `<header class="block-head">` +
         `<button class="block-toggle" type="button" aria-expanded="true">` +
@@ -664,7 +667,18 @@
       this.copyButton = this.node.querySelector(".copy");
       this.toggle.addEventListener("click", () => this.collapse());
       this.copyButton.addEventListener("click", () => this.copy());
-      if (this.kind === "output") this.votes();
+      // a worker's answer is not journaled, so there is nothing to vote on
+      if (this.kind === "output" && !this.nested) this.votes();
+    }
+
+    /** Hold a nested block: a worker's step under the call that started it. */
+    nest(child) {
+      if (!this.children) {
+        this.children = document.createElement("div");
+        this.children.className = "block-nest";
+        this.body.after(this.children);
+      }
+      this.children.appendChild(child.node);
     }
 
     /** Thumbs on an answer: a vote teaches the agent a rule (see `/rules`). */
@@ -807,19 +821,25 @@
       if (this.frame) cancelAnimationFrame(this.frame);
       this.frame = 0;
       this.paint();
+      // a finished step folds to its head, so a worker reads as a list of steps
+      if (this.nested && this.kind !== "output") this.collapse(true);
     }
   }
 
   const Blocks = {
     map: new Map(),
-    /** Get or create a block: updates may arrive concurrently, out of order. */
-    ensure(id, kind, role) {
+    /** Get or create a block: updates may arrive concurrently, out of order.
+     *  With `parent` (a worker's step) it is nested in that block when the
+     *  page has it, else shown on its own. */
+    ensure(id, kind, role, parent) {
       let block = this.map.get(id);
       if (!block) {
-        block = new Block(id, kind, role);
+        const host = parent ? this.map.get(parent) : null;
+        block = new Block(id, kind, role, Boolean(host));
         this.map.set(id, block);
         el.empty.hidden = true;
-        el.discussion.appendChild(block.node);
+        if (host) host.nest(block);
+        else el.discussion.appendChild(block.node);
         this.scroll();
       }
       return block;
@@ -1455,7 +1475,9 @@
         }
         case "block.start":
           if (message.kind === "prompt") Resume.withdraw();
-          Blocks.ensure(message.id, message.kind, message.role).set(message.text || "");
+          Blocks.ensure(message.id, message.kind, message.role, message.parent).set(
+            message.text || "",
+          );
           if (message.attachments && message.attachments.length) {
             Blocks.map
               .get(message.id)
@@ -1465,15 +1487,18 @@
           }
           if (message.complete) Blocks.map.get(message.id).end();
           if (message.kind === "prompt") this.busy(true);
-          if (message.kind === "compact") Gauge.compaction(Blocks.map.get(message.id), message, false);
+          if (message.kind === "compact" && !message.parent)
+            Gauge.compaction(Blocks.map.get(message.id), message, false);
           break;
         case "block.delta":
-          Blocks.ensure(message.id, message.kind).append(message.text || "");
+          Blocks.ensure(message.id, message.kind, undefined, message.parent).append(
+            message.text || "",
+          );
           Blocks.scroll();
           break;
         case "tool.start":
         case "tool.end": {
-          const tool = Blocks.ensure(message.id, "tool");
+          const tool = Blocks.ensure(message.id, "tool", undefined, message.parent);
           // A question card keeps its own face; the call only opens and ends it.
           if (tool.kind !== "question") {
             tool.label(message.name || "tool");
@@ -1488,7 +1513,7 @@
         }
         case "tool.progress": {
           // Output to tail, or an empty heartbeat: either way the call is alive.
-          const tool = Blocks.ensure(message.id, "tool");
+          const tool = Blocks.ensure(message.id, "tool", undefined, message.parent);
           const seconds = Math.round(Number(message.duration) || 0);
           tool.label(`${message.name || "tool"} · ${seconds}s`);
           tool.tail(message.text || "");
@@ -1497,10 +1522,11 @@
           break;
         }
         case "block.end": {
-          const block = Blocks.ensure(message.id, message.kind);
+          const block = Blocks.ensure(message.id, message.kind, undefined, message.parent);
           if (message.kind === "compact") {
             block.set(message.text || "");
-            Gauge.compaction(block, message, true);
+            if (message.parent) block.label("compacted");
+            else Gauge.compaction(block, message, true);
             block.collapse(true);
           }
           block.end();
