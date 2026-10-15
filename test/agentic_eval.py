@@ -5,10 +5,10 @@ Each task of `TASKS` builds a workspace from a seed (a corpus too large for
 one read, or a trail of files), puts one question to an `Engine` over it and
 checks the answer. A run is measured on the event bus: whether the answer was
 right, the most context the leader held (`context.usage`), how long the run
-took, the model calls, tool calls (the leader's and its workers'),
-compactions and folds, and the tokens and cost. Everything the harness does
-for a long task runs as it would: the time cap, `plan`, `delegate`, `map`,
-`branch` / `return` and compaction.
+took, the model calls, tool calls and folds (the leader's and its workers'),
+compactions, and the tokens and cost. Everything the harness does for a long
+task runs as it would: the time cap, `plan`, `delegate`, `map`, `branch` /
+`return` (in the leader and in its workers) and compaction.
 
     python -m test.agentic_eval --scripted       # offline: a scripted policy, no model
     python -m test.agentic_eval                  # the configured leader
@@ -206,21 +206,29 @@ class Policy:
         return self.task.lead(self, call)
 
     def work(self, call: Any) -> list[Any]:
-        """A map worker: read the part it was given, a page at a time, then answer."""
+        """A map worker: read the part it was given, a page at a time, then
+        answer. A part longer than a page is read in a branch: the pages after
+        the first are folded away by `return`, whose summary is the answer."""
         match = READ_RE.search(prompt(call))
         if match is None:
             return self.say("none")
+        for summary in arguments(call, "return"):
+            return self.say(str(summary.get("summary") or "none"))
         path = match.group(1)
         first = int(match.group(2) or 1)
         end = first + int(match.group(3)) - 1 if match.group(3) else 0
-        texts = outputs(call)
+        texts = [text for text in outputs(call) if not text.startswith("Branch opened")]
         if not texts:
             return self.call("read_text_file", {"path": path, "offset": first, "limit": end - first + 1 if end else 0})
+        branched = bool(arguments(call, "branch"))
         more = MORE_RE.search(texts[-1])
         if more is not None and (not end or int(more.group(1)) <= end):
+            if not branched:
+                return self.call("branch", {"goal": f"Read the rest of {path}"})
             offset = int(more.group(1))
             return self.call("read_text_file", {"path": path, "offset": offset, "limit": end - offset + 1 if end else 0})
-        return self.say(self.task.part(lines_of(texts)))
+        answer = self.task.part(lines_of(texts))
+        return self.call("return", {"summary": answer}) if branched else self.say(answer)
 
 
 def lead_needle(policy: Policy, call: Any) -> list[Any]:
@@ -378,7 +386,9 @@ class Outcome:
     nested: int = 0
     parts: int = 0
     compactions: int = 0
+    #: Branches folded by the leader and by its workers.
     folds: int = 0
+    nested_folds: int = 0
     facts: dict[str, Any] = field(default_factory=dict)
 
     def line(self) -> str:
@@ -387,13 +397,15 @@ class Outcome:
         return (
             f"[eval] {self.task:<8} {self.target:<24} seed {self.seed:<3} {state:<5} "
             f"peak {A.compact_tokens(self.peak):>5} ({self.fill:.0%}) "
-            f"{self.seconds:6.1f}s calls {self.calls}+{self.nested} folds {self.folds} "
+            f"{self.seconds:6.1f}s calls {self.calls}+{self.nested} "
+            f"folds {self.folds}+{self.nested_folds} "
             f"compactions {self.compactions}"
         )
 
 
 class Recorder:
-    """Measures a run from its events: the leader's context, calls and folds."""
+    """Measures a run from its events: the leader's context, calls and folds
+    (and its workers' calls and folds)."""
 
     def __init__(self, outcome: Outcome) -> None:
         self.outcome = outcome
@@ -413,8 +425,12 @@ class Recorder:
                 outcome.parts += 1
             else:
                 outcome.nested += 1
-        elif event.type == A.EventType.TOOL_END and not nested and data.get("name") == "return":
-            outcome.folds += str(data.get("result") or "").startswith("Folded")
+        elif event.type == A.EventType.TOOL_END and data.get("name") == "return":
+            folded = str(data.get("result") or "").startswith("Folded")
+            if nested:
+                outcome.nested_folds += folded
+            else:
+                outcome.folds += folded
         elif event.type == A.EventType.CONTEXT_COMPACT and not nested:
             outcome.compactions += 1
 

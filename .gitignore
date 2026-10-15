@@ -38,5 +38,6 @@ Thumbs.db
 
 *.log
 .hf-cache/
+data/caveman/
 **/*erotic*
 *.gguf

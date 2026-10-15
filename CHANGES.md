@@ -474,6 +474,36 @@ miss) took longer than the guard allowed. The constraints that shaped it:
   measures them per task and model on seeded workspaces. A scripted policy
   solves every task offline with the same tools, so the eval itself is under
   test and runs in the unit suite; real models are a target string away.
+- **A worker folds too.** A worker reading a long part a page at a time
+  carried every page into the call that wrote its answer, which is the same
+  growth folding removes from the leader. Workers now get `branch` and
+  `return` when the leader does, over their own context: a fold in a worker
+  never touches the leader's input, and the two tools survive a `tools`
+  filter, since they act on the worker's context rather than the workspace.
+  The eval counts the workers' folds apart (`nested_folds`), and the scripted
+  worker reads a part longer than a page in a branch, so the path is measured
+  offline.
+- **A reload keeps a worker's steps.** The steps were published but kept
+  nowhere, so a reload showed the `delegate` answer alone. They are journaled
+  on the call that ran them, in its turn's `meta`, never in its `items`: a
+  model never sees them, while `hello` replays them nested as they were. A
+  separate turn per step would have meant teaching every reader of the
+  transcript (window, boundary, folds, resume) to skip them; the call's own
+  turn already lands once the worker is done, which is when its steps are
+  complete. A run's `StepLog` collects them as they are relayed, so a client
+  that joins mid worker gets the steps so far with the live blocks; a call
+  is capped at 400 steps of 2,000 characters each, so a `map` over 64 parts
+  cannot bloat the journal.
+- **A baseline, measured.** The evals ran on real models, not only the
+  scripted policy: a local 27B on Ollama and a hosted DeepSeek Flash on
+  OpenRouter both solved 9 of 9 runs; the numbers are in
+  [DESIGN.md](DESIGN.md#22-tests). At scale 1 no task came near a window,
+  so neither model folded and nothing compacted, while the local model's
+  budget was capped by its read speed as designed; a larger scale or window
+  is the next measure. One lesson for running them: a target names its
+  endpoint and key in full (`MODEL@URL#KEY_ENV`), because every run reads
+  the env file afresh, and an edit to it mid eval switched the provider
+  under a long run.
 - **Written ahead, like the journal.** Plans lived in memory, so a crash or
   `/resume` lost where the work stood and the model re-planned from the
   transcript. An `Agent` keeps them in a `PlanBook`, written through to the
@@ -971,6 +1001,59 @@ exporter that copies the finished story out of the session workspace. Everything
 else it used to carry — argument parsing, streaming, tools, sandboxing — is the
 harness.
 
+## Caveman SFT data
+
+`util/caveman_data.py` makes SFT data that teaches a small agentic model to
+reason in fewer tokens. The constraints that shaped it:
+
+- **Shrink the reasoning, never the actions.** Only `think`, `analysis` and
+  `plan` go to the compressor; `commands`, `task_complete` and every other key
+  are put back from the original JSON. A student trained on the output acts
+  exactly like the teacher did, it only talks less on the way.
+- **A source with real reasoning and real tools.** OpenThoughts-Agent-SFT-100K
+  (Terminus-2 traces, Apache-2.0) has multi-turn terminal work where `think`
+  restates `analysis` almost verbatim. A Claude-distilled set was rejected:
+  single-turn arithmetic, no tools, ~40 tokens of reasoning, and a ToS risk.
+- **Deterministic gates before any judge.** Facts (paths, flags, numbers,
+  identifiers), negation classes, emptied fields, injected tags and length are
+  checked by code, so a failure names what was lost and the retry can say so.
+  A turn that fails twice keeps its original bytes: a failure costs savings,
+  never correctness. Thinking stays off on the compressor: on a probe it was 8×
+  slower and invented a fact.
+- **Not and no are one class.** The first real run failed 7 turns on
+  negation, 5 of them a rewrite of "didn't find any" as "none found". Classes
+  stay as coarse as the check needs: the form may change, the meaning may not.
+- **Fenced bodies are turns too.** A fifth of the assistant turns wrap their
+  JSON in a ` ```json ` fence; the parser took them as unparseable and passed
+  them through unshrunk. The fence is kept and re-emitted.
+- **Replay, relative to the original.** Gates catch a lost token, not a lost
+  step. A verifier model gets the task, the last output and the shrunk
+  reasoning, and must write the same commands. Many plans never spelled out
+  their commands (a heredoc's content), so a low score passes when the
+  original reasoning scores no better; the original is scored once per turn
+  and only when needed.
+- **Levels with a budget tag.** `lite` / `full` / `ultra` share one system
+  prompt (the level rides in the payload, so a prefix cache holds), each trace
+  is tagged `Reasoning budget: <level>`, and hard turns (after an error, or
+  long reasoning) start one level gentler: they keep more of their reasoning,
+  as the student should. A replay miss retries gentler too, but a lost fact
+  does not: the feedback already names it, and a `lite` retry of a short turn
+  came out no shorter (3 of 29 turns lost to `longer` on the first try of it).
+- **Full scale from the same sample.** The parquet path reads the viewer's
+  own export, so a seed picks the same rows on both paths and a larger limit
+  is a superset. Only row groups that hold a wanted row are decoded.
+- **Resumable at every step.** A row in `train.jsonl` is done; its turns are
+  written first; a half-written last line is trimmed before the next append;
+  statistics count a turn once. Source, train and turns files stream, so 94k
+  rows never sit in memory.
+- **The inference config by default, a host as a set.** The compressor
+  started on a LAN Ollama (27B, ~18 s a turn with replay: ~3 hours for 50
+  traces); it now follows the `.env` inference config, OpenRouter (~2 s a
+  turn). `CAVEMAN_URL` switches host, key and model together: a URL from one
+  provider never gets the key or the model id of another, so the OpenRouter
+  key cannot leak to a LAN host. `num_ctx` is Ollama's alone and is off
+  unless asked for.
+
 ---
 
 ## Phase log
@@ -1113,6 +1196,27 @@ harness.
         `fold_enabled`), evals (`test/agentic_eval.py`: tasks, `Outcome`,
         `Recorder`, `Policy`, targets, summary), `FoldTest`, `EvalTest` and
         the docs.
+    - [x] Follow-ups: a worker folds its own context (`fold_enabled`
+      inherited, `Engine.FOLD_TOOLS` kept by a `tools` filter), a worker's
+      steps journaled on its call (`StepLog`, `RunResult.steps`,
+      `publish_step()`, `meta["steps"]`, the steps in `live_blocks()`,
+      the page's `replay()` / `revive()`), `nested_folds` and a folding
+      scripted worker in the eval, the reload check of the `slicing` e2e,
+      the local and hosted baseline and the docs.
+34. Caveman SFT data (`util/caveman_data.py`), in three scopes:
+    - [x] Minimum scope: viewer `fetch` (seeded, paced, `Retry-After`),
+      `split_turn` / `join_turn`, `facts` / `negations` / `check_turn`,
+      `shrink_turn` with one retry, `shrink_trace`, `summarize`, the unit
+      tests and a first real run.
+    - [x] Complete scope: fenced bodies, one not / no class, the replay check
+      (`make_verify`, `similarity`, `replay_messages`, `--verifier`), levels
+      (`LEVELS`, `gentler`, `is_hard`, a gentler retry), the budget tag
+      (`tag_budget`), parquet shards (`parquet_files`, `download`,
+      `parquet_rows`, `fetch --parquet`), weights (`--weight`), streaming
+      and crash-safe JSONL, per-level outputs, the 50 trace run and the docs.
+    - [ ] Extended scope: in [`TODO.md`](TODO.md) (LoRA SFT on a student,
+      accuracy vs reasoning tokens, full scale shrink, a student-sized
+      verifier).
 
 ## Fixes worth remembering
 

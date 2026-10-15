@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import functools
 import json
 import os
 import re
@@ -287,31 +288,30 @@ class ScriptedAgent(A.Agent):
         await self.publish_plan(config, result, plan)
         await self.call_tool(
             result, "delegate", {"task": SLICE_STEPS[0][0], "step": 1}, SLICE_RESULT, "slice",
-            during=self.work,
+            during=self.work, journal=True,
         )
         plan.steps[0].status = "done"
         await self.publish_plan(config, result, plan)
 
     async def work(self, result: A.RunResult, parent: str) -> None:
-        """A worker's steps, nested under the call that delegated them: one
-        read, then its answer."""
-        nest = {"session_id": result.session_id, "parent": parent, "depth": 1}
+        """A worker's steps, nested under the call that delegated them and
+        kept for its turn, as the relay does: one read, then its answer."""
+        nest = {"parent": parent, "depth": 1}
+        step = functools.partial(self.publish_step, result)
         read = A.ToolCall(id=f"{parent}-w0", name="read_text_file", arguments={})
-        await self.events.publish(
-            A.EventType.TOOL_START, id=read.id, kind="tool", name=read.name, text=SLICE_READ, **nest
-        )
+        await step(A.EventType.TOOL_START, id=read.id, kind="tool", name=read.name, text=SLICE_READ, **nest)
         await asyncio.sleep(self.pace * 4)
-        await self.events.publish(
+        await step(
             A.EventType.TOOL_END, id=read.id, kind="tool", name=read.name, ok=True,
             result="[lines 1-2400 of 9900]", duration=0.004,
             text=f"{SLICE_READ} -> ok in 4 ms\n[lines 1-2400 of 9900]", **nest,
         )
         answer = f"{parent}-w1"
-        await self.events.publish(A.EventType.BLOCK_START, id=answer, kind="output", role="assistant", **nest)
+        await step(A.EventType.BLOCK_START, id=answer, kind="output", role="assistant", **nest)
         for chunk in chunks(SLICE_ANSWER):
-            await self.events.publish(A.EventType.BLOCK_DELTA, id=answer, kind="output", text=chunk, **nest)
+            await step(A.EventType.BLOCK_DELTA, id=answer, kind="output", text=chunk, **nest)
             await asyncio.sleep(self.pace)
-        await self.events.publish(A.EventType.BLOCK_END, id=answer, kind="output", text=SLICE_ANSWER, **nest)
+        await step(A.EventType.BLOCK_END, id=answer, kind="output", text=SLICE_ANSWER, **nest)
 
     async def publish_plan(self, config: A.AgentConfig, result: A.RunResult, plan: A.Plan) -> None:
         """Keep the plan for the session and publish it, as `Planner` does."""
@@ -331,8 +331,11 @@ class ScriptedAgent(A.Agent):
         output: str = TOOL_RESULT,
         suffix: str = "tool",
         during: Any = None,
+        journal: bool = False,
     ) -> None:
-        """One tool call, started and finished, so the page shows a tool block."""
+        """One tool call, started and finished, so the page shows a tool block;
+        with `journal` its turn is kept as the real stream keeps it, taking
+        the steps of a worker `during` ran."""
         call = A.ToolCall(
             id=f"{result.session_id}-{suffix}",
             name=name,
@@ -371,6 +374,16 @@ class ScriptedAgent(A.Agent):
             duration=call.duration,
             text=call.report(),
         )
+        if journal:
+            items = [
+                {"type": "function_call", "call_id": call.call_id, "name": call.name,
+                 "arguments": json.dumps(call.arguments)},
+                {"type": "function_call_output", "call_id": call.call_id, "output": output},
+            ]
+            meta = {"name": call.name, "ok": call.ok}
+            await self.checkpoint(
+                result, A.Turn("tool", call.report(), id=call.id, run=result.run_id, items=items, meta=meta)
+            )
 
     async def write(self, block: A.Block, text: str) -> None:
         """Send text the way a provider does: a few words at a time."""
@@ -798,8 +811,8 @@ def slicing(browser: Any, device: Device, url: str, gate: Gate, out: Path) -> Pa
     the mark with one arc per step, the strip says the progress and opens into
     the steps with what is left and how fast the model reads, the mark's label
     says both, the delegated step shows the worker's read folded and its answer
-    nested in the call, and a reload keeps the plan; returns a capture of the
-    open plan."""
+    nested in the call, and a reload keeps the plan and the worker's steps;
+    returns a capture of the open plan."""
     context = browser.new_context(**device.context())
     page = context.new_page()
 
@@ -848,6 +861,10 @@ def slicing(browser: Any, device: Device, url: str, gate: Gate, out: Path) -> Pa
         page.reload()
         online()
         expect(page.text_content("#plan-count") == "1/4", "a reload did not bring the plan back")
+        expect(page.locator(f"{nest} > .block").count() == 2, "a reload lost the worker's steps")
+        expect(page.get_attribute(step, "data-collapsed") == "true", "a replayed step is not folded")
+        expect(SLICE_ANSWER in (page.text_content(f"{answer} .block-body") or ""), "a reload lost the answer")
+        expect(page.locator(f"{answer} .vote").count() == 0, "a replayed worker answer offers a vote")
         return shot
     finally:
         context.close()

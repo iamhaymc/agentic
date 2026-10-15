@@ -7,24 +7,20 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 ---
 
-- [ ] Move the text copy button on the markdown editor to the top right corner of the editor view.
-  
-- [ ] implement an efficient way for token text that fades in quickly when displayed.
+- [ ] Add support for decision models like jev and clef.
 
+- [ ] Move the text copy button on the markdown editor to the top right corner of the editor view.
+- [ ] implement an efficient way for token text that fades in quickly when displayed.
 - [ ] Redesign the context usage meter so it is communicated through the main icon (maybe a ring around the icon that fills up like in vscode) 
 
-- [ ] **Work slicing, follow-ups.** Each call is timed, the budget is
-      capped to what the model reads in time and leaves time to write its
-      longest reply, `plan` measures and refuses oversized steps, asks the user
-      once about a large plan, is written through to the store and shown on the
-      mark, in a strip and by `/plan`, `delegate` runs a step in a fresh
-      context and `map` one worker per part, their steps nested under the call,
-      `branch` / `return` fold a finished sub-task, a note recites budget and
-      plan, and `test/agentic_eval.py` measures it all (see CHANGES.md). Still
-      open:
-  - [ ] Run the evals (`test/agentic_eval.py`) on a local and a hosted model and record a baseline (only the scripted policy has run)
-  - [ ] Fold a worker's own context too (workers get no `branch` / `return` today)
-  - [ ] Replay a worker's steps after a reload (they are not journaled: a reload shows the `delegate` answer alone)
+- [ ] **Caveman SFT data, extended scope.** `util/caveman_data.py` shrinks
+      agent reasoning with gates and a replay check (see DESIGN.md §24). Still open:
+  - [ ] LoRA SFT on a small student (Qwen3.5 4B/9B); the local GPU is a GTX 1070 8 GB, so train remotely
+  - [ ] Eval accuracy vs reasoning tokens: OpenThoughts-TBLite / Terminal-Bench, BFCL; baseline vs shrunk, per level
+  - [ ] Shrink at full scale: 94k traces, ~1.1M turns; OpenRouter ran 50 traces in 11 min (~14 days for all, traces in order): shrink several traces at once
+  - [ ] Narrow the hard-turn rule: 40% of turns count as hard (any `error` word in the output) and save 23% at `lite` vs 36% at `full`
+  - [ ] A student-sized verifier for the replay check (does a 4B still derive the commands?)
+  - [ ] Mix levels into one SFT set (per-trace level sampling) and keep a share of untagged original traces
 
 - [ ] **Context compaction, extended scope.** Compaction is token aware,
       tiered and runs before every model call (see CHANGES.md). Still open:

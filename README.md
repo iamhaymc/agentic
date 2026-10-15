@@ -124,6 +124,22 @@ python app/agentic.py --serve # or run VS Code task "serve"
 
 > Default URL: `http://127.0.0.1:8765/`
 
+## ▶️ Run (Data)
+
+Shrink agent reasoning into SFT data, caveman voice, every action kept:
+
+```bash
+uv run python util/caveman_data.py fetch --limit 50    # seeded sample -> data/caveman/source.jsonl
+uv run python util/caveman_data.py shrink --level full # -> data/caveman/full/train.jsonl
+uv run python util/caveman_data.py stats --level full  # re-summarize turns.jsonl
+```
+
+- levels `lite` / `full` / `ultra`; hard turns get one level gentler; each trace tagged `Reasoning budget: <level>`
+- a turn that loses a fact, a negation or its commands (replay check) keeps its original text
+- `fetch --parquet --limit 0` downloads the whole dataset (1.75 GB) instead of sampling the viewer
+
+> Compressor: the `.env` inference config (OpenRouter), or `CAVEMAN_URL` + `CAVEMAN_LLM` ([OPTIONS](OPTIONS.md#caveman-data)); depth in [DESIGN](DESIGN.md#24-caveman-sft-data)
+
 ## ▶️ Write (Editor)
 
 Long prompts get a markdown editor with highlighting:
@@ -197,8 +213,8 @@ map:
 - a large plan (slices, minutes, cost) or a split that depends on intent asks the user once
 - `delegate` runs one step in a fresh context with its own tools; only its capped answer returns
 - `map` cuts inputs by tokens at line boundaries and runs one worker per part; the answers come back in order, sized to fit one slice
-- a worker's steps show nested under its call on the page and indented in the repl
-- `branch` / `return` fold a finished sub-task out of the context; only its goal and summary stay
+- a worker's steps show nested under its call on the page and indented in the repl; a reload brings them back
+- `branch` / `return` fold a finished sub-task out of the context, the leader's or a worker's; only its goal and summary stay
 - every call ends with a budget note: context in use, the slice, the open plan
 - the plan is written through to the store: `/resume` and a restart continue it
 - the plan rings the mark (one arc per step) and sits in the bar; `/plan` lists it with the speeds
@@ -209,6 +225,7 @@ BDD Test(s):
 
 ```bash
 python -m unittest test.agentic_bdd -v
+uv run python -m unittest discover -s util -p "caveman_data_bdd.py"  # caveman data, ~1 s
 ```
 
 Eval(s) (slow; `--scripted` runs offline):

@@ -667,7 +667,7 @@
       this.copyButton = this.node.querySelector(".copy");
       this.toggle.addEventListener("click", () => this.collapse());
       this.copyButton.addEventListener("click", () => this.copy());
-      // a worker's answer is not journaled, so there is nothing to vote on
+      // a worker's answer is kept on its call, not as a turn: nothing to vote on
       if (this.kind === "output" && !this.nested) this.votes();
     }
 
@@ -1608,6 +1608,8 @@
           block.collapse(true);
         }
         block.end();
+        // the steps its workers took, nested in the call again (finished, so folded)
+        (meta.steps || []).forEach((step) => this.revive({ ...step, done: true }));
         if (meta.vote) block.voted(meta.vote);
         // a run still journaled as running is either live (left plain) or unfinished
         const stopped = meta.status && meta.status !== "ok" && meta.status !== "running";
@@ -1617,10 +1619,15 @@
       });
       Blocks.scroll();
     },
-    /** A block of the run in flight, as it stands when this client joins. */
+    /** A block of the run in flight, as it stands when this client joins, or
+     *  a worker's step (`parent`), live or journaled on its call. */
     revive(live) {
-      const block = Blocks.ensure(live.id, live.kind, live.role);
-      if (live.kind === "tool") block.label(live.name || "tool");
+      const block = Blocks.ensure(live.id, live.kind, live.role, live.parent);
+      if (live.kind === "tool") {
+        block.label(live.name || "tool");
+        if (live.done) block.node.dataset.status = live.ok === false ? "failed" : "ok";
+      }
+      if (live.kind === "compact" && live.parent) block.label("compacted");
       block.set(live.text || "");
       if (live.done) block.end();
       Blocks.scroll();

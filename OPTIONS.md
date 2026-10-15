@@ -173,10 +173,11 @@ Give the leader the `plan` tool and end every model call with a budget note.
 - The plan is written through to the store, so `/resume` and a restart continue it
 
 ### `fold_enabled`
-Give the leader `branch` and `return`: the steps of a finished sub-task are folded out of its context, its summary stays.
+Give the leader and its workers `branch` and `return`: the steps of a finished sub-task are folded out of that context, its summary stays.
 - Environment variable: `AGENTIC_FOLD_ENABLED`
 - Expected format `true` or `false`, default `true`
-- Needs compaction on (`context_trigger` > 0); a worker never gets it
+- Needs compaction on (`context_trigger` > 0)
+- A worker folds its own context only; it keeps both tools whatever `tools` of `delegate` / `map` names
 - The fold is journaled: the next run starts from the folded context
 
 ### `slice_share`
@@ -281,3 +282,28 @@ Give the leader the `ask_user` tool, which puts a question (with optional choice
 - Expected format `true`, `false` or unset
 - Unset follows the mode: repl `true` (numbered choices at an `answer>` prompt), web `true` (a question card on the discussion), embedded `Engine` / one shot `--input` run `false` (nobody to answer)
 - A question waits for as long as the user takes: the stall guard never fails a run that waits on a person; stop or Ctrl-C cancels it
+
+## Caveman data
+
+Environment variables of `util/caveman_data.py shrink`; its flags win, `.env` is loaded (the shell wins).
+
+**Default: the inference config (`AGENTIC_INFERENCE_URL` / `_KEY` / `_LLM`, e.g. OpenRouter) → `CAVEMAN_*` overrides as a set**
+
+### `CAVEMAN_URL`
+Compressor and verifier API URL (`--url`)
+- Default `AGENTIC_INFERENCE_URL`
+- LAN Ollama: `http://10.0.0.6:11434/v1` (add `--ctx 16384`: Ollama's `num_ctx`, rejected by hosted APIs)
+
+### `CAVEMAN_KEY`
+Compressor and verifier API key (`--key`)
+- Default `AGENTIC_INFERENCE_KEY`, only while `CAVEMAN_URL` is unset: a key never goes to a host it was not issued for
+
+### `CAVEMAN_LLM`
+Compressor model (`--model`)
+- Default `AGENTIC_INFERENCE_LLM`, only while `CAVEMAN_URL` is unset; required with it
+- LAN Ollama: `huihui_ai/Qwen3.8-abliterated:27b` or `qwen3.8:27b-mlx`
+
+### `CAVEMAN_VERIFIER`
+Replay verifier model (`--verifier`)
+- Default empty: the compressor
+- `--no-replay` skips the verifier
