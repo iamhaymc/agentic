@@ -432,6 +432,48 @@ miss) took longer than the guard allowed. The constraints that shaped it:
   the split rides on the same card, so the user answers one question, not two.
   Once per plan, since a question on every progress update would be a nag;
   `Stop` drops the plan rather than leaving it recited on every call.
+- **A reply takes time too.** Ollama and some other servers send a tool call
+  whole once it is written, so the stream is silent for the read *and* the
+  write; a cap that only counted the read let a local model writing a long
+  file stall anyway. Every reply's length is kept (timed or not, since the ones
+  sent whole are exactly the ones that cannot be timed), and the cap sets aside
+  the time to write the longest recent one at the measured write speed, never
+  more than half the time and never more than the reserve. Measured, never
+  guessed: nothing is set aside before the write speed is known.
+- **Seen, not only recited.** The model sees the plan on every call, the user
+  saw it only in a tool result scrolling away. Every change of a plan is
+  published (`plan.update`, the plan viewed with its sizes and what is left),
+  the speeds ride on `context.usage`, and `hello` carries the plan; the page
+  rings the mark with one arc per step and keeps a strip in the bar that
+  opens into the steps, the repl prints a `[plan]` line per change and the
+  speeds after a run, and `/plan` lists both.
+- **A worker's steps belong to its call.** Progress lines in the `delegate`
+  block said what a worker did, not what it found, and the repl showed only
+  dots. Its blocks and calls are now published on the leader's bus with the
+  call's block as `parent`: the page nests them under the call and folds each
+  finished step, the repl indents its calls and answer. Its start, end and
+  context use stay off the bus, so a worker can neither end the run on the
+  page nor move the leader's gauge, and the call still gets a heartbeat.
+- **The harness cuts, the model does not.** A file larger than one worker
+  may read had to be split by the model, by hand, into line ranges. `map`
+  cuts inputs at line boundaries by the same counter the plan uses and runs
+  one worker per part, the answers sized so all of them fit one slice of the
+  leader; one at a time by default, since a local server answers one request
+  at a time anyway.
+- **Fold what is done.** Compaction summarises the oldest turns whatever
+  they hold; the model knows better which steps stop mattering once a
+  sub-task is done. `branch` opens a sub-task and `return` closes it with the
+  model's own summary: from the next call on the steps between are hidden.
+  The fold is one more sticky decision, found again by call id in every
+  call's items: the prefix up to the branch stays as cached, the `return`
+  call carries the summary, pairs are never split (safe cuts at both ends),
+  compaction leaves hidden steps alone, and the journal marks them so the
+  next run starts folded. No summarizer call, and branches nest.
+- **Measured on long tasks, not argued.** Peak context, success and wall
+  time are what slicing, `map` and folding are for, so `test/agentic_eval.py`
+  measures them per task and model on seeded workspaces. A scripted policy
+  solves every task offline with the same tools, so the eval itself is under
+  test and runs in the unit suite; real models are a target string away.
 - **Written ahead, like the journal.** Plans lived in memory, so a crash or
   `/resume` lost where the work stood and the model re-planned from the
   transcript. An `Agent` keeps them in a `PlanBook`, written through to the
@@ -1051,8 +1093,26 @@ harness.
       `question` / `options` of `plan`), `PlanBook` written through to the
       store and recited by `/resume`, `SizingTest`, `PlanJournalTest`,
       `WorkerTest` and the docs.
-    - [ ] Extended scope: in [`TODO.md`](TODO.md) (`map`, context folding,
-      evals).
+    - [x] Extended scope, in three parts:
+      - [x] Minimum: the time to write a reply in the cap (`Throughput.replies`,
+        `readable`, `READ_SHARE`), `Plan.view` and `plan.update` on every
+        change (`Planner.notify`), the slice and the speeds on
+        `context.usage`, `/plan`, the plan in `hello`, the `[plan]` and speed
+        lines of the console, the plan ring and strip on the page,
+        `PlanViewTest`, the `slicing` check of `test/agentic_e2e.py` and the
+        docs.
+      - [x] Complete: a worker's steps nested under its call (`WorkerRelay`
+        `forward`, `Engine.nest()`, `parent` / `depth`, the page's
+        `.block-nest`, the console's indent, CSS kind styles scoped to a
+        block's own head and body), `map` (`Planner.chunks()`, `build_map()`,
+        `map_parts()`, `map_answer()`, `map_prompt()`, `MAP_LIMIT`,
+        `map_parallel`), `MapTest`, the nested worker in the `slicing` check
+        and the docs.
+      - [x] Extended: context folding (`Folder`, `branch` / `return`,
+        `ContextState.folds`, `Compactor.hidden()`, `mark_folded()`,
+        `fold_enabled`), evals (`test/agentic_eval.py`: tasks, `Outcome`,
+        `Recorder`, `Policy`, targets, summary), `FoldTest`, `EvalTest` and
+        the docs.
 
 ## Fixes worth remembering
 

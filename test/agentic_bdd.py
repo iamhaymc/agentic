@@ -2103,11 +2103,12 @@ class SliceTest(unittest.TestCase):
     def test_a_slow_model_caps_the_budget_to_what_it_reads_in_time(self):
         speed = A.Throughput()
         context = self.context(speed)
-        self.call(context, 0.0, 0.5, 1.0, 20_000)  # first call of a run: not timed
+        self.call(context, 0.0, 0.5, 1.0, 20_000, wrote=0)  # first call of a run: not timed
         self.assertEqual(speed.samples, 0)
-        self.call(context, 2.0, 52.0, 53.0, 25_000)  # 5k new tokens in 50 s
+        self.call(context, 2.0, 52.0, 53.0, 25_000, wrote=0)  # 5k new tokens in 50 s
         self.assertEqual(speed.prefill, 100.0)
         # 100 tokens/s x 600 s x 0.5 = 30k: what a cold read gets done in time
+        # (nothing written yet, so no time is left for a reply)
         self.assertEqual(context.budget.usable, 30_000)
         self.assertEqual(context.base.usable, 80_000)
         self.assertEqual(context.limits().slice, 7_500)
@@ -2187,6 +2188,74 @@ class SliceTest(unittest.TestCase):
     def test_the_cap_never_leaves_less_than_a_floor(self):
         context = self.context(A.Throughput(prefill=1.0))
         self.assertEqual(context.budget.usable, A.ContextRun.TIMED_FLOOR)
+
+    def test_the_cap_leaves_time_to_write_the_longest_recent_reply(self):
+        speed = A.Throughput(prefill=100.0, decode=10.0, replies=[200, 1000])
+        context = self.context(speed)
+        # 300 s of the stall guard, 100 s of it writing 1k tokens: 200 s to read
+        self.assertEqual(context.budget.usable, 20_000)
+        self.assertEqual(speed.readable(300.0), 20_000)
+
+    def test_a_reply_takes_at_most_half_of_the_time(self):
+        context = self.context(A.Throughput(prefill=100.0, decode=1.0, replies=[1000]))
+        self.assertEqual(context.budget.usable, 15_000)
+
+    def test_a_reply_is_reserved_no_longer_than_the_reserve(self):
+        speed = A.Throughput(prefill=100.0, decode=1000.0, replies=[50_000])
+        self.assertEqual(speed.readable(300.0), 25_000)
+        context = self.context(speed)  # the reserve: 20k tokens, 20 s to write
+        self.assertEqual(context.budget.usable, 28_000)
+
+    def test_an_unmeasured_write_speed_reserves_nothing(self):
+        context = self.context(A.Throughput(prefill=100.0, replies=[5000]))
+        self.assertEqual(context.budget.usable, 30_000)
+
+    def test_a_reply_sent_whole_still_sizes_the_reservation(self):
+        speed = A.Throughput(prefill=100.0, decode=10.0)
+        context = self.context(speed)
+        self.assertEqual(context.budget.usable, 30_000)
+        context.rebuilt = True
+        self.call(context, 0.0, 30.0, 30.01, 3_000, wrote=1000)  # a tool call held back whole
+        self.assertEqual(speed.samples, 0)  # not timed
+        self.assertEqual(speed.reply, 1000)
+        self.assertEqual(context.budget.usable, 20_000)  # but sized
+        self.assertEqual(speed.to_dict()["reply"], 1000)
+
+    def test_only_the_newest_replies_are_kept(self):
+        speed = A.Throughput()
+        speed.wrote(9000)
+        for _ in range(A.Throughput.WINDOW):
+            speed.wrote(10)
+        self.assertEqual(speed.reply, 10)
+        speed.wrote(0)
+        self.assertEqual(len(speed.replies), A.Throughput.WINDOW)
+
+    def test_a_worker_budget_leaves_time_to_write_too(self):
+        engine = A.Engine(env=False, config_file=False, context_window=100_000, context_reserve=20_000)
+        self.addCleanup(engine.close)
+        engine.speeds[(engine.config.inference_url, engine.config.inference_llm)] = A.Throughput(
+            prefill=100.0, decode=10.0, replies=[1000]
+        )
+        self.assertEqual(run(engine.worker_budget(engine.config)), 10_000)  # half of 20k
+
+    def test_the_usage_carries_the_slice_and_the_speeds(self):
+        posted = []
+
+        async def publish(event_type, **data):
+            posted.append((event_type, data))
+
+        context = self.context(A.Throughput(prefill=100.0, decode=20.0), publish=publish)
+        run(context.fit([{"role": "user", "content": "hi"}]))
+        usage = [data for kind, data in posted if kind == A.EventType.CONTEXT_USAGE][-1]
+        self.assertEqual((usage["prefill"], usage["decode"]), (100.0, 20.0))
+        self.assertEqual(usage["slice"], 7_500)  # a quarter of the 30k the model reads in time
+        self.assertEqual(usage["usable"], context.budget.usable)
+        bare = self.context(A.Throughput())
+        self.assertNotIn("prefill", bare.usage(10))
+
+    def test_the_note_says_how_fast_the_model_writes_once_measured(self):
+        context = self.context(A.Throughput(prefill=100.0, decode=20.0))
+        self.assertIn("the model reads ~100 and writes ~20 tokens/s", context.note_text())
 
     def test_the_note_closes_the_prompt_or_follows_a_tool_output(self):
         prompt = [{"role": "user", "content": "do it"}]
@@ -2617,7 +2686,7 @@ class WorkerTest(unittest.TestCase):
         self.assertTrue(outputs["d1"].startswith("A is all x.\n[worker: 1 tool calls in "), outputs["d1"])
         self.assertEqual([call.name for call in result.tools], ["delegate"])
 
-    def test_the_worker_is_shown_as_progress_of_its_call(self):
+    def test_the_workers_steps_are_nested_under_its_call(self):
         from agents.testing import assistant_message, function_call
 
         engine, _ = self.scripted([
@@ -2630,13 +2699,45 @@ class WorkerTest(unittest.TestCase):
         engine.events.on(A.EventType.ALL, seen.append)
         result = run(engine.run("go", workspace=self.root, session_id="s1"))
         self.assertTrue(result.ok, result.error)
-        lines = [e.data["text"] for e in seen if e.type == A.EventType.TOOL_PROGRESS]
-        self.assertTrue(lines, "nothing relayed")
-        self.assertTrue(all(e.data["id"] == result.tools[0].id for e in seen if e.type == A.EventType.TOOL_PROGRESS))
-        self.assertIn('-> read_text_file(path="a.md")\n', lines)
-        started = [e.data["name"] for e in seen if e.type == A.EventType.TOOL_START]
-        self.assertEqual(started, ["delegate"])  # the worker's calls stay off the leader's bus
+        call = result.tools[0].id
+        own = [e for e in seen if "parent" not in e.data]
+        nested = [e for e in seen if "parent" in e.data]
+        self.assertEqual([e.data["name"] for e in own if e.type == A.EventType.TOOL_START], ["delegate"])
+        self.assertTrue(nested and all(e.data["parent"] == call and e.data["depth"] == 1 for e in nested))
+        self.assertTrue(all(e.session_id == "s1" for e in nested))
+        self.assertIn("read_text_file", [e.data["name"] for e in nested if e.type == A.EventType.TOOL_START])
+        answer = [e for e in nested if e.type == A.EventType.BLOCK_END and e.data["kind"] == "output"]
+        self.assertEqual(answer[0].data["text"], "A is all x.")
+        kinds = {e.type for e in nested}
+        self.assertFalse(kinds & {A.EventType.AGENT_START, A.EventType.AGENT_END, A.EventType.CONTEXT_USAGE})
+        beats = [e for e in own if e.type == A.EventType.TOOL_PROGRESS]
+        self.assertTrue(beats and all(e.data["id"] == call and e.data["text"] == "" for e in beats))
         self.assertEqual(sum(e.type == A.EventType.AGENT_END for e in seen), 1)
+        self.assertEqual([b.kind for b in result.blocks], ["tool", "output"])  # the run keeps its own
+
+    def test_a_relay_with_a_forward_nests_and_beats_without_lines(self):
+        reports, forwarded = [], []
+        clock = [0.0]
+
+        async def report(call_id, text):
+            reports.append(text)
+
+        async def forward(event):
+            forwarded.append(event.type)
+
+        relay = A.WorkerRelay(report, "c1", clock=lambda: clock[0], forward=forward)
+
+        async def drive():
+            await relay(A.Event(A.EventType.AGENT_START, {}))
+            await relay(A.Event(A.EventType.TOOL_START, {"text": "read()"}))
+            await relay(A.Event(A.EventType.CONTEXT_USAGE, {"tokens": 1}))
+            clock[0] = 2.0
+            await relay(A.Event(A.EventType.CONTEXT_COMPACT, {"message": "Compacted"}))
+            await relay(A.Event(A.EventType.MODEL_WAIT, {}))
+
+        run(drive())
+        self.assertEqual(forwarded, [A.EventType.TOOL_START, A.EventType.CONTEXT_COMPACT])
+        self.assertEqual(reports, ["", ""])  # paced heartbeats, no lines
 
     def test_a_long_answer_is_clipped(self):
         from agents.testing import assistant_message, function_call
@@ -2817,6 +2918,494 @@ class WorkerTest(unittest.TestCase):
             "-> " + "y" * 157 + "...\n",
         ])
         self.assertTrue(all(call_id == "c1" for call_id, _ in reports))
+
+
+class MapTest(unittest.TestCase):
+    """`map`: inputs cut into parts by tokens, one worker per part, answers in order."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.ws = A.Workspace(self.root)
+        # ten lines of 100 tokens each
+        (self.root / "a.md").write_text("".join(f"{n:02d}" + "x" * 397 + "\n" for n in range(10)), encoding="utf-8")
+
+    def cutter(self):
+        return A.Planner(self.ws, A.TokenCounter(None), None, A.LruCache(1), "")
+
+    def scripted(self, steps, **overrides):
+        return SliceTest.scripted(self, steps, **overrides)
+
+    def test_inputs_are_cut_at_lines_into_parts_of_at_most_the_limit(self):
+        parts, missing = self.cutter().chunks(["a.md", "nope.md"], 250)
+        self.assertEqual(parts, [(f"a.md:{n}-{n + 1}", 200) for n in range(1, 10, 2)])
+        self.assertEqual(missing, ["nope.md"])
+        whole, _ = self.cutter().chunks(["a.md"], 5000)
+        self.assertEqual(whole, [("a.md", 1000)])  # a file that fits is named alone
+
+    def test_a_range_is_cut_within_itself_and_a_long_line_is_a_part_of_its_own(self):
+        parts, _ = self.cutter().chunks(["a.md:3-7"], 250)
+        self.assertEqual([name for name, _ in parts], ["a.md:3-4", "a.md:5-6", "a.md:7-7"])
+        (self.root / "b.md").write_text("short\n" + "y" * 4000 + "\nshort", encoding="utf-8")
+        parts, _ = self.cutter().chunks(["b.md"], 250)
+        self.assertEqual([name for name, _ in parts], ["b.md:1-1", "b.md:2-2", "b.md:3-3"])
+        (self.root / "c.png").write_bytes(b"\x89PNG")
+        self.assertEqual(self.cutter().chunks(["c.png"], 250)[0], [("c.png", A.TokenCounter.IMAGE_TOKENS)])
+
+    def test_cutting_stops_past_the_most_parts(self):
+        parts, _ = self.cutter().chunks(["a.md"], 100, most=3)
+        self.assertEqual(len(parts), 4)
+
+    def test_each_part_runs_in_a_worker_and_the_answers_come_back_in_order(self):
+        from agents.testing import assistant_message, function_call
+
+        args = {"task": "Count the x", "inputs": ["a.md"], "chunk_tokens": 450}
+        engine, model = self.scripted([
+            [function_call("map", args, call_id="m1")],
+            [assistant_message("part one")],
+            [assistant_message("part two")],
+            [assistant_message("part three")],
+            [assistant_message("done")],
+        ])
+        seen: list[A.Event] = []
+        engine.events.on(A.EventType.ALL, seen.append)
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        prompts = [call.input[0]["content"] for call in model.calls[1:4]]
+        self.assertTrue(prompts[0].startswith("Count the x\n\nYour part (1 of 3): a.md, lines 1-4 (~400 tokens)"), prompts[0])
+        self.assertIn('read_text_file(path="a.md", offset=5, limit=4)', prompts[1])
+        output = WorkerTest.outputs(model.calls[-1])["m1"]
+        self.assertTrue(output.startswith("Mapped 3 parts (~1.0k tokens) of a.md in "), output)
+        self.assertLess(output.index("## 1/3 a.md:1-4\npart one"), output.index("## 2/3 a.md:5-8\npart two"))
+        self.assertIn("## 3/3 a.md:9-10\npart three", output)
+        self.assertNotIn("[worker:", output)
+        call = result.tools[0].id
+        parts = [e for e in seen if e.type == A.EventType.TOOL_START and e.data.get("parent") == call]
+        self.assertEqual([e.data["name"] for e in parts], ["part 1/3", "part 2/3", "part 3/3"])
+        self.assertEqual(parts[0].data["text"], "part 1/3: a.md:1-4")
+        inner = [e for e in seen if e.data.get("parent") == parts[1].data["id"]]
+        self.assertTrue(inner and all(e.data["depth"] == 2 for e in inner))
+        ends = [e for e in seen if e.type == A.EventType.TOOL_END and e.data.get("parent") == call]
+        self.assertEqual([e.data["ok"] for e in ends], [True] * 3)
+
+    def test_the_answers_share_the_slice_of_the_leader(self):
+        engine = A.Engine(env=False, config_file=False, worker_max_tokens=1000)
+        self.addCleanup(engine.close)
+        self.assertEqual(engine.map_answer(engine.config, 8000, 4), 1000)
+        self.assertEqual(engine.map_answer(engine.config, 8000, 40), 200)
+        self.assertEqual(engine.map_answer(engine.config, 8000, 400), A.Engine.MAP_ANSWER)
+
+    def test_too_many_parts_are_refused(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted(
+            [
+                [function_call("map", {"task": "t", "inputs": ["a.md"], "chunk_tokens": 100}, call_id="m1")],
+                [assistant_message("done")],
+            ],
+        )
+        with unittest.mock.patch.object(A.Engine, "MAP_LIMIT", 5):
+            run(engine.run("go", workspace=self.root, session_id="s1"))
+        output = WorkerTest.outputs(model.calls[-1])["m1"]
+        self.assertTrue(output.startswith("Not mapped: the inputs make more than 5 parts"), output)
+
+    def test_parts_run_at_most_map_parallel_at_once_and_a_failure_is_kept_apart(self):
+        running, peak = [0], [0]
+
+        class Counting(A.Engine):
+            async def run_worker(self, config, result, workspace, task, sizes=(), missing=(), **kwargs):
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+                await asyncio.sleep(0.01)
+                running[0] -= 1
+                if "(2 of" in task:
+                    return "Error: the worker failed (timeout) after 0 tool calls: slow", False
+                return "fine", True
+
+        for parallel, expected in ((1, 1), (3, 3)):
+            peak[0] = 0
+            engine = Counting(env=False, config_file=False, map_parallel=parallel, shell_enabled=False)
+            self.addCleanup(engine.close)
+            mapper = engine.build_map(engine.config, A.RunResult(session_id="s"), self.ws)
+            output = run(mapper(None, "t", ["a.md"], 250, 0, []))
+            self.assertEqual(peak[0], expected)
+            self.assertIn("## 2/5 a.md:3-4 (failed)\nError: the worker failed (timeout)", output)
+            self.assertIn("## 3/5 a.md:5-6\nfine", output)
+            self.assertIn("1 failed", output.splitlines()[0])
+
+    def test_a_plan_step_lends_its_inputs_and_is_marked_done(self):
+        from agents.testing import assistant_message, function_call
+
+        plan = {"steps": [{"title": "Count", "inputs": ["a.md"], "status": "pending"}]}
+        engine, model = self.scripted([
+            [function_call("plan", plan, call_id="p1")],
+            [function_call("map", {"task": "Count the x", "step": 1}, call_id="m1")],
+            [assistant_message("all of it")],
+            [assistant_message("done")],
+        ])
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        self.assertTrue(WorkerTest.outputs(model.calls[-1])["m1"].endswith("[plan] step 1 marked done"))
+        self.assertEqual(engine.plans.get("s1").steps[0].status, "done")
+
+    def test_map_needs_inputs_and_is_built_with_delegate(self):
+        engine = A.Engine(env=False, config_file=False, shell_enabled=False)
+        self.addCleanup(engine.close)
+        mapper = engine.build_map(engine.config, A.RunResult(), self.ws)
+        self.assertEqual(run(mapper(None, "t", [], 0, 0, [])), "Error: map needs inputs (paths, globs or line ranges)")
+        self.assertEqual(run(mapper(None, "t", ["nope.md"], 0, 0, [])), "Error: nothing to map: nope.md not found")
+        names = {tool.name for tool in run(engine.build_run_tools(self.ws, engine.config, A.RunResult()))}
+        self.assertIn("map", names)
+        off = engine.config.merge(delegate_enabled=False)
+        self.assertIsNone(engine.build_map(off, A.RunResult(), self.ws))
+
+
+class FoldTest(unittest.TestCase):
+    """Context folding: `branch` opens a sub-task, `return` folds its steps into its summary."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "a.md").write_text("x" * 2000, encoding="utf-8")
+
+    def scripted(self, steps, **overrides):
+        return SliceTest.scripted(self, steps, **overrides)
+
+    @staticmethod
+    def calls(model_call):
+        """The call ids of the calls in the input of a model call, in order."""
+        return [i["call_id"] for i in model_call.input if i.get("type") == "function_call"]
+
+    @staticmethod
+    def call(call_id, name="tool"):
+        return {"type": "function_call", "call_id": call_id, "name": name, "arguments": "{}"}
+
+    @staticmethod
+    def output(call_id, text="ok"):
+        return {"type": "function_call_output", "call_id": call_id, "output": text}
+
+    def test_the_steps_between_a_branch_and_its_return_are_hidden(self):
+        items = [
+            {"role": "user", "content": "go"},
+            self.call("b1", "branch"), self.output("b1", "Branch opened"),
+            self.call("r1"), self.output("r1", "x" * 4000),
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hm"}]},
+            self.call("r2"), self.output("r2", "y" * 4000),
+            self.call("t1", "return"), self.output("t1", "Folded"),
+        ]
+        compactor = A.Compactor(A.TokenCounter(None), A.ContextBudget.of(100_000))
+        state = A.ContextState()
+        before = compactor.tokens(items, state)
+        state.folds["t1"] = "b1"
+        self.assertEqual(compactor.hidden(items, state), {3, 4, 5, 6, 7})
+        view = compactor.view(items, state)
+        self.assertEqual([i.get("call_id") for i in view], [None, "b1", "b1", "t1", "t1"])
+        self.assertLess(compactor.tokens(items, state), before - 2000)
+        state.folds["t9"] = "b9"  # a fold whose calls are not in the list hides nothing
+        self.assertEqual(compactor.hidden(items, state), {3, 4, 5, 6, 7})
+
+    def test_a_compaction_never_summarises_or_clears_what_a_fold_hid(self):
+        seen = []
+
+        async def summarize(previous, segment, focus=""):
+            seen.append(segment)
+            return "summary"
+
+        items = [
+            {"role": "user", "content": "go"},
+            self.call("b1", "branch"), self.output("b1", "Branch opened"),
+            self.call("r1", "read"), self.output("r1", "secret " * 400),
+            self.call("t1", "return"), self.output("t1", "Folded"),
+            self.call("c1", "read"), self.output("c1", "z " * 400),
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "done"}]},
+        ]
+        compactor = A.Compactor(A.TokenCounter(None), A.ContextBudget.of(100_000), summarize=summarize, keep=0)
+        state = A.ContextState(folds={"t1": "b1"})
+        report = run(compactor.compact(items, state, force=True))
+        self.assertNotIn("r1", report.cleared)
+        self.assertNotIn("secret", "".join(seen))
+        self.assertIn("Branch opened", "".join(seen))
+
+    def test_a_returned_branch_is_folded_from_the_next_call_on(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted([
+            [function_call("branch", {"goal": "Count the x"}, call_id="b1")],
+            [function_call("read_text_file", {"path": "a.md"}, call_id="r1")],
+            [function_call("list_directory", {"path": "."}, call_id="r2")],
+            [function_call("return", {"summary": "a.md holds 2000 x."}, call_id="t1")],
+            [assistant_message("done")],
+            [assistant_message("again")],
+        ])
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(self.calls(model.calls[3]), ["b1", "r1", "r2"])  # not folded yet
+        self.assertEqual(self.calls(model.calls[4]), ["b1", "t1"])
+        outputs = WorkerTest.outputs(model.calls[4])
+        self.assertTrue(outputs["b1"].startswith("Branch opened: Count the x."), outputs["b1"])
+        self.assertTrue(outputs["t1"].startswith("Folded the branch 'Count the x': ~"), outputs["t1"])
+        self.assertEqual(result.context.state.folds, {"t1": "b1"})
+
+    def test_branches_nest_and_return_closes_the_innermost(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted([
+            [function_call("branch", {"goal": "outer"}, call_id="b1")],
+            [function_call("read_text_file", {"path": "a.md"}, call_id="r1")],
+            [function_call("branch", {"goal": "inner"}, call_id="b2")],
+            [function_call("list_directory", {"path": "."}, call_id="r2")],
+            [function_call("return", {"summary": "inner done"}, call_id="t2")],
+            [function_call("return", {"summary": "outer done"}, call_id="t1")],
+            [function_call("return", {"summary": "nothing open"}, call_id="t0")],
+            [assistant_message("done")],
+        ])
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(self.calls(model.calls[5]), ["b1", "r1", "b2", "t2"])
+        self.assertEqual(self.calls(model.calls[6]), ["b1", "t1"])
+        self.assertEqual(
+            WorkerTest.outputs(model.calls[7])["t0"], "Error: no branch is open in this run"
+        )
+
+    def test_a_fold_is_kept_by_the_journal_for_the_next_run(self):
+        from agents.testing import ScriptedModel, assistant_message, function_call
+
+        model = ScriptedModel([
+            [function_call("branch", {"goal": "Count the x"}, call_id="b1")],
+            [function_call("read_text_file", {"path": "a.md"}, call_id="r1")],
+            [function_call("return", {"summary": "a.md holds 2000 x."}, call_id="t1")],
+            [assistant_message("done")],
+            [assistant_message("again")],
+        ])
+
+        class Scripted(A.Agent):
+            def build_model(self, config, role=A.LEADER_ROLE):
+                return model
+
+        agent = quiet_agent(Scripted, shell_enabled=False, workspace_root=self.root / "ws")
+        self.addCleanup(agent.close)
+        session = agent.sessions.create()
+        (session.workspace / "a.md").write_text("x" * 2000, encoding="utf-8")
+        first = run(agent.run("{{ config.input }}", session=session, input="go"))
+        self.assertTrue(first.ok, first.error)
+        turns = agent.memory.transcript(session.id).turns
+        folded = [t.call_id for t in turns if t.meta.get("folded")]
+        self.assertEqual(folded, ["r1"])
+        second = run(agent.run("{{ config.input }}", session=session, input="next"))
+        self.assertTrue(second.ok, second.error)
+        self.assertEqual(self.calls(model.calls[-1]), ["b1", "t1"])
+
+    def test_folding_needs_the_switch_and_a_context(self):
+        ws = A.Workspace(self.root)
+        engine = A.Engine(env=False, config_file=False, shell_enabled=False)
+        self.addCleanup(engine.close)
+        names = {tool.name for tool in run(engine.build_run_tools(ws, engine.config, A.RunResult()))}
+        self.assertTrue({"branch", "return"} <= names)
+        for off in (dict(fold_enabled=False), dict(context_trigger=0)):
+            config = engine.config.merge(**off)
+            names = {tool.name for tool in run(engine.build_run_tools(ws, config, A.RunResult()))}
+            self.assertFalse({"branch", "return"} & names, off)
+        self.assertFalse(engine.worker_config(engine.config).fold_enabled)
+
+
+class EvalTest(unittest.TestCase):
+    """`test/agentic_eval.py`: seeded workspaces, checks, measuring, offline policy."""
+
+    def setUp(self):
+        import test.agentic_eval as V
+
+        self.V = V
+
+    def test_every_task_is_solved_offline_and_measured(self):
+        outcomes = {o.task: o for o in run(self.V.evaluate(self.V.TASKS, [self.V.SCRIPTED], scripted=True))}
+        self.assertEqual(set(outcomes), {task.name for task in self.V.TASKS})
+        for outcome in outcomes.values():
+            self.assertTrue(outcome.success, (outcome.task, outcome.answer, outcome.error))
+            self.assertGreater(outcome.peak, 0)
+            self.assertGreater(outcome.requests, 1)
+            self.assertEqual(outcome.usable, self.V.SCRIPTED_WINDOW - 4096)
+        needle, tally, trail = outcomes["needle"], outcomes["tally"], outcomes["trail"]
+        self.assertEqual((needle.calls, tally.calls), (1, 1))  # one map each
+        self.assertGreater(needle.parts, 1)
+        self.assertGreaterEqual(needle.nested, needle.parts)  # every worker read its part
+        self.assertEqual(trail.folds, 1)
+        self.assertEqual(trail.calls, trail.facts["hops"] + 2)  # branch, a read a hop, return
+
+    def test_a_seed_builds_the_same_workspace_and_another_seed_another(self):
+        import random
+
+        def build(seed, where):
+            path = Path(self.enterContext(tempfile.TemporaryDirectory())) / where
+            facts = self.V.build_needle(path, random.Random(f"needle:{seed}"), 1)
+            return facts, sorted((p.name, p.read_text()) for p in path.rglob("*.md"))
+
+        self.assertEqual(build(0, "a"), build(0, "b"))
+        self.assertNotEqual(build(0, "a")[1], build(1, "a")[1])
+
+    def test_the_checks_read_answers_as_people_write_them(self):
+        self.assertTrue(self.V.check_code("The code is 4721.", None, {"code": "4721"}))
+        self.assertFalse(self.V.check_code("47210", None, {"code": "4721"}))
+        self.assertTrue(self.V.check_count("There are 1,204 such lines: 1204", None, {"count": 1204}))
+        self.assertFalse(self.V.check_count("none", None, {"count": 3}))
+
+    def test_a_target_parses_and_keeps_a_key_from_a_local_server(self):
+        target = self.V.Target.parse("qwen3:8b@http://localhost:11434/v1")
+        self.assertEqual(target.overrides(), {"inference_llm": "qwen3:8b", "inference_url": "http://localhost:11434/v1", "inference_key": ""})
+        with unittest.mock.patch.dict(os.environ, {"EVAL_KEY": "k"}):
+            hosted = self.V.Target.parse("m@https://api.example/v1#EVAL_KEY")
+            self.assertEqual(hosted.overrides()["inference_key"], "k")
+        self.assertEqual(self.V.Target.parse("").overrides(), {})
+        self.assertEqual(self.V.Target.parse("").label, "configured")
+
+    def test_runs_are_summarised_per_task_and_target(self):
+        outcomes = [
+            self.V.Outcome("t", "m", 0, success=True, peak=1000, fill=0.5, seconds=2.0, cost=0.1),
+            self.V.Outcome("t", "m", 1, success=False, peak=3000, fill=0.9, seconds=4.0, cost=0.1),
+        ]
+        rows = self.V.summarize(outcomes)
+        self.assertEqual(rows, [{
+            "task": "t", "target": "m", "runs": 2, "success": 0.5, "peak": 2000,
+            "peak_max": 3000, "fill_max": 0.9, "seconds": 3.0, "cost": 0.2,
+        }])
+        self.assertIn("50%", self.V.table(rows))
+
+
+class PlanViewTest(unittest.TestCase):
+    """The plan and the measured speed, shown: `plan.update`, `/plan`, hello, the console."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "a.md").write_text("x" * 2000, encoding="utf-8")  # 500 tokens
+        self.ws = A.Workspace(self.root)
+
+    PLAN = {"steps": [
+        {"title": "Summarise a", "inputs": ["a.md"], "status": "pending"},
+        {"title": "Write", "inputs": [], "status": "pending"},
+    ]}
+
+    def test_a_plan_is_viewed_with_its_progress_and_estimate(self):
+        plan = A.Plan([
+            A.PlanStep("Read", status="done", sizes=[("a.md", 400)]),
+            A.PlanStep("Write", status="active", sizes=[("b.md", 6000)], missing=["c.md"]),
+            A.PlanStep("Read", status="pending", sizes=[("d.md", 6000)]),
+        ])
+        view = plan.view(A.SliceBudget(20_000, 0, 0.25), A.Throughput(prefill=100.0))
+        self.assertEqual(view["steps"][1], {"title": "Write", "status": "active", "tokens": 6000, "missing": ["c.md"]})
+        self.assertEqual((view["done"], view["total"], view["current"]), (1, 3, 2))
+        self.assertEqual((view["left"], view["slices"], view["seconds"]), (12_000, 3, 120.0))
+        self.assertEqual(A.Plan([A.PlanStep("x", status="done")]).view()["current"], 0)
+
+    def test_every_change_of_a_plan_is_published_for_its_session(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, _ = SliceTest.scripted(self, [
+            [function_call("plan", self.PLAN, call_id="p1")],
+            [function_call("delegate", {"task": "Summarise it", "step": 1}, call_id="d1")],
+            [assistant_message("A is all x.")],
+            [function_call("plan", {"steps": []}, call_id="p2")],
+            [assistant_message("done")],
+        ])
+        seen: list[A.Event] = []
+        engine.events.on(A.EventType.PLAN_UPDATE, seen.append)
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        statuses = [
+            [step["status"] for step in e.data["plan"]["steps"]] if e.data["plan"] else None for e in seen
+        ]
+        self.assertEqual(statuses, [
+            ["pending", "pending"], ["active", "pending"], ["done", "pending"], None,
+        ])
+        self.assertTrue(all(e.session_id == "s1" for e in seen))
+        self.assertEqual(seen[0].data["plan"]["steps"][0]["tokens"], 500)
+
+    def test_a_refused_plan_publishes_nothing(self):
+        planner = SliceTest.planner(self, A.SliceBudget(400))
+        views = []
+
+        async def notify(view):
+            views.append(view)
+
+        planner.notify = notify
+        steps = [{"title": "Read", "inputs": ["a.md"], "status": "pending"}]
+        self.assertIn("Plan not kept", run(planner.update(steps)))
+        self.assertEqual(views, [])
+        run(planner.update(steps))  # sent back: kept
+        self.assertEqual([v["total"] for v in views], [1])
+
+    def test_the_plan_command_lists_the_steps_and_the_speeds(self):
+        agent = quiet_agent(A.Agent, shell_enabled=False, workspace_root=self.root / "ws")
+        self.addCleanup(agent.close)
+        session = agent.sessions.create()
+        self.assertEqual(run(agent.commands.invoke("/plan", session_id=session.id))["message"], "No plan")
+        agent.plans.set(session.id, A.Plan([
+            A.PlanStep("Read", status="done", sizes=[("a.md", 500)]),
+            A.PlanStep("Write", status="active", sizes=[("b.md", 1500)]),
+        ]))
+        agent.throughput(agent.config).prefill, agent.throughput(agent.config).decode = 100.0, 20.0
+        result = run(agent.commands.invoke("/plan", session_id=session.id))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["plan"]["current"], 2)
+        message = result["message"]
+        self.assertIn("- [x] Read · 500", message)
+        self.assertIn("- [ ] **Write** · 1.5k", message)
+        self.assertIn("1 of 2 done · 1.5k tokens left", message)
+        self.assertIn("reads ~100 · writes ~20 tokens/s", message)
+
+    def test_hello_carries_the_plan_of_the_session(self):
+        agent = A.Agent(console=False, store=A.MemoryStore(), config_file=False, env=False)
+        self.addCleanup(agent.close)
+        server = A.WebServer(agent, template="{{ config.input }}")
+        session = agent.sessions.create()
+        agent.plans.set(session.id, A.Plan([A.PlanStep("Read", status="active")]))
+        connection = A.Connection(server.hub, HubTest.FakeSocket())
+        server.hub.connections[connection.id] = connection
+        run(server.on_hello(connection, {"session": session.id}))
+        hello = connection.ws.sent[-1]
+        self.assertEqual(hello["plan"]["steps"][0]["title"], "Read")
+        other = agent.sessions.create()
+        run(server.on_hello(connection, {"session": other.id}))
+        self.assertIsNone(connection.ws.sent[-1]["plan"])
+
+    def test_the_console_indents_a_workers_steps_under_its_call(self):
+        buffer = ConsoleRendererTest.Buffer()
+        renderer = A.ConsoleRenderer(color=False, stream=buffer)
+        nest = {"parent": "d", "depth": 1}
+
+        def handle(event_type, **data):
+            renderer.handle(A.Event(type=event_type, data=data))
+
+        handle(A.EventType.TOOL_START, text="delegate(task=\"x\")", name="delegate")
+        handle(A.EventType.TOOL_PROGRESS, text="")
+        handle(A.EventType.TOOL_START, text='read_text_file(path="a.md")', name="read_text_file", **nest)
+        handle(A.EventType.TOOL_END, name="read_text_file", ok=True, duration=0.003, result="lots of x", **nest)
+        handle(A.EventType.BLOCK_DELTA, kind="output", text="A is ", **nest)
+        handle(A.EventType.BLOCK_END, kind="output", text="A is\nall x.", **nest)
+        handle(A.EventType.TOOL_START, text="part 1/2: a.md:1-4", name="part", parent="d", depth=2)
+        handle(A.EventType.TOOL_END, name="delegate", ok=True, duration=1.0, result="A is all x.")
+        text = buffer.text
+        self.assertIn('-> delegate(task="x")\n.\n  | -> read_text_file(path="a.md")\n', text)
+        self.assertIn("  | <- read_text_file: ok in 3 ms\n", text)
+        self.assertNotIn("lots of x", text)  # a nested call shows its outcome, not its output
+        self.assertIn("  | A is\n  | all x.\n", text)
+        self.assertIn("    | -> part 1/2: a.md:1-4\n", text)
+        self.assertIn("<- delegate: ok in 1000 ms\nA is all x.", text)
+
+    def test_the_console_prints_plan_progress_and_speeds(self):
+        buffer = ConsoleRendererTest.Buffer()
+        renderer = A.ConsoleRenderer(color=False, stream=buffer)
+        view = A.Plan([A.PlanStep("Read", status="done"), A.PlanStep("Write")]).view()
+        renderer.handle(A.Event(type=A.EventType.PLAN_UPDATE, data={"plan": view}))
+        renderer.handle(A.Event(type=A.EventType.PLAN_UPDATE, data={"plan": None}))
+        usage = {**A.ContextBudget.of(128_000).usage(51_200), "prefill": 100.0, "decode": 20.0}
+        renderer.handle(A.Event(type=A.EventType.CONTEXT_USAGE, data=usage))
+        renderer.handle(A.Event(type=A.EventType.AGENT_END, data={}))
+        self.assertIn("[plan] 1/2 done; now 2. Write\n", buffer.text)
+        self.assertIn("[plan] cleared\n", buffer.text)
+        self.assertIn("ctx 50% · 51k / 102k · reads ~100 · writes ~20 tokens/s", buffer.text)
 
 
 class AgentContextTest(unittest.TestCase):

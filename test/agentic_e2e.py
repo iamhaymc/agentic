@@ -98,6 +98,26 @@ ANSWER_TAIL = """\
 """
 
 
+#: A prompt the script answers with a plan: four steps, the first delegated.
+SLICE_PROMPT = "Read the whole harness in slices and summarise each layer."
+
+#: The steps of that plan, with the tokens each reads.
+SLICE_STEPS = (
+    ("Read the engine", "agentic.py:1-2400", 21_400),
+    ("Read the agent", "agentic.py:2401-6000", 30_200),
+    ("Read the web layer", "agentic.py:6001-9900", 28_800),
+    ("Write the summary", "", 0),
+)
+
+#: The read and write speeds the script pretends to have measured.
+SLICE_SPEED = (180.0, 24.0)
+
+#: What the worker of the delegated first step reads and answers.
+SLICE_READ = 'read_text_file(path="agentic.py", offset=1, limit=2400)'
+SLICE_ANSWER = "The engine streams one model and its tools."
+SLICE_RESULT = f"{SLICE_ANSWER}\n[worker: 1 tool calls in 2s]"
+
+
 def chunks(text: str, words: int = 3) -> Iterator[str]:
     """Cut text into the small pieces a provider streams it in."""
     parts = re.findall(r"\S+\s*", text)
@@ -196,8 +216,11 @@ class ScriptedAgent(A.Agent):
         if result.context is not None:  # the SDK filters the input of every call
             items = [{"role": "user", "content": model_input}] if isinstance(model_input, str) else model_input
             await result.context.fit(list(items))
-        await self.think(result)
-        await self.call_tool(result)
+        if SLICE_PROMPT in A.prompt_of(model_input):
+            await self.slice(config, result)
+        else:
+            await self.think(result)
+            await self.call_tool(result)
         block = A.Block(
             id=f"{result.session_id}-answer", kind="output", session_id=result.session_id
         )
@@ -248,13 +271,73 @@ class ScriptedAgent(A.Agent):
             text=block.text,
         )
 
-    async def call_tool(self, result: A.RunResult) -> None:
+    async def slice(self, config: A.AgentConfig, result: A.RunResult) -> None:
+        """A planned run: the speeds measured, a plan of four steps, the first
+        one delegated and marked done, as the plan tool and a worker would."""
+        speed = self.throughput(config)
+        speed.prefill, speed.decode = SLICE_SPEED
+        if result.context is not None:
+            await result.context.fit(list(result.context.items))
+        plan = A.Plan([
+            A.PlanStep(title, [spec] if spec else [], sizes=[(spec, size)] if spec else [])
+            for title, spec, size in SLICE_STEPS
+        ])
+        await self.publish_plan(config, result, plan)
+        plan.steps[0].status = "active"
+        await self.publish_plan(config, result, plan)
+        await self.call_tool(
+            result, "delegate", {"task": SLICE_STEPS[0][0], "step": 1}, SLICE_RESULT, "slice",
+            during=self.work,
+        )
+        plan.steps[0].status = "done"
+        await self.publish_plan(config, result, plan)
+
+    async def work(self, result: A.RunResult, parent: str) -> None:
+        """A worker's steps, nested under the call that delegated them: one
+        read, then its answer."""
+        nest = {"session_id": result.session_id, "parent": parent, "depth": 1}
+        read = A.ToolCall(id=f"{parent}-w0", name="read_text_file", arguments={})
+        await self.events.publish(
+            A.EventType.TOOL_START, id=read.id, kind="tool", name=read.name, text=SLICE_READ, **nest
+        )
+        await asyncio.sleep(self.pace * 4)
+        await self.events.publish(
+            A.EventType.TOOL_END, id=read.id, kind="tool", name=read.name, ok=True,
+            result="[lines 1-2400 of 9900]", duration=0.004,
+            text=f"{SLICE_READ} -> ok in 4 ms\n[lines 1-2400 of 9900]", **nest,
+        )
+        answer = f"{parent}-w1"
+        await self.events.publish(A.EventType.BLOCK_START, id=answer, kind="output", role="assistant", **nest)
+        for chunk in chunks(SLICE_ANSWER):
+            await self.events.publish(A.EventType.BLOCK_DELTA, id=answer, kind="output", text=chunk, **nest)
+            await asyncio.sleep(self.pace)
+        await self.events.publish(A.EventType.BLOCK_END, id=answer, kind="output", text=SLICE_ANSWER, **nest)
+
+    async def publish_plan(self, config: A.AgentConfig, result: A.RunResult, plan: A.Plan) -> None:
+        """Keep the plan for the session and publish it, as `Planner` does."""
+        self.plans.set(result.session_id, plan)
+        limits = result.context.limits() if result.context is not None else None
+        await self.events.publish(
+            A.EventType.PLAN_UPDATE,
+            session_id=result.session_id,
+            plan=plan.view(limits, self.throughput(config)),
+        )
+
+    async def call_tool(
+        self,
+        result: A.RunResult,
+        name: str = TOOL_NAME,
+        arguments: dict[str, Any] | None = None,
+        output: str = TOOL_RESULT,
+        suffix: str = "tool",
+        during: Any = None,
+    ) -> None:
         """One tool call, started and finished, so the page shows a tool block."""
         call = A.ToolCall(
-            id=f"{result.session_id}-tool",
-            name=TOOL_NAME,
-            call_id="call-1",
-            arguments=TOOL_ARGUMENTS,
+            id=f"{result.session_id}-{suffix}",
+            name=name,
+            call_id=f"call-{suffix}",
+            arguments=TOOL_ARGUMENTS if arguments is None else arguments,
         )
         result.tools.append(call)
         # the block of the call, as the real stream keeps one for a reconnect
@@ -271,7 +354,9 @@ class ScriptedAgent(A.Agent):
             text=call.report(),
         )
         await asyncio.sleep(self.pace * 4)
-        call.finish(TOOL_RESULT)
+        if during is not None:
+            await during(result, call.id)
+        call.finish(output)
         block.text, block.done = call.report(), True
         await self.events.publish(
             A.EventType.TOOL_END,
@@ -708,6 +793,66 @@ def compact(browser: Any, device: Device, url: str, gate: Gate, out: Path) -> Pa
         context.close()
 
 
+def slicing(browser: Any, device: Device, url: str, gate: Gate, out: Path) -> Path:
+    """Assert the plan, the speeds and a worker's steps: a planned run rings
+    the mark with one arc per step, the strip says the progress and opens into
+    the steps with what is left and how fast the model reads, the mark's label
+    says both, the delegated step shows the worker's read folded and its answer
+    nested in the call, and a reload keeps the plan; returns a capture of the
+    open plan."""
+    context = browser.new_context(**device.context())
+    page = context.new_page()
+
+    def online() -> None:
+        page.wait_for_selector('#app[data-state="online"]')
+        page.wait_for_function("() => !document.getElementById('input').disabled")
+
+    def expect(ok: Any, what: str) -> None:
+        if not ok:
+            raise AssertionError(f"slicing: {what}")
+
+    try:
+        page.goto(url, wait_until="load")
+        online()
+        expect(page.locator("#plan").is_hidden(), "a plan shows before there is one")
+        page.fill("#input", SLICE_PROMPT)
+        page.click("#send")
+        page.wait_for_function("() => document.getElementById('plan-count').textContent === '1/4'")
+        page.wait_for_function("() => document.getElementById('stop').hidden")
+        expect(page.text_content("#plan-now") == SLICE_STEPS[1][0], "the strip names the wrong step")
+        expect(page.locator("#mark-plan path").count() == 4, "the mark has no arc per step")
+        expect(page.locator('#mark-plan [data-status="done"]').count() == 1, "no arc is done")
+        nest = '.block[data-kind="tool"] > .block-nest'
+        expect(page.locator(f"{nest} > .block").count() == 2, "the worker's steps are not nested")
+        step = f'{nest} > .block[data-kind="tool"]'
+        expect(page.get_attribute(step, "data-collapsed") == "true", "a finished step is not folded")
+        answer = f'{nest} > .block[data-kind="output"]'
+        expect(SLICE_ANSWER in (page.text_content(f"{answer} .block-body") or ""), "no nested answer")
+        expect(page.locator(f"{answer} .vote").count() == 0, "a worker's answer offers a vote")
+        settle(page)
+        shoot(page, out, device, "worker")
+        title = page.get_attribute("#brand", "title") or ""
+        expect("plan 1 of 4 done" in title, f"the mark does not say the plan ({title!r})")
+        expect("reads ~180 · writes ~24 tokens/s" in title, f"the mark does not say the speed ({title!r})")
+        page.click("#plan")
+        page.wait_for_selector("#plan-panel:not([hidden])")
+        expect(page.locator("#plan-list li").count() == 4, "the panel does not list four steps")
+        current = page.text_content('#plan-list li[data-current="true"]') or ""
+        expect(SLICE_STEPS[1][0] in current, f"the current step is {current!r}")
+        foot = page.text_content("#plan-foot") or ""
+        expect("tokens left" in foot and "reads ~180" in foot, f"the panel foot says {foot!r}")
+        settle(page)
+        shot = shoot(page, out, device, "slicing")
+        page.keyboard.press("Escape")
+        expect(page.locator("#plan-panel").is_hidden(), "Escape did not close the panel")
+        page.reload()
+        online()
+        expect(page.text_content("#plan-count") == "1/4", "a reload did not bring the plan back")
+        return shot
+    finally:
+        context.close()
+
+
 def settle(page: Any, milliseconds: int = 250) -> None:
     """Let the last paint land before the shutter."""
     page.wait_for_timeout(milliseconds)
@@ -741,6 +886,9 @@ def run(devices: Iterable[Device], out: Path, args: argparse.Namespace) -> list[
                 edit(browser, DEVICES[1], server.url, gate)
                 print("[e2e] context: gauge, /compact, marker")
                 written.append(compact(browser, DEVICES[0], server.url, gate, out))
+                print("[e2e] slicing: plan ring, plan strip, speeds, nested worker")
+                for device in DEVICES[:2]:
+                    written.append(slicing(browser, device, server.url, gate, out))
             finally:
                 browser.close()
     finally:

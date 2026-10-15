@@ -13,17 +13,18 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 - [ ] Redesign the context usage meter so it is communicated through the main icon (maybe a ring around the icon that fills up like in vscode) 
 
-- [ ] **Work slicing, extended scope.** Each call is timed, the budget is
-      capped to what the model reads in time, `plan` measures and refuses
-      oversized steps, asks the user once about a large plan and is written
-      through to the store, `delegate` runs a step in a fresh context, and a
-      note recites budget and plan (see CHANGES.md). Still open:
-  - [ ] `map` tool: the harness chunks files by tokens and runs one worker per chunk
-  - [ ] Context folding: `branch` / `return` fold a finished sub-task into its summary
-  - [ ] Evals: peak context, success and wall time on long tasks, local and hosted models
-  - [ ] Decode speed in the cap: reserve time for a long reply, not only for the read
-  - [ ] Show the plan and the measured speed on the page and in the repl
-  - [ ] Show a worker's steps as nested blocks on the page and in the repl (today: progress lines on the `delegate` block)
+- [ ] **Work slicing, follow-ups.** Each call is timed, the budget is
+      capped to what the model reads in time and leaves time to write its
+      longest reply, `plan` measures and refuses oversized steps, asks the user
+      once about a large plan, is written through to the store and shown on the
+      mark, in a strip and by `/plan`, `delegate` runs a step in a fresh
+      context and `map` one worker per part, their steps nested under the call,
+      `branch` / `return` fold a finished sub-task, a note recites budget and
+      plan, and `test/agentic_eval.py` measures it all (see CHANGES.md). Still
+      open:
+  - [ ] Run the evals (`test/agentic_eval.py`) on a local and a hosted model and record a baseline (only the scripted policy has run)
+  - [ ] Fold a worker's own context too (workers get no `branch` / `return` today)
+  - [ ] Replay a worker's steps after a reload (they are not journaled: a reload shows the `delegate` answer alone)
 
 - [ ] **Context compaction, extended scope.** Compaction is token aware,
       tiered and runs before every model call (see CHANGES.md). Still open:

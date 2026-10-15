@@ -169,8 +169,15 @@ tiktoken encoding the context is counted with.
 Give the leader the `plan` tool and end every model call with a budget note.
 - Environment variable: `AGENTIC_PLAN_ENABLED`
 - Expected format `true` or `false`, default `true`
-- The note: context in use, the slice one step may read, the model's measured read speed and the open plan
+- The note: context in use, the slice one step may read, the model's measured read and write speeds and the open plan
 - The plan is written through to the store, so `/resume` and a restart continue it
+
+### `fold_enabled`
+Give the leader `branch` and `return`: the steps of a finished sub-task are folded out of its context, its summary stays.
+- Environment variable: `AGENTIC_FOLD_ENABLED`
+- Expected format `true` or `false`, default `true`
+- Needs compaction on (`context_trigger` > 0); a worker never gets it
+- The fold is journaled: the next run starts from the folded context
 
 ### `slice_share`
 Share of the budget one plan step may read.
@@ -183,6 +190,7 @@ Share of `stream_timeout` a cold read of the whole context may take.
 - Environment variable: `AGENTIC_SLICE_STALL`
 - Expected format `{{SHARE}}` (float), default `0.5`, `0` turns the cap off
 - Once the leader's read speed is measured, the budget is capped to what it reads in that time (at least `8192` tokens), so a slow local model compacts before a cold read can stall
+- Time to write the longest recent reply (at most `context_reserve`) at the measured write speed is set aside first, at most half of it
 
 ### `plan_ask_slices`
 Slices a plan may still read before it asks the user to go ahead.
@@ -206,7 +214,8 @@ Cost of reading a plan once (at `cost_input`) past which it asks the user.
 Give the leader the `delegate` tool: one step runs in a fresh context and only its answer comes back.
 - Environment variable: `AGENTIC_DELEGATE_ENABLED`
 - Expected format `true` or `false`, default `true`
-- The worker gets the workspace tools; no plan, no `ask_user`, no `delegate` of its own
+- The worker gets the workspace tools; no plan, no `ask_user`, no `delegate` or `map` of its own
+- Also builds `map`: one worker per part of inputs cut by tokens (see `map_parallel`)
 
 ### `worker_model`
 Model ID of the worker role (`delegate`).
@@ -231,6 +240,12 @@ Tokens of a worker's answer that reach the leader.
 - Environment variable: `AGENTIC_WORKER_MAX_TOKENS`
 - Expected format `{{TOKENS}}` (integer), default `1000`, `0` uncapped
 - A longer answer is clipped (head and tail kept); files the worker wrote are not affected
+
+### `map_parallel`
+Workers one `map` runs at once.
+- Environment variable: `AGENTIC_MAP_PARALLEL`
+- Expected format `{{COUNT}}` (integer), default `1`
+- `map` is built with `delegate` (`delegate_enabled`); a local server answers one request at a time, so raise it for a hosted model
 
 ### `summary_max_tokens`
 Tokens a summary may grow to.
