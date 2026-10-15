@@ -432,6 +432,21 @@ miss) took longer than the guard allowed. The constraints that shaped it:
   the split rides on the same card, so the user answers one question, not two.
   Once per plan, since a question on every progress update would be a nag;
   `Stop` drops the plan rather than leaving it recited on every call.
+- **A reply takes time too.** Ollama and some other servers send a tool call
+  whole once it is written, so the stream is silent for the read *and* the
+  write; a cap that only counted the read let a local model writing a long
+  file stall anyway. Every reply's length is kept (timed or not, since the ones
+  sent whole are exactly the ones that cannot be timed), and the cap sets aside
+  the time to write the longest recent one at the measured write speed, never
+  more than half the time and never more than the reserve. Measured, never
+  guessed: nothing is set aside before the write speed is known.
+- **Seen, not only recited.** The model sees the plan on every call, the user
+  saw it only in a tool result scrolling away. Every change of a plan is
+  published (`plan.update`, the plan viewed with its sizes and what is left),
+  the speeds ride on `context.usage`, and `hello` carries the plan; the page
+  rings the mark with one arc per step and keeps a strip in the bar that
+  opens into the steps, the repl prints a `[plan]` line per change and the
+  speeds after a run, and `/plan` lists both.
 - **Written ahead, like the journal.** Plans lived in memory, so a crash or
   `/resume` lost where the work stood and the model re-planned from the
   transcript. An `Agent` keeps them in a `PlanBook`, written through to the
@@ -1051,8 +1066,18 @@ harness.
       `question` / `options` of `plan`), `PlanBook` written through to the
       store and recited by `/resume`, `SizingTest`, `PlanJournalTest`,
       `WorkerTest` and the docs.
-    - [ ] Extended scope: in [`TODO.md`](TODO.md) (`map`, context folding,
-      evals).
+    - [ ] Extended scope, in three parts:
+      - [x] Minimum: the time to write a reply in the cap (`Throughput.replies`,
+        `readable`, `READ_SHARE`), `Plan.view` and `plan.update` on every
+        change (`Planner.notify`), the slice and the speeds on
+        `context.usage`, `/plan`, the plan in `hello`, the `[plan]` and speed
+        lines of the console, the plan ring and strip on the page,
+        `PlanViewTest`, the `slicing` check of `test/agentic_e2e.py` and the
+        docs.
+      - [ ] Complete: a worker's steps as nested blocks on the page and in the
+        repl, the `map` tool (`map_parallel`).
+      - [ ] Extended: context folding (`branch` / `return`), evals
+        (`test/agentic_eval.py`).
 
 ## Fixes worth remembering
 

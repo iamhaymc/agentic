@@ -2103,11 +2103,12 @@ class SliceTest(unittest.TestCase):
     def test_a_slow_model_caps_the_budget_to_what_it_reads_in_time(self):
         speed = A.Throughput()
         context = self.context(speed)
-        self.call(context, 0.0, 0.5, 1.0, 20_000)  # first call of a run: not timed
+        self.call(context, 0.0, 0.5, 1.0, 20_000, wrote=0)  # first call of a run: not timed
         self.assertEqual(speed.samples, 0)
-        self.call(context, 2.0, 52.0, 53.0, 25_000)  # 5k new tokens in 50 s
+        self.call(context, 2.0, 52.0, 53.0, 25_000, wrote=0)  # 5k new tokens in 50 s
         self.assertEqual(speed.prefill, 100.0)
         # 100 tokens/s x 600 s x 0.5 = 30k: what a cold read gets done in time
+        # (nothing written yet, so no time is left for a reply)
         self.assertEqual(context.budget.usable, 30_000)
         self.assertEqual(context.base.usable, 80_000)
         self.assertEqual(context.limits().slice, 7_500)
@@ -2187,6 +2188,74 @@ class SliceTest(unittest.TestCase):
     def test_the_cap_never_leaves_less_than_a_floor(self):
         context = self.context(A.Throughput(prefill=1.0))
         self.assertEqual(context.budget.usable, A.ContextRun.TIMED_FLOOR)
+
+    def test_the_cap_leaves_time_to_write_the_longest_recent_reply(self):
+        speed = A.Throughput(prefill=100.0, decode=10.0, replies=[200, 1000])
+        context = self.context(speed)
+        # 300 s of the stall guard, 100 s of it writing 1k tokens: 200 s to read
+        self.assertEqual(context.budget.usable, 20_000)
+        self.assertEqual(speed.readable(300.0), 20_000)
+
+    def test_a_reply_takes_at_most_half_of_the_time(self):
+        context = self.context(A.Throughput(prefill=100.0, decode=1.0, replies=[1000]))
+        self.assertEqual(context.budget.usable, 15_000)
+
+    def test_a_reply_is_reserved_no_longer_than_the_reserve(self):
+        speed = A.Throughput(prefill=100.0, decode=1000.0, replies=[50_000])
+        self.assertEqual(speed.readable(300.0), 25_000)
+        context = self.context(speed)  # the reserve: 20k tokens, 20 s to write
+        self.assertEqual(context.budget.usable, 28_000)
+
+    def test_an_unmeasured_write_speed_reserves_nothing(self):
+        context = self.context(A.Throughput(prefill=100.0, replies=[5000]))
+        self.assertEqual(context.budget.usable, 30_000)
+
+    def test_a_reply_sent_whole_still_sizes_the_reservation(self):
+        speed = A.Throughput(prefill=100.0, decode=10.0)
+        context = self.context(speed)
+        self.assertEqual(context.budget.usable, 30_000)
+        context.rebuilt = True
+        self.call(context, 0.0, 30.0, 30.01, 3_000, wrote=1000)  # a tool call held back whole
+        self.assertEqual(speed.samples, 0)  # not timed
+        self.assertEqual(speed.reply, 1000)
+        self.assertEqual(context.budget.usable, 20_000)  # but sized
+        self.assertEqual(speed.to_dict()["reply"], 1000)
+
+    def test_only_the_newest_replies_are_kept(self):
+        speed = A.Throughput()
+        speed.wrote(9000)
+        for _ in range(A.Throughput.WINDOW):
+            speed.wrote(10)
+        self.assertEqual(speed.reply, 10)
+        speed.wrote(0)
+        self.assertEqual(len(speed.replies), A.Throughput.WINDOW)
+
+    def test_a_worker_budget_leaves_time_to_write_too(self):
+        engine = A.Engine(env=False, config_file=False, context_window=100_000, context_reserve=20_000)
+        self.addCleanup(engine.close)
+        engine.speeds[(engine.config.inference_url, engine.config.inference_llm)] = A.Throughput(
+            prefill=100.0, decode=10.0, replies=[1000]
+        )
+        self.assertEqual(run(engine.worker_budget(engine.config)), 10_000)  # half of 20k
+
+    def test_the_usage_carries_the_slice_and_the_speeds(self):
+        posted = []
+
+        async def publish(event_type, **data):
+            posted.append((event_type, data))
+
+        context = self.context(A.Throughput(prefill=100.0, decode=20.0), publish=publish)
+        run(context.fit([{"role": "user", "content": "hi"}]))
+        usage = [data for kind, data in posted if kind == A.EventType.CONTEXT_USAGE][-1]
+        self.assertEqual((usage["prefill"], usage["decode"]), (100.0, 20.0))
+        self.assertEqual(usage["slice"], 7_500)  # a quarter of the 30k the model reads in time
+        self.assertEqual(usage["usable"], context.budget.usable)
+        bare = self.context(A.Throughput())
+        self.assertNotIn("prefill", bare.usage(10))
+
+    def test_the_note_says_how_fast_the_model_writes_once_measured(self):
+        context = self.context(A.Throughput(prefill=100.0, decode=20.0))
+        self.assertIn("the model reads ~100 and writes ~20 tokens/s", context.note_text())
 
     def test_the_note_closes_the_prompt_or_follows_a_tool_output(self):
         prompt = [{"role": "user", "content": "do it"}]
@@ -2817,6 +2886,118 @@ class WorkerTest(unittest.TestCase):
             "-> " + "y" * 157 + "...\n",
         ])
         self.assertTrue(all(call_id == "c1" for call_id, _ in reports))
+
+
+class PlanViewTest(unittest.TestCase):
+    """The plan and the measured speed, shown: `plan.update`, `/plan`, hello, the console."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "a.md").write_text("x" * 2000, encoding="utf-8")  # 500 tokens
+        self.ws = A.Workspace(self.root)
+
+    PLAN = {"steps": [
+        {"title": "Summarise a", "inputs": ["a.md"], "status": "pending"},
+        {"title": "Write", "inputs": [], "status": "pending"},
+    ]}
+
+    def test_a_plan_is_viewed_with_its_progress_and_estimate(self):
+        plan = A.Plan([
+            A.PlanStep("Read", status="done", sizes=[("a.md", 400)]),
+            A.PlanStep("Write", status="active", sizes=[("b.md", 6000)], missing=["c.md"]),
+            A.PlanStep("Read", status="pending", sizes=[("d.md", 6000)]),
+        ])
+        view = plan.view(A.SliceBudget(20_000, 0, 0.25), A.Throughput(prefill=100.0))
+        self.assertEqual(view["steps"][1], {"title": "Write", "status": "active", "tokens": 6000, "missing": ["c.md"]})
+        self.assertEqual((view["done"], view["total"], view["current"]), (1, 3, 2))
+        self.assertEqual((view["left"], view["slices"], view["seconds"]), (12_000, 3, 120.0))
+        self.assertEqual(A.Plan([A.PlanStep("x", status="done")]).view()["current"], 0)
+
+    def test_every_change_of_a_plan_is_published_for_its_session(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, _ = SliceTest.scripted(self, [
+            [function_call("plan", self.PLAN, call_id="p1")],
+            [function_call("delegate", {"task": "Summarise it", "step": 1}, call_id="d1")],
+            [assistant_message("A is all x.")],
+            [function_call("plan", {"steps": []}, call_id="p2")],
+            [assistant_message("done")],
+        ])
+        seen: list[A.Event] = []
+        engine.events.on(A.EventType.PLAN_UPDATE, seen.append)
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        statuses = [
+            [step["status"] for step in e.data["plan"]["steps"]] if e.data["plan"] else None for e in seen
+        ]
+        self.assertEqual(statuses, [
+            ["pending", "pending"], ["active", "pending"], ["done", "pending"], None,
+        ])
+        self.assertTrue(all(e.session_id == "s1" for e in seen))
+        self.assertEqual(seen[0].data["plan"]["steps"][0]["tokens"], 500)
+
+    def test_a_refused_plan_publishes_nothing(self):
+        planner = SliceTest.planner(self, A.SliceBudget(400))
+        views = []
+
+        async def notify(view):
+            views.append(view)
+
+        planner.notify = notify
+        steps = [{"title": "Read", "inputs": ["a.md"], "status": "pending"}]
+        self.assertIn("Plan not kept", run(planner.update(steps)))
+        self.assertEqual(views, [])
+        run(planner.update(steps))  # sent back: kept
+        self.assertEqual([v["total"] for v in views], [1])
+
+    def test_the_plan_command_lists_the_steps_and_the_speeds(self):
+        agent = quiet_agent(A.Agent, shell_enabled=False, workspace_root=self.root / "ws")
+        self.addCleanup(agent.close)
+        session = agent.sessions.create()
+        self.assertEqual(run(agent.commands.invoke("/plan", session_id=session.id))["message"], "No plan")
+        agent.plans.set(session.id, A.Plan([
+            A.PlanStep("Read", status="done", sizes=[("a.md", 500)]),
+            A.PlanStep("Write", status="active", sizes=[("b.md", 1500)]),
+        ]))
+        agent.throughput(agent.config).prefill, agent.throughput(agent.config).decode = 100.0, 20.0
+        result = run(agent.commands.invoke("/plan", session_id=session.id))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["plan"]["current"], 2)
+        message = result["message"]
+        self.assertIn("- [x] Read · 500", message)
+        self.assertIn("- [ ] **Write** · 1.5k", message)
+        self.assertIn("1 of 2 done · 1.5k tokens left", message)
+        self.assertIn("reads ~100 · writes ~20 tokens/s", message)
+
+    def test_hello_carries_the_plan_of_the_session(self):
+        agent = A.Agent(console=False, store=A.MemoryStore(), config_file=False, env=False)
+        self.addCleanup(agent.close)
+        server = A.WebServer(agent, template="{{ config.input }}")
+        session = agent.sessions.create()
+        agent.plans.set(session.id, A.Plan([A.PlanStep("Read", status="active")]))
+        connection = A.Connection(server.hub, HubTest.FakeSocket())
+        server.hub.connections[connection.id] = connection
+        run(server.on_hello(connection, {"session": session.id}))
+        hello = connection.ws.sent[-1]
+        self.assertEqual(hello["plan"]["steps"][0]["title"], "Read")
+        other = agent.sessions.create()
+        run(server.on_hello(connection, {"session": other.id}))
+        self.assertIsNone(connection.ws.sent[-1]["plan"])
+
+    def test_the_console_prints_plan_progress_and_speeds(self):
+        buffer = ConsoleRendererTest.Buffer()
+        renderer = A.ConsoleRenderer(color=False, stream=buffer)
+        view = A.Plan([A.PlanStep("Read", status="done"), A.PlanStep("Write")]).view()
+        renderer.handle(A.Event(type=A.EventType.PLAN_UPDATE, data={"plan": view}))
+        renderer.handle(A.Event(type=A.EventType.PLAN_UPDATE, data={"plan": None}))
+        usage = {**A.ContextBudget.of(128_000).usage(51_200), "prefill": 100.0, "decode": 20.0}
+        renderer.handle(A.Event(type=A.EventType.CONTEXT_USAGE, data=usage))
+        renderer.handle(A.Event(type=A.EventType.AGENT_END, data={}))
+        self.assertIn("[plan] 1/2 done; now 2. Write\n", buffer.text)
+        self.assertIn("[plan] cleared\n", buffer.text)
+        self.assertIn("ctx 50% · 51k / 102k · reads ~100 · writes ~20 tokens/s", buffer.text)
 
 
 class AgentContextTest(unittest.TestCase):

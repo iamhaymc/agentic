@@ -169,7 +169,7 @@ tiktoken encoding the context is counted with.
 Give the leader the `plan` tool and end every model call with a budget note.
 - Environment variable: `AGENTIC_PLAN_ENABLED`
 - Expected format `true` or `false`, default `true`
-- The note: context in use, the slice one step may read, the model's measured read speed and the open plan
+- The note: context in use, the slice one step may read, the model's measured read and write speeds and the open plan
 - The plan is written through to the store, so `/resume` and a restart continue it
 
 ### `slice_share`
@@ -183,6 +183,7 @@ Share of `stream_timeout` a cold read of the whole context may take.
 - Environment variable: `AGENTIC_SLICE_STALL`
 - Expected format `{{SHARE}}` (float), default `0.5`, `0` turns the cap off
 - Once the leader's read speed is measured, the budget is capped to what it reads in that time (at least `8192` tokens), so a slow local model compacts before a cold read can stall
+- Time to write the longest recent reply (at most `context_reserve`) at the measured write speed is set aside first, at most half of it
 
 ### `plan_ask_slices`
 Slices a plan may still read before it asks the user to go ahead.

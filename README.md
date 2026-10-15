@@ -188,12 +188,13 @@ worker:
 ```
 
 - **measure → cap → plan → ask → delegate → recite**, enforced by the harness, not left to the model
-- the leader's read speed is timed per call; a slow model's budget is capped to what it reads in time
+- the leader's read and write speeds are timed per call; a slow model's budget is capped to what it reads in time, leaving time to write its longest reply
 - `plan` takes steps and their inputs (paths, globs, `notes.md:1-400`), measures each and refuses a step over one slice
 - a large plan (slices, minutes, cost) or a split that depends on intent asks the user once
 - `delegate` runs one step in a fresh context with its own tools; only its capped answer returns
 - every call ends with a budget note: context in use, the slice, the open plan
 - the plan is written through to the store: `/resume` and a restart continue it
+- the plan rings the mark (one arc per step) and sits in the bar; `/plan` lists it with the speeds
 
 ## ▶️ Test
 

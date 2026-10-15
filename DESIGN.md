@@ -278,8 +278,9 @@ Handlers may be sync or async; exceptions are printed to stderr and swallowed.
 | `tool.end`                     | the above plus `ok`, `result`, `duration`  |
 | `model.retry`                  | `role`, `error_kind`, `attempt`, `attempts`, `delay`, `error` |
 | `model.wait`                   | `role`, `elapsed` (seconds silent), `timeout` (the stall budget, `0` unbounded) |
-| `context.usage`                | `tokens`, `window`, `usable`, `high`, `low`, `fill` (tokens / usable), `estimated` (false when the provider counted) |
+| `context.usage`                | `tokens`, `window`, `usable`, `high`, `low`, `fill` (tokens / usable), `estimated` (false when the provider counted), `slice`, `prefill` / `decode` once measured |
 | `context.compact`              | `id` (its marker block), `reason`, `tokens_before`, `tokens_after`, `thoughts`, `cleared`, `clipped`, `summarized`, `message` |
+| `plan.update`                  | `plan`: steps, `done`, `total`, `current`, `left`, `slices`, `seconds` (`null` when cleared) |
 | `question.start`               | `id`, `kind`, `call_id`, `question`, `options` |
 | `question.end`                 | `id`, `kind`, `call_id`, `answer`, `ok` (false when cancelled) |
 | `feedback`                     | `ok`, `id` (the answer), `vote`, `message`, plus `action`, `rule`, `warning` when learned |
@@ -466,11 +467,13 @@ Speed (`Throughput`, one per leader model, `Engine.speeds`):
 - each call is stamped: input handed over (`ContextRun.__call__`), first chunk (`response.created` → `first_token()`), `response.completed` → `observe(input, output, cached)` → `time_call()`
 - tokens read: input less the `cached_tokens` the provider reports; else the whole input after a compaction (`rebuilt`), else the growth since the call before less its trailing note; a run's first call without a cache count is not timed
 - `prefill` = read / time to first token, `decode` = written / time after it; each the median of the newest `WINDOW` (9) samples, so a dropped cache or a queued request cannot move it; under 512 read or 64 written is noise
+- `replies` — output tokens of the newest `WINDOW` calls, timed or not (`wrote()`); `reply` the longest: a reply sent whole keeps the stream silent while it is written
 - skipped: a call after `IDLE` (240 s) of quiet on the model (a local server may have unloaded it), and a reply that arrived whole (≥ 8 tokens within `BURST` 50 ms, or faster than `WRITE_LIMIT` 5,000 tokens/s: a tool call some servers hold back)
 
 Cap (`ContextRun.timed()`, `retime()`):
 
-- `timed` = prefill × `stream_timeout` × `slice_stall` (0.5), at least `TIMED_FLOOR` (8,192)
+- `timed` = `readable(stream_timeout × slice_stall, reserve)`, at least `TIMED_FLOOR` (8,192): tokens read at `prefill` in that time less the time to write `reply` (at most the reserve) at `decode`, writing never more than `1 − READ_SHARE` (half) of it; nothing reserved while `decode` is unmeasured
+- every call records its reply and retimes, so a long tool call sent whole (not timed itself) still shrinks the cap for the next
 - `compactor.budget` = `base.capped(timed)`: input capped, reserve kept; `base` is the window's own budget, which an overflow lowers
 - a move under `RETIME_STEP` (10%) is ignored; a model timed in an earlier run is capped from the first call, and the background compaction between runs uses the same cap
 - the `read_text_file` page follows it: `Engine.page_limit()` asks the run's budget at every read (a quarter of `usable`), so a capped budget never has to clip a fresh page
@@ -482,7 +485,7 @@ Slice (`SliceBudget`, `ContextRun.limits()`):
 Note (`note_text()`, `with_note()`), when `plan_enabled`:
 
 - added after compaction to what is sent, never journaled: folded into a closing user message, else a user message of its own (never two in a row)
-- `NOTE_HEADER`, then `[budget] context U of L tokens; one step may read up to S; the model reads ~R tokens/s`, then `[plan] d/n done; now k. title`
+- `NOTE_HEADER`, then `[budget] context U of L tokens; one step may read up to S; the model reads ~R and writes ~W tokens/s`, then `[plan] d/n done; now k. title`
 - cache cost: the provider re-reads the newest response and the note, nothing older
 
 Plan (`Planner`, the `plan` tool, `Engine.plans` by session):
@@ -510,6 +513,16 @@ Plans across runs (`PlanBook`, `Agent.plans`):
 - `Planner.update()` and `Planner.mark()` write the whole plan, so the newest status survives a crash
 - `clear()` empties memory only (`close()`); `delete()` forgets both: on `session_closed`, `/forget`, and in `reconcile()` for sessions gone after a restart
 - the budget note of the next call, in any run or process, recites it; `Agent.resume()` appends `RESUME_PLAN` and the whole plan to `RESUME_PROMPT` while a step is open
+
+Shown (`plan.update`, `context.usage`, `/plan`):
+
+- `Plan.view(limits, throughput)` — what a client shows: steps (`title`, `status`, `tokens`, `missing`), `done`, `total`, `current` (1-based, 0 none), `left`, `slices`, `seconds`
+- `Planner.notify` is awaited with the view after every change (`changed()`): a plan kept, cleared or dropped, a step marked by `delegate`; a refused plan changes nothing; `Engine.build_planner()` publishes it as `plan.update` (`plan`: the view, `null` when cleared)
+- `context.usage` adds `slice` and, once measured, `prefill` / `decode` (`ContextRun.usage()`)
+- `hello` carries `plan` (`Engine.plan_view()`), so a client that joins shows it at once
+- `/plan` — the steps as a checklist, the current one bold, what is left and the speeds (`plan_report()`), with `plan` the view
+- console: `[plan] d/n done; now k. title` on every `plan.update` (`plan_line()`), the speeds on the `ctx` line at the end of a run (`speed_line()`)
+- page: one arc per step around the mark and a strip in the bar that opens into the steps (see [The mark](#the-mark))
 
 Workers (`delegate`, `Engine.build_delegate()`, `run_worker()`):
 
@@ -862,6 +875,7 @@ client.
 | `/forget`           | Forget the conversation of the current session    |
 | `/resume`           | Continue the run that did not finish              |
 | `/compact [focus]`  | Summarise the conversation now (optional focus)   |
+| `/plan`             | The plan as a checklist, what is left, the speeds |
 | `/good [why]`       | Rate the last answer good: learn a rule           |
 | `/bad [why]`        | Rate the last answer bad: learn a rule            |
 | `/rules [drop <id>\|clear]` | List or prune the learned rules           |
@@ -1256,6 +1270,7 @@ both, and every state is that same mark modulated:
 - **compacting** — the vial squeezes and the hairline ebbs (`data-compacting`)
   while a summary is written; the marker block (`compact`) then folds away,
   labelled with what it saved, its summary one click away.
+- **plan** — one arc per step around the mark (`#mark-plan`, past 24 steps one arc of progress): done arcs solid, the current one glowing, the rest faint. A strip beside the mark (`#plan`) says `done/total` and the current step, and opens into the steps with what is left and the measured speeds (`#plan-panel`; Escape or a click outside closes it). No plan, neither shows. The mark's label adds the speeds and the plan.
 - **disconnected** — a dotted ring and a hollow core, in the error colour.
 
 The words are still there for a screen reader (`#status-text`, and the mark's
@@ -1452,7 +1467,9 @@ decisions, pinning, chunked and failing summaries, window lookups, overflow
 recognition; in-run compaction, prefix stability and overflow recovery through
 the real SDK runner and its `ScriptedModel`; an endless chat on a small window,
 summaries journaled against their turns, background compaction, `/compact`),
-work slicing (timing, the cap, the note, the plan and its refusals; the sizing
+work slicing (timing, the cap and the time left to write a reply, the note,
+the plan and its refusals; the plan viewed and published on every change,
+`/plan`, the plan in `hello`, the console lines; the sizing
 question, once per plan and through a real run; plans written through, read
 back by a restarted agent, recited by `/resume`, dropped with their session;
 workers in a fresh context with their own tools, a capped answer, progress
@@ -1484,7 +1501,11 @@ the paint holds the same characters with `md-*` spans, a list continues and
 ends, the draft survives a reload, the drop carries it back, and Ctrl+Enter
 sends, clears the draft and drops) and the context (`compact`: a run fills the
 gauge, `/compact` leaves a folded marker holding the summary, a reload replays
-it; captured as `desktop-compact.png`, not committed yet).
+it; captured as `desktop-compact.png`, not committed yet) and the plan
+(`slicing`: a planned run rings the mark with an arc per step, the strip counts
+the steps done and opens into them with what is left and the speeds, the
+mark's label says both, a reload keeps the plan; captured as
+`desktop-slicing.png` and `phone-portrait-slicing.png`, not committed yet).
 
 ## 23. Example consumer
 

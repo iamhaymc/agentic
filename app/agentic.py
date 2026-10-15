@@ -905,6 +905,7 @@ class EventType:
     MODEL_WAIT = "model.wait"
     CONTEXT_USAGE = "context.usage"
     CONTEXT_COMPACT = "context.compact"
+    PLAN_UPDATE = "plan.update"
     QUESTION_START = "question.start"
     QUESTION_END = "question.end"
     FEEDBACK = "feedback"
@@ -2140,6 +2141,11 @@ class Throughput:
     the server dropped, another session queued ahead) cannot move it. Too few
     tokens and what is timed is the round trip, not the model, so such calls
     are left out.
+
+    `replies` are the output tokens of the newest calls, timed or not: a reply
+    a server sends whole (a tool call on Ollama) keeps the stream silent while
+    it is written, so the time cap leaves room to write one as long as the
+    longest of them (`readable`).
     """
 
     prefill: float = 0.0
@@ -2147,6 +2153,7 @@ class Throughput:
     samples: int = 0
     reads: list[float] = field(default_factory=list, repr=False)
     writes: list[float] = field(default_factory=list, repr=False)
+    replies: list[int] = field(default_factory=list, repr=False)
     #: When the newest call of the model ended, on the clock that timed it.
     last: float | None = field(default=None, repr=False)
 
@@ -2155,6 +2162,8 @@ class Throughput:
     MIN_WRITE = 64
     #: Newest samples the median is taken over.
     WINDOW = 9
+    #: Share of a time budget always left to reading, however long a reply.
+    READ_SHARE = 0.5
 
     def observe(self, read: int, first: float, wrote: int = 0, writing: float = 0.0) -> None:
         """Fold in one call: `read` tokens before a first token after `first`
@@ -2170,6 +2179,17 @@ class Throughput:
         del samples[: -self.WINDOW]
         return statistics.median(samples)
 
+    def wrote(self, tokens: int) -> None:
+        """Keep the length of one reply, timed or not (0: nothing written)."""
+        if tokens > 0:
+            self.replies.append(int(tokens))
+            del self.replies[: -self.WINDOW]
+
+    @property
+    def reply(self) -> int:
+        """Output tokens of the longest of the newest replies."""
+        return max(self.replies, default=0)
+
     def tokens(self, seconds: float) -> int:
         """Input tokens the model reads in `seconds` (0: not measured yet)."""
         return int(self.prefill * seconds) if self.prefill > 0 and seconds > 0 else 0
@@ -2178,11 +2198,26 @@ class Throughput:
         """Seconds the model takes to read `tokens` (0: not measured yet)."""
         return tokens / self.prefill if self.prefill > 0 else 0.0
 
+    def readable(self, seconds: float, reserve: int = 0) -> int:
+        """Input tokens the model reads in `seconds` and still writes a reply
+        as long as its longest recent one (at most `reserve` tokens, 0: no
+        bound) before they are up; 0 while unmeasured.
+
+        Writing is reckoned at the measured `decode` (nothing while it is
+        unknown) and never takes more than `1 - READ_SHARE` of the time.
+        """
+        if self.prefill <= 0 or seconds <= 0:
+            return 0
+        reply = min(self.reply, reserve) if reserve > 0 else self.reply
+        writing = reply / self.decode if self.decode > 0 else 0.0
+        return self.tokens(max(seconds - writing, seconds * self.READ_SHARE))
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "prefill": round(self.prefill, 1),
             "decode": round(self.decode, 1),
             "samples": self.samples,
+            "reply": self.reply,
         }
 
 
@@ -2840,9 +2875,7 @@ class ContextRun:
                 await self.announce(report, started)
                 if self.on_compact is not None:
                     await self.on_compact(report, items)
-            await self.post(
-                EventType.CONTEXT_USAGE, **self.budget.usage(self.counter.scaled(self.estimate))
-            )
+            await self.post(EventType.CONTEXT_USAGE, **self.usage(self.counter.scaled(self.estimate)))
             return self.sent
 
     async def announce(self, report: Compaction, started: bool) -> None:
@@ -2878,7 +2911,7 @@ class ContextRun:
             return None
         self.counter.calibrate(self.estimate, input_tokens)
         self.time_call(input_tokens, output_tokens, cached_tokens)
-        return self.budget.usage(input_tokens, estimated=False)
+        return self.usage(input_tokens, estimated=False)
 
     def first_token(self) -> None:
         """The first token of the newest call arrived."""
@@ -2908,27 +2941,29 @@ class ContextRun:
             read = 0
         self.reported, self.noted_before, self.rebuilt = input_tokens, self.noted, False
         speed = self.throughput
-        if speed is None or self.called_at is None or self.first_at is None:
+        if speed is None:
             return
-        now = self.clock()
-        idle = speed.last is not None and self.called_at - speed.last > self.IDLE
-        speed.last = now
-        first = self.first_at - self.called_at
-        writing = now - self.first_at
-        if idle or (
-            output_tokens >= self.BURST_TOKENS
-            and writing < max(self.BURST, output_tokens / self.WRITE_LIMIT)
-        ):
-            return
-        speed.observe(read, first, output_tokens, writing)
+        speed.wrote(output_tokens)  # a reply sent whole is not timed, but sizes the cap
+        if self.called_at is not None and self.first_at is not None:
+            now = self.clock()
+            idle = speed.last is not None and self.called_at - speed.last > self.IDLE
+            speed.last = now
+            first = self.first_at - self.called_at
+            writing = now - self.first_at
+            if not idle and not (
+                output_tokens >= self.BURST_TOKENS
+                and writing < max(self.BURST, output_tokens / self.WRITE_LIMIT)
+            ):
+                speed.observe(read, first, output_tokens, writing)
         self.retime()
 
     def timed(self) -> int:
         """Input tokens the model reads from scratch within its share of the
-        stall guard, or 0 while unmeasured (or the cap is off)."""
+        stall guard, leaving time to write its longest recent reply (at most
+        the reserve), or 0 while unmeasured (or the cap is off)."""
         if self.throughput is None or self.stall <= 0 or self.slice_stall <= 0:
             return 0
-        tokens = self.throughput.tokens(self.stall * self.slice_stall)
+        tokens = self.throughput.readable(self.stall * self.slice_stall, self.base.reserve)
         return max(tokens, self.TIMED_FLOOR) if tokens else 0
 
     def retime(self) -> None:
@@ -2939,6 +2974,18 @@ class ContextRun:
             return
         if abs(capped.usable - current.usable) >= current.usable * self.RETIME_STEP:
             self.compactor.budget = capped
+
+    def usage(self, tokens: int, *, estimated: bool = True) -> dict[str, Any]:
+        """The `context.usage` payload: the budget's, the slice one step may
+        read and, once measured, the read and write speeds of the model."""
+        payload = self.budget.usage(tokens, estimated=estimated)
+        payload["slice"] = self.limits().slice
+        speed = self.throughput
+        if speed is not None and speed.prefill > 0:
+            payload["prefill"] = round(speed.prefill, 1)
+        if speed is not None and speed.decode > 0:
+            payload["decode"] = round(speed.decode, 1)
+        return payload
 
     def limits(self) -> SliceBudget:
         """The slice budget of the run now."""
@@ -2957,8 +3004,10 @@ class ContextRun:
             f"{compact_tokens(limits.limit)} tokens; one step may read up to "
             f"{compact_tokens(limits.slice)}"
         )
-        if self.throughput is not None and self.throughput.prefill > 0:
-            line += f"; the model reads ~{self.throughput.prefill:.0f} tokens/s"
+        speed = self.throughput
+        if speed is not None and speed.prefill > 0:
+            line += f"; the model reads ~{speed.prefill:.0f}"
+            line += f" and writes ~{speed.decode:.0f} tokens/s" if speed.decode > 0 else " tokens/s"
         lines = [self.NOTE_HEADER, line]
         plan = self.plan() if self.plan is not None else None
         if plan is not None and plan.steps:
@@ -5150,6 +5199,33 @@ class Plan:
     def to_dict(self) -> dict[str, Any]:
         return {"steps": [step.to_dict() for step in self.steps], "asked": self.asked}
 
+    def number(self, step: PlanStep | None) -> int:
+        """The 1-based number of `step` in this plan (0: none)."""
+        return next((n for n, own in enumerate(self.steps, 1) if own is step), 0)
+
+    def view(
+        self, limits: SliceBudget | None = None, throughput: Throughput | None = None
+    ) -> dict[str, Any]:
+        """The plan as a client shows it: steps, progress and what is left."""
+        estimate = self.estimate(limits, throughput)
+        return {
+            "steps": [
+                {
+                    "title": step.title,
+                    "status": step.status,
+                    "tokens": step.tokens,
+                    "missing": list(step.missing),
+                }
+                for step in self.steps
+            ],
+            "done": self.done,
+            "total": len(self.steps),
+            "current": self.number(self.current()),
+            "left": estimate.tokens,
+            "slices": estimate.slices,
+            "seconds": round(estimate.seconds, 1),
+        }
+
     @classmethod
     def from_dict(cls, data: Any) -> "Plan | None":
         """A plan as `to_dict` wrote it, or ``None`` when it holds no step."""
@@ -5159,11 +5235,7 @@ class Plan:
 
     def brief(self) -> str:
         """The plan in one line, for the budget note."""
-        step = self.current()
-        if step is None:
-            return f"[plan] all {len(self.steps)} steps done"
-        number = self.steps.index(step) + 1
-        return f"[plan] {self.done}/{len(self.steps)} done; now {number}. {step.title}"
+        return plan_line(self.view())
 
     def render(
         self, limits: SliceBudget | None = None, throughput: Throughput | None = None
@@ -5193,6 +5265,24 @@ class Plan:
             "Work one step at a time; call plan again with the whole list to mark progress."
         )
         return "\n".join(lines)
+
+
+def plan_line(view: dict[str, Any] | None) -> str:
+    """A plan `view` in one line: ``[plan] 1/3 done; now 2. Write``."""
+    if not view:
+        return "[plan] cleared"
+    total, current = int(view.get("total") or 0), int(view.get("current") or 0)
+    if not current:
+        return f"[plan] all {total} steps done"
+    title = view["steps"][current - 1]["title"]
+    return f"[plan] {int(view.get('done') or 0)}/{total} done; now {current}. {title}"
+
+
+def speed_line(prefill: float, decode: float = 0.0) -> str:
+    """Measured speeds for people: ``reads ~100 · writes ~20 tokens/s``."""
+    parts = [f"reads ~{prefill:.0f}"] if prefill > 0 else []
+    parts += [f"writes ~{decode:.0f}"] if decode > 0 else []
+    return f"{' · '.join(parts)} tokens/s" if parts else ""
 
 
 class PlanBook:
@@ -5263,6 +5353,7 @@ class Planner:
         key: str,
         throughput: Throughput | None = None,
         ask: AskLimits | None = None,
+        notify: Callable[[dict[str, Any] | None], Awaitable[None]] | None = None,
     ) -> None:
         self.workspace = workspace
         self.counter = counter
@@ -5271,6 +5362,9 @@ class Planner:
         self.key = key
         self.throughput = throughput
         self.ask = ask or AskLimits()
+        #: Awaited with the `view` of the plan after every change (``None``:
+        #: cleared), so a front end can show it.
+        self.notify = notify
         #: The oversized steps refused last: the same steps sent back are kept
         #: with a warning, not refused for ever (a line cannot be split).
         self.refused: tuple[Any, ...] = ()
@@ -5280,6 +5374,18 @@ class Planner:
     @property
     def plan(self) -> Plan | None:
         return self.store.get(self.key)
+
+    def view(self) -> dict[str, Any] | None:
+        """The kept plan as a client shows it, or ``None`` without one."""
+        plan = self.plan
+        if plan is None:
+            return None
+        return plan.view(self.limits() if self.limits is not None else None, self.throughput)
+
+    async def changed(self) -> None:
+        """Tell `notify` the plan changed."""
+        if self.notify is not None:
+            await self.notify(self.view())
 
     async def update(
         self,
@@ -5300,6 +5406,7 @@ class Planner:
         if not steps:
             self.store.delete(self.key)
             self.refused = ()
+            await self.changed()
             return "Plan cleared."
         await asyncio.to_thread(self.size, steps)
         previous = self.plan  # a plan with every step done is finished: the next is new
@@ -5321,8 +5428,10 @@ class Planner:
             plan.asked = True
             if not choices and answer.lower() == ASK_STOP.lower():
                 self.store.delete(self.key)
+                await self.changed()
                 return "Plan dropped: the user said stop. Ask them what they want instead."
         self.store.set(self.key, plan)
+        await self.changed()
         text = plan.render(limits, self.throughput)
         if over:
             numbers = ", ".join(str(steps.index(step) + 1) for step in over)
@@ -6020,6 +6129,8 @@ class ConsoleRenderer:
             self._usage = dict(event.data)
         elif event.type == EventType.CONTEXT_COMPACT:
             self.emit("tool", f"~~ {event.data.get('message') or 'compacted'}\n")
+        elif event.type == EventType.PLAN_UPDATE:
+            self.emit("tool", f"{plan_line(event.data.get('plan'))}\n")
         elif event.type == EventType.AGENT_ERROR:
             self.emit("error", str(event.data.get("error", "")))
         elif event.type == EventType.AGENT_END:
@@ -6037,7 +6148,8 @@ class ConsoleRenderer:
         fill = float(usage.get("fill") or 0.0)
         tokens = compact_tokens(int(usage.get("tokens") or 0))
         usable = compact_tokens(int(usage.get("usable") or 0))
-        return f"\nctx {fill:.0%} · {tokens} / {usable}\n"
+        speeds = speed_line(float(usage.get("prefill") or 0), float(usage.get("decode") or 0))
+        return f"\nctx {fill:.0%} · {tokens} / {usable}{f' · {speeds}' if speeds else ''}\n"
 
     @staticmethod
     def retry_notice(data: dict[str, Any]) -> str:
@@ -6726,6 +6838,12 @@ class Engine:
         """The planner behind the `plan` tool of a run, or ``None`` when off."""
         if not config.plan_enabled:
             return None
+
+        async def notify(view: dict[str, Any] | None) -> None:
+            await self.events.publish(
+                EventType.PLAN_UPDATE, session_id=result.session_id, plan=view
+            )
+
         return Planner(
             workspace,
             self.counter(config),
@@ -6734,7 +6852,38 @@ class Engine:
             result.session_id or result.run_id,
             self.throughput(config),
             AskLimits.of(config),
+            notify,
         )
+
+    def plan_view(self, session_id: str | None) -> dict[str, Any] | None:
+        """The plan of a session as a client shows it, outside any run."""
+        plan = self.plans.get(session_id) if session_id else None
+        return plan.view(None, self.throughput(self.config)) if plan is not None else None
+
+    def plan_report(self, session_id: str | None) -> str:
+        """The plan of a session and the measured speeds, for people (`/plan`)."""
+        speed = self.throughput(self.config)
+        speeds = speed_line(speed.prefill, speed.decode)
+        view = self.plan_view(session_id)
+        if view is None:
+            return "No plan" + (f"\n\nThe model {speeds}" if speeds else "")
+        lines = []
+        for number, step in enumerate(view["steps"], 1):
+            title = f"**{step['title']}**" if number == view["current"] else step["title"]
+            mark = "x" if step["status"] == "done" else " "
+            line = f"- [{mark}] {title}"
+            if step["tokens"]:
+                line += f" · {compact_tokens(step['tokens'])}"
+            lines.append(line)
+        tail = f"{view['done']} of {view['total']} done"
+        if view["left"]:
+            tail += f" · {compact_tokens(view['left'])} tokens left"
+        if view["seconds"] >= 60:
+            tail += f" · ~{view['seconds'] / 60:.0f} min"
+        lines += ["", tail]
+        if speeds:
+            lines.append(f"The model {speeds}")
+        return "\n".join(lines)
 
     async def context_window(self, config: AgentConfig, role: str = LEADER_ROLE) -> int:
         """The window of a role's model: configured, else asked, else assumed."""
@@ -7515,7 +7664,8 @@ class Engine:
         budget = await self.context_budget(config)
         timed = 0
         if config.slice_stall > 0:
-            timed = self.throughput(config).tokens(config.stream_timeout * config.slice_stall)
+            seconds = config.stream_timeout * config.slice_stall
+            timed = self.throughput(config).readable(seconds, budget.reserve)
             timed = max(timed, ContextRun.TIMED_FLOOR) if timed else 0
         return SliceBudget(budget.usable, timed, self.WORKER_SHARE).slice
 
@@ -7567,12 +7717,15 @@ class Engine:
             refused[0] = None
             before = numbered.status if numbered is not None else ""
             if planner is not None and numbered is not None:
-                planner.mark(step, "active", numbered.title)
+                if planner.mark(step, "active", numbered.title) is not None:
+                    await planner.changed()
             reply, ok = await self.run_worker(
                 worker, result, workspace, task, sizes, missing, call_id=call_id, tools=tools
             )
             if planner is not None and numbered is not None:
                 marked = planner.mark(step, "done" if ok else before, numbered.title)
+                if marked is not None:
+                    await planner.changed()
                 if ok and marked is not None:
                     reply += f"\n[plan] step {step} marked done"
             return reply
@@ -8707,6 +8860,13 @@ class Agent(Engine):
                 return {"ok": True, "message": "Nothing to compact"}
             return {"ok": True, "message": report.describe(), "compaction": report.to_dict()}
 
+        def plan_command(_args: str, session_id: str | None = None, **_: Any) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "message": self.plan_report(session_id),
+                "plan": self.plan_view(session_id),
+            }
+
         def resume_command(_args: str, session_id: str | None = None, **_: Any) -> dict[str, Any]:
             if session_id and session_id in self.live:
                 return {"ok": False, "message": "A run is in progress"}
@@ -8726,6 +8886,7 @@ class Agent(Engine):
             "rules", "List learned rules: '/rules [drop <id> | clear]'", rules_command
         )
         self.commands.register("resume", "Continue the run that did not finish", resume_command)
+        self.commands.register("plan", "Show the plan and how fast the model reads", plan_command)
         self.commands.register(
             "compact", "Summarise the conversation now: '/compact [focus]'", compact_command
         )
@@ -9568,6 +9729,7 @@ class WebServer:
             busy=self.active(session.id),
             unfinished=unfinished.run if unfinished is not None else None,
             context=await self.agent.context_usage(session.id),
+            plan=self.agent.plan_view(session.id),
             warning=self.agent.rules.warning() if self.agent.config.rules_enabled else None,
             config=self.agent.config.to_dict(),
             commands=self.agent.commands.describe(),

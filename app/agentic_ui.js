@@ -20,6 +20,13 @@
     status: $("status-text"),
     session: $("session"),
     gauge: $("gauge"),
+    markPlan: $("mark-plan"),
+    plan: $("plan"),
+    planCount: $("plan-count"),
+    planNow: $("plan-now"),
+    planPanel: $("plan-panel"),
+    planList: $("plan-list"),
+    planFoot: $("plan-foot"),
     discussion: $("discussion"),
     empty: $("empty"),
     form: $("form"),
@@ -75,6 +82,9 @@
       play: '<path d="M6 3.5v17a1 1 0 0 0 1.5.9l13-8.5a1 1 0 0 0 0-1.8l-13-8.5A1 1 0 0 0 6 3.5Z"/>',
       shrink:
         '<path d="m14 10 7-7"/><path d="M20 10h-6V4"/><path d="m3 21 7-7"/><path d="M4 14h6v6"/>',
+      circle: '<circle cx="12" cy="12" r="9"/>',
+      "circle-dot": '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/>',
+      "circle-check": '<circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
     },
     /** Icon markup for a static template. The set is ours, so it is safe HTML. */
     markup(name, className) {
@@ -1054,7 +1064,19 @@
       const usage = this.usage;
       if (!usage) return "";
       const fill = Math.round(Math.min(1, Number(usage.fill) || 0) * 100);
-      return `context ${fill}% (${tokens(usage.tokens)} of ${tokens(usage.usable)})`;
+      const speed = this.speed();
+      return (
+        `context ${fill}% (${tokens(usage.tokens)} of ${tokens(usage.usable)})` +
+        (speed ? `, model ${speed}` : "")
+      );
+    },
+    /** The measured speeds: `reads ~100 · writes ~20 tokens/s`, or nothing. */
+    speed() {
+      const usage = this.usage || {};
+      const parts = [];
+      if (Number(usage.prefill) > 0) parts.push(`reads ~${Math.round(usage.prefill)}`);
+      if (Number(usage.decode) > 0) parts.push(`writes ~${Math.round(usage.decode)}`);
+      return parts.length ? `${parts.join(" · ")} tokens/s` : "";
     },
     /** A compaction block: squeezing while it summarises, its saving once done. */
     compaction(block, data, done) {
@@ -1067,6 +1089,137 @@
       Socket.describe();
     },
   };
+
+  // ------------------------------------------------------------------- plan
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  /** The plan of the session (`plan.update`, and `hello` for a client that
+   *  joins): a ring of steps around the mark, done ones solid and the current
+   *  one glowing, and a strip in the bar that opens into the list of steps
+   *  with what is left to read and how fast the model reads it. */
+  const Plan = {
+    view: null,
+    //: Past this many steps the ring shows progress, not one arc per step.
+    ARCS: 24,
+    RADIUS: 11.4,
+    STATUS_ICONS: { done: "circle-check", active: "circle-dot", pending: "circle" },
+    set(view) {
+      this.view = view && Array.isArray(view.steps) && view.steps.length ? view : null;
+      const shown = Boolean(this.view);
+      el.app.dataset.plan = String(shown);
+      el.plan.hidden = !shown;
+      if (!shown) this.open(false);
+      this.ring();
+      this.strip();
+      Socket.describe();
+    },
+    /** One arc of the ring, from angle `a0` to `a1` (radians, clockwise from the top). */
+    arc(a0, a1, status) {
+      const r = this.RADIUS;
+      const full = a1 - a0 >= Math.PI * 2 - 1e-6;
+      const node = document.createElementNS(SVG_NS, full ? "circle" : "path");
+      if (full) {
+        node.setAttribute("cx", "12");
+        node.setAttribute("cy", "12");
+        node.setAttribute("r", String(r));
+      } else {
+        const at = (a) => `${(12 + r * Math.sin(a)).toFixed(3)} ${(12 - r * Math.cos(a)).toFixed(3)}`;
+        const large = a1 - a0 > Math.PI ? 1 : 0;
+        node.setAttribute("d", `M ${at(a0)} A ${r} ${r} 0 ${large} 1 ${at(a1)}`);
+      }
+      node.dataset.status = status;
+      el.markPlan.appendChild(node);
+    },
+    ring() {
+      el.markPlan.textContent = "";
+      const view = this.view;
+      if (!view) return;
+      const steps = view.steps;
+      const turn = Math.PI * 2;
+      if (steps.length > this.ARCS) {
+        const done = (Number(view.done) || 0) / steps.length;
+        if (done > 0) this.arc(0, turn * done, "done");
+        if (done < 1) this.arc(turn * done, turn, "pending");
+        return;
+      }
+      const span = turn / steps.length;
+      const gap = steps.length > 1 ? Math.min(0.35, span * 0.3) : 0;
+      steps.forEach((step, index) => {
+        const start = index * span + gap / 2;
+        this.arc(start, start + span - gap, step.status || "pending");
+      });
+    },
+    strip() {
+      const view = this.view;
+      el.planList.textContent = "";
+      if (!view) return;
+      const current = Number(view.current) || 0;
+      el.planCount.textContent = `${view.done}/${view.total}`;
+      el.planNow.textContent = current ? view.steps[current - 1].title : "done";
+      view.steps.forEach((step, index) => {
+        const item = document.createElement("li");
+        item.dataset.status = step.status || "pending";
+        item.dataset.current = String(index + 1 === current);
+        item.innerHTML = Icons.markup(this.STATUS_ICONS[step.status] || "circle");
+        const title = document.createElement("span");
+        title.className = "plan-title";
+        title.textContent = step.title;
+        item.appendChild(title);
+        if (Number(step.tokens) > 0 && step.status !== "done") {
+          const size = document.createElement("span");
+          size.className = "plan-size";
+          size.textContent = tokens(step.tokens);
+          item.appendChild(size);
+        }
+        el.planList.appendChild(item);
+      });
+      this.foot();
+    },
+    /** What is left and how fast it is read: `3.4k left · ~2 min · reads ~100 tokens/s`. */
+    foot() {
+      const view = this.view;
+      if (!view) return;
+      const parts = [];
+      if (Number(view.left) > 0) parts.push(`${tokens(view.left)} tokens left`);
+      if (Number(view.seconds) >= 60) parts.push(`~${Math.round(view.seconds / 60)} min`);
+      const speed = Gauge.speed();
+      if (speed) parts.push(speed);
+      // one span a part, so a narrow panel wraps between them, not inside one
+      el.planFoot.textContent = "";
+      parts.forEach((part) => {
+        const span = document.createElement("span");
+        span.textContent = part;
+        el.planFoot.appendChild(span);
+      });
+      el.planFoot.hidden = !parts.length;
+    },
+    open(force) {
+      const open = force === undefined ? el.planPanel.hidden : Boolean(force) && Boolean(this.view);
+      el.planPanel.hidden = !open;
+      el.plan.setAttribute("aria-expanded", String(open));
+    },
+    /** For the label of the mark: `plan 1 of 3 done, now Write`. */
+    text() {
+      const view = this.view;
+      if (!view) return "";
+      const current = Number(view.current) || 0;
+      return (
+        `plan ${view.done} of ${view.total} done` +
+        (current ? `, now ${view.steps[current - 1].title}` : "")
+      );
+    },
+  };
+
+  el.plan.addEventListener("click", (event) => {
+    event.stopPropagation();
+    Plan.open();
+  });
+  el.planPanel.addEventListener("click", (event) => event.stopPropagation());
+  document.addEventListener("click", () => Plan.open(false));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !el.planPanel.hidden) Plan.open(false);
+  });
 
   /** Seconds as `42s`, or `m:ss` once there is a minute of them. */
   const clock = (seconds) =>
@@ -1240,7 +1393,10 @@
         connecting: "connecting",
       };
       const context = Gauge.text();
-      const label = `${this.name}, ${words[state] || state}${working}${context ? `, ${context}` : ""}`;
+      const plan = Plan.text();
+      const label =
+        `${this.name}, ${words[state] || state}${working}` +
+        `${context ? `, ${context}` : ""}${plan ? `, ${plan}` : ""}`;
       el.brand.setAttribute("aria-label", label);
       el.brand.title = label.replace(", ", " — ");
     },
@@ -1284,6 +1440,7 @@
           Theme.apply(message.theme);
           Gauge.clear();
           Gauge.set(message.context);
+          Plan.set(message.plan);
           // The journal, then the run in flight where it is now, then what it asked.
           this.replay(message.history, message.unfinished);
           (message.live || []).forEach((live) => this.revive(live));
@@ -1351,6 +1508,10 @@
         }
         case "context.usage":
           Gauge.set(message);
+          Plan.foot();
+          break;
+        case "plan.update":
+          Plan.set(message.plan);
           break;
         case "model.wait":
           // The model is writing something it sends whole (a tool call on
@@ -1442,8 +1603,12 @@
       if (!result) return;
       // a vote is reported by its `feedback` message, to every client
       if (result.vote) return;
+      if ("plan" in result) Plan.set(result.plan);
       if (result.session && result.session.id) {
-        if (result.session.id !== this.session) Gauge.clear();
+        if (result.session.id !== this.session) {
+          Gauge.clear();
+          Plan.set(null);
+        }
         this.session = result.session.id;
         Saved.set(this.session);
         el.session.textContent = `#${this.session}`;

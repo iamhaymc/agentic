@@ -22,6 +22,8 @@
             <rect class="mark-level" x="0" y="6.4" width="24" height="24" />
           </clipPath>
           <circle class="mark-halo" cx="12" cy="12" r="10.5" />
+          <!-- The plan: one arc per step, filled in as steps are done. -->
+          <g class="mark-plan" id="mark-plan"></g>
           <circle class="mark-ring" cx="12" cy="12" r="7.75" />
           <path class="mark-shell" d="M12 6.4 15.1 12 12 17.6 8.9 12Z" />
           <path class="mark-core" d="M12 6.4 15.1 12 12 17.6 8.9 12Z" clip-path="url(#mark-level)" />
@@ -29,6 +31,24 @@
       </span>
       <!-- How long a silent model has been writing; shown only while it is. -->
       <span class="wait" id="wait" hidden></span>
+      <!-- The plan of the session: progress and the current step; opens into
+             the list of steps. Shown only while there is a plan. -->
+      <button class="plan" id="plan" type="button" title="Plan" aria-label="Plan" aria-expanded="false"
+        aria-controls="plan-panel" hidden>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="m3 17 2 2 4-4" />
+          <path d="m3 7 2 2 4-4" />
+          <path d="M13 6h8" />
+          <path d="M13 12h8" />
+          <path d="M13 18h8" />
+        </svg>
+        <span class="plan-count" id="plan-count"></span>
+        <span class="plan-now" id="plan-now"></span>
+      </button>
+      <div class="plan-panel" id="plan-panel" hidden>
+        <ol class="plan-list" id="plan-list"></ol>
+        <p class="plan-foot" id="plan-foot"></p>
+      </div>
       <span class="sr-only" id="status-text" role="status">connecting</span>
       <span class="session" id="session" title="Active session"></span>
       <!-- The context in use, as a hairline under the bar. -->
