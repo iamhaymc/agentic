@@ -7,53 +7,20 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 ---
 
-- [ ] **Decision models, agentic use.** `SystemOneClient` calls `POST /v1/systemone`
-      (Ollama `clef-flash` / `clef`) with typed `Noul` / `Choice` / `Score`
-      questions, and the `decision` role resolves from `inference_ldm` (see
-      CHANGES.md). Still open, one path for every use: `Agent.build_decision`
-      returns a `decide(state, questions)` delegate (or `None` when the role is
-      off) that publishes `decision.*` events, is accounted on the run, cached
-      by `(model, state, questions)`, gated by confidence thresholds, and falls
-      back to today's leader path on any failure, so a decision never fails a run.
-  - Minimum Scope (the leader can decide, both UIs show it):
-    - [ ] `ModelPool.decision(spec)`: one `SystemOneClient` per endpoint; `clear()` closes them
-    - [ ] `Agent.build_decision(config)`: the `decide` delegate, mirroring `build_vision`
-    - [ ] `decide` tool: `state` (text or workspace paths) + `questions` (wire JSON) → compact answers; offered only when the role is on
-    - [ ] `decision.start` / `decision.end` events (questions, answers, ms); repl prints `⚖ team: technical 0.95`, web shows a chip with probability bars and ticks the mark
-    - [ ] `/decision <model|off>` command (like `/vision`); banner and `/config` show the role
-    - [ ] Live test against Ollama `clef-flash`, skipped when the server is unreachable
-  - Complete Scope (harness-side gates, each behind a flag and a threshold):
-    - [ ] Tool gate: before `shell`, an outside write or a push, ask "follows from the request?" and "destructive?"; run above the threshold, `ask_user` between, refuse below with the reason
-    - [ ] Prompt routing: one `Choice` per user prompt (answer / plan / delegate) and one for the role (leader or worker model), before the leader's first call
-    - [ ] `ask_user` answers: map free text onto the offered options; low confidence keeps the text
-    - [ ] Implicit feedback: a `Noul` on the next user message (satisfied / correcting) proposes a rule without a thumb
-    - [ ] Evals (`test/agentic_eval.py`) per gate: agreement with the leader, latency, leader tokens saved
-  - Extended Scope:
-    - [ ] Images: attachments and `view_image` data URLs as `images`, for visual gates
-    - [ ] Compaction relevance: `Score` old tool outputs against the goal, clear the least relevant first
-    - [ ] Tool subset: a `Choice` over tool names per turn for large registries
-    - [ ] Rule dedupe: "same as an existing rule?" before a learned rule is kept
-    - [ ] Decision journal: question, answer and outcome stored to tune thresholds
-    - [ ] Hosted endpoints: TypeSafe `jev` (same wire, bearer key) and Cloudflare Workers AI `/ai/run` (answers wrapped in `result`)
+- [ ] Add support for decision models like jev and clef.
 
 - [ ] Move the text copy button on the markdown editor to the top right corner of the editor view.
-  
 - [ ] implement an efficient way for token text that fades in quickly when displayed.
-
 - [ ] Redesign the context usage meter so it is communicated through the main icon (maybe a ring around the icon that fills up like in vscode) 
 
-- [ ] **Work slicing, follow-ups.** Each call is timed, the budget is
-      capped to what the model reads in time and leaves time to write its
-      longest reply, `plan` measures and refuses oversized steps, asks the user
-      once about a large plan, is written through to the store and shown on the
-      mark, in a strip and by `/plan`, `delegate` runs a step in a fresh
-      context and `map` one worker per part, their steps nested under the call,
-      `branch` / `return` fold a finished sub-task, a note recites budget and
-      plan, and `test/agentic_eval.py` measures it all (see CHANGES.md). Still
-      open:
-  - [ ] Run the evals (`test/agentic_eval.py`) on a local and a hosted model and record a baseline (only the scripted policy has run)
-  - [ ] Fold a worker's own context too (workers get no `branch` / `return` today)
-  - [ ] Replay a worker's steps after a reload (they are not journaled: a reload shows the `delegate` answer alone)
+- [ ] **Caveman SFT data, extended scope.** `util/caveman_data.py` shrinks
+      agent reasoning with gates and a replay check (see DESIGN.md §24). Still open:
+  - [ ] LoRA SFT on a small student (Qwen3.5 4B/9B); the local GPU is a GTX 1070 8 GB, so train remotely
+  - [ ] Eval accuracy vs reasoning tokens: OpenThoughts-TBLite / Terminal-Bench, BFCL; baseline vs shrunk, per level
+  - [ ] Shrink at full scale: 94k traces, ~1.1M turns; OpenRouter ran 50 traces in 11 min (~14 days for all, traces in order): shrink several traces at once
+  - [ ] Narrow the hard-turn rule: 40% of turns count as hard (any `error` word in the output) and save 23% at `lite` vs 36% at `full`
+  - [ ] A student-sized verifier for the replay check (does a 4B still derive the commands?)
+  - [ ] Mix levels into one SFT set (per-trace level sampling) and keep a share of untagged original traces
 
 - [ ] **Context compaction, extended scope.** Compaction is token aware,
       tiered and runs before every model call (see CHANGES.md). Still open:

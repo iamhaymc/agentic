@@ -623,9 +623,10 @@ class AgentConfig:
     # (local) model is compacted before a cold read could stall. 0 turns the
     # time cap off.
     plan_enabled: bool = True
-    # Context folding. With `fold_enabled` (and compaction on) the leader gets
-    # `branch` and `return`: the steps between the two are folded out of its
-    # context, and the summary it writes in `return` stands for them.
+    # Context folding. With `fold_enabled` (and compaction on) the leader and
+    # its workers get `branch` and `return`: the steps between the two are
+    # folded out of that context, and the summary written in `return` stands
+    # for them.
     fold_enabled: bool = True
     slice_share: float = 0.25
     slice_stall: float = 0.5
@@ -639,9 +640,10 @@ class AgentConfig:
     plan_ask_cost: float = 1.0
     # Workers. With `delegate_enabled` the leader gets the `delegate` tool: one
     # step runs in a fresh context on the `worker` role (falling back to the
-    # leader) with `worker_instructions`, the workspace tools (no plan, no
-    # question, no delegate) and at most `worker_max_turns` turns, and only its
-    # answer comes back, clipped to `worker_max_tokens`.
+    # leader) with `worker_instructions`, the workspace tools and its own
+    # `branch` / `return` (no plan, no question, no delegate) and at most
+    # `worker_max_turns` turns, and only its answer comes back, clipped to
+    # `worker_max_tokens`.
     delegate_enabled: bool = True
     worker_model: str = ""
     worker_api_url: str = ""
@@ -6508,7 +6510,8 @@ class ToolRegistry:
                 "globs or line ranges, measured like plan inputs). 'step' is the "
                 "number of a plan step: its inputs are used when you give none, and "
                 "it is marked done when the worker finishes. 'tools' names the only "
-                "tools the worker gets (default: all workspace tools)."
+                "tools the worker gets (default: all workspace tools; branch and "
+                "return are always kept)."
             ),
         )
 
@@ -6549,7 +6552,8 @@ class ToolRegistry:
                 "its part. 'inputs' are paths, globs or line ranges; 'chunk_tokens' "
                 "caps a part (default: what a worker may read). 'step' names a plan "
                 "step: its inputs are used when you give none, and it is marked done. "
-                "'tools' names the only tools the workers get."
+                "'tools' names the only tools the workers get (branch and return "
+                "are always kept)."
             ),
         )
 
@@ -7228,6 +7232,93 @@ def json_dump(value: Any) -> str:
         return str(value)
 
 
+class StepLog:
+    """The steps of a run's workers as a client shows them, until the turn of
+    the call that started them journals them.
+
+    `record` keeps what a worker's step is published with (a block or a call
+    carrying `parent` and `depth`) as the step now stands: its kind, name,
+    text and outcome. A step belongs to the call at the root of its parents (a
+    `map` part's worker steps to the `map` call): `take` hands the steps of one
+    call over and forgets them, `live` shows those not taken yet. At most
+    `LIMIT` steps a call are kept, the rest only counted; a step handed over
+    keeps `TEXT` characters of its text, head and tail.
+    """
+
+    #: Steps kept for one call, at most; the rest are counted.
+    LIMIT = 400
+    #: Characters of a step's text handed over, at most.
+    TEXT = 2_000
+    #: What a step is published with; a tail (`tool.progress`) and the
+    #: `context.compact` that repeats a compaction's block are not the step.
+    KEPT = (
+        EventType.BLOCK_START,
+        EventType.BLOCK_DELTA,
+        EventType.BLOCK_END,
+        EventType.TOOL_START,
+        EventType.TOOL_END,
+    )
+
+    def __init__(self) -> None:
+        self.steps: dict[str, dict[str, Any]] = {}
+        #: The call each step seen belongs to, dropped ones included.
+        self.roots: dict[str, str] = {}
+        self.counts: dict[str, int] = {}
+        self.dropped: dict[str, int] = {}
+
+    def record(self, event_type: str, data: dict[str, Any]) -> None:
+        """Keep what a nested event says of its step; anything else is ignored."""
+        step_id, parent = str(data.get("id") or ""), str(data.get("parent") or "")
+        if not step_id or not parent or event_type not in self.KEPT:
+            return
+        step = self.steps.get(step_id)
+        if step is None:
+            if step_id in self.roots:
+                return  # dropped: past the limit of its call
+            root = self.roots[step_id] = self.roots.get(parent, parent)
+            if self.counts.get(root, 0) >= self.LIMIT:
+                self.dropped[root] = self.dropped.get(root, 0) + 1
+                return
+            self.counts[root] = self.counts.get(root, 0) + 1
+            step = self.steps[step_id] = {
+                "id": step_id,
+                "kind": str(data.get("kind") or "tool"),
+                "role": str(data.get("role") or "assistant"),
+                "parent": parent,
+                "depth": int(data.get("depth") or 1),
+                "text": "",
+                "done": False,
+            }
+        if event_type == EventType.BLOCK_DELTA:
+            step["text"] += str(data.get("text") or "")
+            return
+        if data.get("name"):
+            step["name"] = str(data["name"])
+        if event_type in (EventType.BLOCK_END, EventType.TOOL_END):
+            step["done"] = True
+        if event_type == EventType.TOOL_END:
+            step["ok"] = bool(data.get("ok", True))
+        text = data.get("text")
+        if isinstance(text, str) and (text or step["done"]):
+            step["text"] = text
+
+    def take(self, root: str) -> tuple[list[dict[str, Any]], int]:
+        """The steps of the call `root`, oldest first, each text clipped, and
+        how many were dropped; forgotten here."""
+        ids = [step_id for step_id, owner in self.roots.items() if owner == root]
+        steps = [self.steps.pop(step_id) for step_id in ids if step_id in self.steps]
+        for step_id in ids:
+            del self.roots[step_id]
+        self.counts.pop(root, None)
+        for step in steps:
+            step["text"] = clip_output(step["text"], self.TEXT)
+        return steps, self.dropped.pop(root, 0)
+
+    def live(self) -> list[dict[str, Any]]:
+        """The steps not handed over yet, oldest first, as they stand."""
+        return [dict(step) for step in self.steps.values()]
+
+
 @dataclass
 class RunResult:
     output: str = ""
@@ -7251,6 +7342,9 @@ class RunResult:
     #: model input items. An application keeping its own history appends
     #: their `items` after its prompt; `Agent` journals each as it lands.
     turns: list[Turn] = field(default_factory=list)
+    #: The steps of its workers not journaled yet, nested under the call that
+    #: started them; that call's turn takes them (`Engine.checkpoint`).
+    steps: StepLog = field(default_factory=StepLog, repr=False, compare=False)
 
     @property
     def ok(self) -> bool:
@@ -8432,11 +8526,14 @@ class Engine:
     #: Share of a worker's fresh budget its inputs may take: the rest is room
     #: for its pages, its calls and its answer.
     WORKER_SHARE = 0.5
+    #: The tools a worker keeps whatever `tools` names: they fold its context.
+    FOLD_TOOLS = ("branch", "return")
 
     def worker_config(self, config: AgentConfig) -> AgentConfig:
         """The config a worker runs with: the `worker` role (else the leader)
         as its model, the slim `worker_instructions` with the size of its
-        answer, `worker_max_turns`, and no plan, question or delegate."""
+        answer, `worker_max_turns`, and no plan, question or delegate. It
+        folds its own branches when the leader does (`fold_enabled`)."""
         spec = config.model_spec(WORKER_ROLE) or config.model_spec(LEADER_ROLE)
         assert spec is not None  # the leader always resolves
         instructions = config.worker_instructions
@@ -8452,7 +8549,6 @@ class Engine:
             plan_enabled=False,
             ask_enabled=False,
             delegate_enabled=False,
-            fold_enabled=False,
         )
 
     def fork(self, events: EventBus) -> "Engine":
@@ -8595,7 +8691,8 @@ class Engine:
                     f"Error: no worker tool named {', '.join(unknown)} "
                     f"(there are {', '.join(names)})", False
                 )
-            built = [tool for tool in built if tool.name in wanted]
+            # folding acts on the worker's own context, not the workspace: kept
+            built = [tool for tool in built if tool.name in wanted or tool.name in self.FOLD_TOOLS]
         started = time.monotonic()
         try:
             await twin.turn(
@@ -8627,9 +8724,16 @@ class Engine:
 
         async def forward(event: Event) -> None:
             data = {**event.data, "parent": parent, "depth": depth}
-            await self.events.publish(event.type, session_id=result.session_id, **data)
+            await self.publish_step(result, event.type, **data)
 
         return forward
+
+    async def publish_step(self, result: RunResult, event_type: str, /, **data: Any) -> None:
+        """Publish a worker's step for the session of `result`, kept on its
+        `StepLog` until the turn of the call that started it journals it.
+        Positional: `data` may carry a `result` of its own (a call's)."""
+        result.steps.record(event_type, data)
+        await self.events.publish(event_type, session_id=result.session_id, **data)
 
     #: Parts one `map` may cut its inputs into, at most.
     MAP_LIMIT = 64
@@ -8774,9 +8878,7 @@ class Engine:
 
         async def publish(event_type: str, **data: Any) -> None:
             if call is not None:
-                await self.events.publish(
-                    event_type, session_id=result.session_id, parent=call.id, depth=1, **data
-                )
+                await self.publish_step(result, event_type, parent=call.id, depth=1, **data)
 
         async def one(number: int, spec: str, tokens: int) -> tuple[str, bool]:
             async with gate:
@@ -8882,8 +8984,17 @@ class Engine:
         """A step of the run finished: record what it added to the context.
 
         The engine keeps it on `result.turns` only; `Agent` also journals it,
-        so a run that dies later still leaves this step behind.
+        so a run that dies later still leaves this step behind. A tool turn
+        takes the steps of the workers its call ran (`meta["steps"]`, and
+        `meta["dropped"]` past `StepLog.LIMIT`): shown again after a reload,
+        never replayed to a model.
         """
+        if turn.role == "tool" and turn.id:
+            steps, dropped = result.steps.take(turn.id)
+            if steps:
+                turn.meta["steps"] = steps
+            if dropped:
+                turn.meta["dropped"] = dropped
         result.turns.append(turn)
 
     @staticmethod
@@ -10912,7 +11023,8 @@ class WebServer:
         """The blocks of the run in flight that the journal does not hold yet.
 
         A client that reconnects mid run gets the block being streamed (and a
-        tool still running) whole, then the stream carries on from there.
+        tool still running) whole, then the stream carries on from there; the
+        steps of a worker still running follow, each with its `parent`.
         """
         live = self.agent.live.get(session_id)
         if live is None:
@@ -10924,7 +11036,7 @@ class WebServer:
             {**block.to_dict(), **({"name": names[block.id]} if block.id in names else {})}
             for block in result.blocks
             if block.id not in journaled
-        ]
+        ] + result.steps.live()
 
     # -- http ---------------------------------------------------------------
 

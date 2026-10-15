@@ -3080,8 +3080,29 @@ class WorkerTest(unittest.TestCase):
             [assistant_message("done")],
         ])
         run(engine.run("go", workspace=self.root, session_id="s1"))
-        self.assertEqual([tool.name for tool in model.calls[1].tools], ["read_text_file"])
+        # folding acts on the worker's own context, not the workspace: always kept
+        self.assertEqual([tool.name for tool in model.calls[1].tools], ["read_text_file", "branch", "return"])
         self.assertTrue(self.outputs(model.calls[-1])["d2"].startswith("Error: no worker tool named fly (there are "))
+
+    def test_a_worker_folds_its_own_branches(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted([
+            [function_call("delegate", {"task": "Summarise a.md"}, call_id="d1")],
+            [function_call("branch", {"goal": "Read a.md"}, call_id="b1")],
+            [function_call("read_text_file", {"path": "a.md"}, call_id="r1")],
+            [function_call("return", {"summary": "a.md is all x."}, call_id="t1")],
+            [assistant_message("A is all x.")],
+            [assistant_message("done")],
+        ])
+        result = run(engine.run("go", workspace=self.root, session_id="s1"))
+        self.assertTrue(result.ok, result.error)
+        worker = model.calls[1:5]
+        self.assertTrue({"branch", "return"} <= {tool.name for tool in worker[0].tools})
+        self.assertEqual(FoldTest.calls(worker[3]), ["b1", "t1"])  # the read is folded away
+        self.assertTrue(self.outputs(worker[3])["t1"].startswith("Folded the branch 'Read a.md'"))
+        self.assertTrue(self.outputs(model.calls[-1])["d1"].startswith("A is all x."))
+        self.assertIsNone(result.context.state.folds.get("t1"))  # the leader's context is its own
 
     def test_the_worker_tokens_count_to_the_run(self):
         from agents.testing import assistant_message, function_call
@@ -3096,7 +3117,7 @@ class WorkerTest(unittest.TestCase):
         result = run(engine.run("go", workspace=self.root, session_id="s1"))
         self.assertEqual((result.usage.requests, result.usage.input_tokens), (3, 300))
 
-    def test_an_agent_journals_the_delegate_call_not_the_workers_steps(self):
+    def test_an_agent_journals_the_workers_steps_on_the_delegate_call(self):
         from agents.testing import ScriptedModel, assistant_message, function_call
 
         model = ScriptedModel([
@@ -3119,7 +3140,16 @@ class WorkerTest(unittest.TestCase):
         turns = agent.memory.transcript(session.id).turns
         self.assertEqual([t.meta.get("name") for t in turns if t.role == "tool"], ["delegate"])
         self.assertEqual([t.role for t in turns], ["user", "tool", "assistant"])
-        self.assertNotIn("r1", json.dumps([t.items for t in turns]))
+        self.assertNotIn("r1", json.dumps([t.items for t in turns]))  # never in a context
+        call = turns[1]
+        steps = call.meta["steps"]
+        self.assertEqual([(s["kind"], s.get("name")) for s in steps], [("tool", "read_text_file"), ("output", None)])
+        self.assertTrue(all(s["parent"] == call.id and s["depth"] == 1 and s["done"] for s in steps))
+        self.assertTrue(steps[0]["ok"])
+        self.assertEqual(steps[1]["text"], "A is all x.")
+        self.assertEqual(call.replay(), call.items)
+        self.assertEqual(agent.memory.replay(session.id)[1]["meta"]["steps"], steps)  # what hello sends
+        self.assertEqual(result.steps.live(), [])  # handed over: nothing left live
 
     def test_the_worker_role_falls_back_to_the_leader(self):
         engine = A.Engine(env=False, config_file=False, inference_llm="big", worker_max_turns=7)
@@ -3169,6 +3199,44 @@ class WorkerTest(unittest.TestCase):
         ])
         self.assertTrue(all(call_id == "c1" for call_id, _ in reports))
 
+    def test_a_step_log_keeps_each_step_as_it_stands_until_its_call_takes_it(self):
+        E, log = A.EventType, A.StepLog()
+        nest = {"parent": "d1", "depth": 1}
+        log.record(E.TOOL_START, {"id": "w0", "kind": "tool", "name": "read_text_file", "text": "read()", **nest})
+        log.record(E.TOOL_PROGRESS, {"id": "w0", "text": "tail", **nest})  # a tail is not the step
+        log.record(E.TOOL_END, {"id": "w0", "kind": "tool", "name": "read_text_file", "ok": True, "text": "read() -> ok", **nest})
+        log.record(E.BLOCK_START, {"id": "w1", "kind": "output", "role": "assistant", **nest})
+        log.record(E.BLOCK_DELTA, {"id": "w1", "kind": "output", "text": "A is", **nest})
+        self.assertEqual(log.live()[1]["text"], "A is")
+        log.record(E.BLOCK_END, {"id": "w1", "kind": "output", "text": "A is all x.", **nest})
+        log.record(E.CONTEXT_COMPACT, {"id": "w2", "message": "Compacted", **nest})  # its block says it
+        log.record(E.TOOL_START, {"id": "p1", "kind": "tool", "name": "part 1/2", "text": "part", "parent": "m1", "depth": 1})
+        log.record(E.TOOL_START, {"id": "p1w0", "kind": "tool", "name": "read", "text": "r", "parent": "p1", "depth": 2})
+        log.record(E.TOOL_START, {"id": "own", "kind": "tool", "name": "delegate"})  # the leader's own
+        steps, dropped = log.take("d1")
+        self.assertEqual(steps, [
+            {"id": "w0", "kind": "tool", "role": "assistant", "parent": "d1", "depth": 1,
+             "text": "read() -> ok", "done": True, "name": "read_text_file", "ok": True},
+            {"id": "w1", "kind": "output", "role": "assistant", "parent": "d1", "depth": 1,
+             "text": "A is all x.", "done": True},
+        ])
+        self.assertEqual(dropped, 0)
+        # a part's worker belongs to the call at the root: the map
+        self.assertEqual([s["id"] for s in log.live()], ["p1", "p1w0"])
+        self.assertEqual([s["id"] for s in log.take("m1")[0]], ["p1", "p1w0"])
+        self.assertEqual((log.live(), log.take("m1")), ([], ([], 0)))
+
+    def test_a_step_log_keeps_a_limit_a_call_and_clips_what_it_hands_over(self):
+        log = A.StepLog()
+        with unittest.mock.patch.object(A.StepLog, "LIMIT", 2), unittest.mock.patch.object(A.StepLog, "TEXT", 40):
+            for n in range(4):
+                log.record(A.EventType.TOOL_START, {"id": f"w{n}", "name": "t", "text": "y" * 100, "parent": "d1", "depth": 1})
+            log.record(A.EventType.TOOL_END, {"id": "w3", "name": "t", "ok": False, "parent": "d1", "depth": 1})
+            steps, dropped = log.take("d1")
+        self.assertEqual(([s["id"] for s in steps], dropped), (["w0", "w1"], 2))
+        self.assertIn("chars omitted", steps[0]["text"])
+        self.assertLess(len(steps[0]["text"]), 100)
+
 
 class MapTest(unittest.TestCase):
     """`map`: inputs cut into parts by tokens, one worker per part, answers in order."""
@@ -3178,8 +3246,9 @@ class MapTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.ws = A.Workspace(self.root)
-        # ten lines of 100 tokens each
-        (self.root / "a.md").write_text("".join(f"{n:02d}" + "x" * 397 + "\n" for n in range(10)), encoding="utf-8")
+        # ten lines of 100 tokens each (LF on every platform: a CR is a byte too)
+        lines = "".join(f"{n:02d}" + "x" * 397 + "\n" for n in range(10))
+        (self.root / "a.md").write_text(lines, encoding="utf-8", newline="")
 
     def cutter(self):
         return A.Planner(self.ws, A.TokenCounter(None), None, A.LruCache(1), "")
@@ -3238,6 +3307,13 @@ class MapTest(unittest.TestCase):
         self.assertTrue(inner and all(e.data["depth"] == 2 for e in inner))
         ends = [e for e in seen if e.type == A.EventType.TOOL_END and e.data.get("parent") == call]
         self.assertEqual([e.data["ok"] for e in ends], [True] * 3)
+        # journaled with the call: each part, and its worker's answer nested in it
+        steps = next(t for t in result.turns if t.role == "tool").meta["steps"]
+        outer = [s for s in steps if s["depth"] == 1]
+        self.assertEqual([(s["name"], s["parent"]) for s in outer], [(f"part {n}/3", call) for n in (1, 2, 3)])
+        inner = [s for s in steps if s["depth"] == 2]
+        self.assertEqual([s["text"] for s in inner], ["part one", "part two", "part three"])
+        self.assertEqual([s["parent"] for s in inner], [s["id"] for s in outer])
 
     def test_the_answers_share_the_slice_of_the_leader(self):
         engine = A.Engine(env=False, config_file=False, worker_max_tokens=1000)
@@ -3457,7 +3533,8 @@ class FoldTest(unittest.TestCase):
             config = engine.config.merge(**off)
             names = {tool.name for tool in run(engine.build_run_tools(ws, config, A.RunResult()))}
             self.assertFalse({"branch", "return"} & names, off)
-        self.assertFalse(engine.worker_config(engine.config).fold_enabled)
+        self.assertTrue(engine.worker_config(engine.config).fold_enabled)  # a worker folds too
+        self.assertFalse(engine.worker_config(engine.config.merge(fold_enabled=False)).fold_enabled)
 
 
 class EvalTest(unittest.TestCase):
@@ -3482,6 +3559,9 @@ class EvalTest(unittest.TestCase):
         self.assertGreaterEqual(needle.nested, needle.parts)  # every worker read its part
         self.assertEqual(trail.folds, 1)
         self.assertEqual(trail.calls, trail.facts["hops"] + 2)  # branch, a read a hop, return
+        # a tally part runs past a page: its worker folds the rest of its pages
+        self.assertGreater(tally.nested_folds, 0)
+        self.assertEqual((tally.folds, needle.nested_folds), (0, 0))
 
     def test_a_seed_builds_the_same_workspace_and_another_seed_another(self):
         import random
@@ -5402,6 +5482,20 @@ class WebServerTest(unittest.TestCase):
         if session_id:
             self.server.bind(connection, session_id)
         return connection
+
+    def test_hello_shows_the_workers_steps_of_a_call_still_running(self):
+        session = self.agent.sessions.create()
+        result = A.RunResult(session_id=session.id)
+        result.tools.append(A.ToolCall(id="b-d1", name="delegate"))
+        result.blocks.append(A.Block(id="b-d1", kind="tool", session_id=session.id, text="delegate()"))
+        result.steps.record(A.EventType.TOOL_START, {"id": "w0", "kind": "tool", "name": "read_text_file", "text": "read()", "parent": "b-d1", "depth": 1})
+        self.agent.live[session.id] = (result, None)
+        self.addCleanup(self.agent.live.pop, session.id, None)
+        connection = self.connect()
+        run(self.server.on_hello(connection, {"session": session.id}))
+        live = connection.ws.sent[-1]["live"]
+        self.assertEqual([(b["id"], b.get("parent")) for b in live], [("b-d1", None), ("w0", "b-d1")])
+        self.assertEqual((live[1]["name"], live[1]["depth"], live[1]["done"]), ("read_text_file", 1, False))
 
     def test_hello_resumes_a_live_session_and_replaces_a_stale_one(self):
         live = self.agent.sessions.create()

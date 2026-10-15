@@ -22,6 +22,8 @@ is what has been built and why, and [`TODO.md`](TODO.md) is what is left.
 | `app/agentic_ui.css`  | Mobile first, theme driven styles                |
 | `app/agentic_ui.js`   | Client: blocks, markdown, editor, commands, hub  |
 | `test/assets/`        | The screenshots this guide shows                 |
+| `util/caveman_data.py`| Caveman SFT data: fetch, shrink, replay, stats   |
+| `util/caveman_data_bdd.py` | Its unit tests                              |
 | `pyproject.toml`      | Package metadata, dependencies, `agentic` script |
 
 `agentic.py` is a single flat module divided by commented section banners, in this
@@ -466,7 +468,8 @@ Folding (`branch` / `return`, `Folder`, `ContextState.folds`, `Compactor.hidden(
 
 **`branch(goal)` → the sub-task's steps → `return(summary)` → from the next call on, the steps are hidden and the `return` call stands for them.**
 
-- the model folds its own sub-task: it writes the summary in `return`, no summarizer call; built when `fold_enabled` and compaction is on (`context_trigger` > 0); a worker gets neither
+- the model folds its own sub-task: it writes the summary in `return`, no summarizer call; built when `fold_enabled` and compaction is on (`context_trigger` > 0)
+- a worker folds its own context the same way: its run builds its own `Folder` over its own `ContextRun`, and `branch` / `return` (`Engine.FOLD_TOOLS`) are kept whatever `tools` names; its folds never touch the leader's context, and its `return` is relayed nested like any call
 - `Folder` keeps the branches open in the run, innermost last: `return` closes the innermost (`Error: no branch is open in this run` without one), so branches nest and never span runs
 - a fold is sticky like any decision: `state.folds[return call id] = branch call id`; `hidden()` finds both by call id in every call's items and hides from the first safe cut after the branch's output up to the safe cut that opens the response which called `return`
 - what stays: the prefix up to the branch output (the cached prefix holds), and the `return` call with its summary and output (`Folded the branch 'goal': ~N tokens of its steps are hidden …`)
@@ -547,13 +550,22 @@ Workers (`delegate`, `Engine.build_delegate()`, `run_worker()`):
 - `delegate(task, inputs=[], step=0, tools=[])` runs one step in a fresh context and returns only its answer
 - inputs measured like plan inputs (a fresh `Planner`); over `worker_budget()` (`WORKER_SHARE` 0.5 of the worker's window, under its time cap) refused once with sizes, sent back runs anyway
 - `step` names a plan step: its inputs are the default; `active` while the worker runs, `done` on an answer, its old status on a failure, kept `active` when cancelled (so `/resume` picks it up)
-- `worker_config()` — the `worker` role (`worker_model`, else the leader) as the leader of a config with `worker_instructions` + `Answer within about N words.`, `worker_max_turns`, and `plan_enabled` / `ask_enabled` / `delegate_enabled` off
-- `fork(bus)` — a shallow copy of the engine on a private `EventBus`: same pool, counters, speeds and class overrides; the worker's `RunResult` has no session, so `Agent.checkpoint()` journals nothing of it
-- `build_run_tools()` builds the worker's own tools (a fresh `ReadRepeats`, its own read page); `tools` keeps only those named (an unknown name is an error listing the rest)
+- `worker_config()` — the `worker` role (`worker_model`, else the leader) as the leader of a config with `worker_instructions` + `Answer within about N words.`, `worker_max_turns`, and `plan_enabled` / `ask_enabled` / `delegate_enabled` off; `fold_enabled` follows the leader
+- `fork(bus)` — a shallow copy of the engine on a private `EventBus`: same pool, counters, speeds and class overrides; the worker's `RunResult` has no session, so `Agent.checkpoint()` journals nothing of it (its steps reach the journal on the leader's call, below)
+- `build_run_tools()` builds the worker's own tools (a fresh `ReadRepeats`, its own read page); `tools` keeps only those named, and `branch` / `return` (an unknown name is an error listing the rest)
 - `WorkerRelay` relays the private bus: the worker's blocks, calls and compactions (`NESTED`) are published on the leader's bus by `nest()` with `parent` (the `delegate` block) and `depth` (1), and the call gets a heartbeat (`tool.progress`, empty) at most once a second; each keeps the leader's stall guard satisfied; the worker's `agent.*`, `context.usage`, waits and retries never reach the leader's bus (without a parent block it falls back to `-> call(...)`, `!! name failed: …`, `~~ compacted …` lines)
 - answer: `worker.output`, clipped to `worker_max_tokens` (head and tail), then `[worker: N tool calls in Ss]`; a failure is `Error: the worker failed (kind) after N tool calls: …`, never raised
 - tokens: the worker's calls are recorded on the run's `Usage` through `current_usage()`, so `agent.end` prices them
-- shown: the page nests the worker's blocks in the `delegate` block (a thread down the left edge, each step folded to its head once done, no votes on its answer); the console indents its calls, outcomes, compactions and answer under the call (`  | `, two spaces a level), leaving out what it streams so parallel workers never interleave within a line; nothing of it is journaled, so a reload shows the `delegate` answer alone
+- shown: the page nests the worker's blocks in the `delegate` block (a thread down the left edge, each step folded to its head once done, no votes on its answer); the console indents its calls, outcomes, compactions and answer under the call (`  | `, two spaces a level), leaving out what it streams so parallel workers never interleave within a line; journaled on the call (below), so a reload shows them again
+
+Worker steps (`StepLog`, `RunResult.steps`, `Engine.publish_step()`):
+
+- `publish_step()` publishes each nested event (a relayed worker event from `nest()`, a `map` part) and records it on the run's `StepLog`: by step id the `kind`, `role`, `name`, `text` (deltas joined, an end's text whole), `done`, `ok`, `parent` and `depth`; a tail (`tool.progress`) and `context.compact` (its block says it) are not kept
+- a step belongs to the call at the root of its parents: a part's worker steps to the `map` call
+- `Engine.checkpoint()` hands a tool turn the steps of its call (`take()`): `meta["steps"]`, oldest first, each text clipped to `StepLog.TEXT` (2,000 chars, head and tail), and `meta["dropped"]` past `StepLog.LIMIT` (400 a call); never in `items`, so never replayed to a model
+- `hello` carries them in `history`; `live_blocks()` appends the steps of a call still running (`live()`), so a reload mid worker shows what it did so far
+- page: `replay()` revives each step nested in its call, finished and folded; `revive()` nests a live one by `parent`; a worker's answer is no turn, so it gets no vote
+- a call cut off (cancelled, crashed) journals neither itself nor its steps
 
 Map (`map`, `Engine.build_map()`, `Planner.chunks()`, `map_parts()`):
 
@@ -586,7 +598,7 @@ flowchart LR
 
 **A run writes ahead: prompt → each finished step → final answer → status.**
 
-- `Turn` also carries `id` (the block it came from), `run`, `items` (raw model input items) and `meta` (`status` on a prompt, `vote` on an answer, `name` / `ok` on a tool call)
+- `Turn` also carries `id` (the block it came from), `run`, `items` (raw model input items) and `meta` (`status` on a prompt, `vote` on an answer, `name` / `ok` on a tool call, `steps` / `dropped` on a `delegate` or `map` call: its workers' steps, shown, never replayed)
 - `Turn.replay(tools)` — its items when it has them, else the plain message; a tool turn without items, or with `tools` off, is left out
 - `Transcript.messages(tools)` is the context window; `find(id)`, `run_of(run)`, `prompt_of(run)`, `last_run()` look it up
 - `ConversationMemory.journal(session, *turns)` appends and persists the new records at once
@@ -1584,16 +1596,27 @@ it; captured as `desktop-compact.png`, not committed yet) and the plan
 (`slicing`: a planned run rings the mark with an arc per step, the strip counts
 the steps done and opens into them with what is left and the speeds, the
 mark's label says both, the delegated step nests the worker's read (folded) and
-answer (no vote), a reload keeps the plan; captured as `*-slicing.png` and
+answer (no vote), a reload keeps the plan and the worker's steps; captured as `*-slicing.png` and
 `*-worker.png` on the desktop and the phone, not committed yet).
 
 `test/agentic_eval.py` measures long tasks, run by hand against real models:
 
 - tasks (`TASKS`), each a workspace built from a seed, a question and a check: `needle` (find one line in `docs/`), `tally` (count `ERROR` lines in `logs/`, every line counts), `trail` (follow `Next:` lines across `hops/`)
-- per run (`Outcome`): success, peak context of the leader (`context.usage`, tokens and fill), wall time, requests, tokens, cost, tool calls of the leader and of its workers, map parts, compactions, folds; one log line each, `--out` appends JSON lines
+- per run (`Outcome`): success, peak context of the leader (`context.usage`, tokens and fill), wall time, requests, tokens, cost, tool calls of the leader and of its workers, map parts, compactions, folds of the leader and of its workers (`nested_folds`); one log line each, `--out` appends JSON lines
 - `summarize()` / `table()`: per task and target, success rate, median and worst peak, median time, cost
 - targets `MODEL[@URL][#KEY_ENV]`; a loopback endpoint gets no key; `--window` runs a model in a smaller window, `--shell` gives it the shell (off: a model could grep past the reading)
-- `--scripted`: a policy model (`Policy`, `ScriptedModel` responders) solves every task with the harness's tools (`map`, `branch`, `return`) in a 16k window, offline and deterministic; the unit suite runs it, and a scripted failure exits 1
+- `--scripted`: a policy model (`Policy`, `ScriptedModel` responders) solves every task with the harness's tools (`map`, `branch`, `return`) in a 16k window, offline and deterministic; a worker whose part runs past a page reads the rest in a branch and answers with its `return` summary; the unit suite runs it, and a scripted failure exits 1
+
+Baseline (2026-10-14, `--runs 3`, scale 1, seeds 0–2; per task: median peak (worst), median time):
+
+- `qwen3.8-27b-heretic-jp-roleplay-256k` on Ollama (LAN GPU): 9/9; needle 4.9k (8.6k) 35 s, tally 2.7k (3.9k) 385 s, trail 7.7k 48 s; 92 requests, 329k tokens in, 26k out
+- `deepseek/deepseek-v4-flash-0731` on OpenRouter: 9/9; needle 4.4k (14k) 27 s, tally 2.9k (24k) 46 s, trail 8.4k (8.8k) 12 s; 81 requests, 313k in, 28k out, $0.05 in all
+- both mapped 4 of 9 runs (needle and tally, 4–6 parts) and read the rest whole; neither called `branch` / `return`, and nothing compacted
+- the local budget was capped to 73k–152k of a 256k window by its read speed (the time cap); hosted ran uncapped (~0.7–1M)
+- at scale 1 every task fits in under 10% of a window: `--scale 4` or `--window 16000` is where slicing, folding and compaction have to carry a run
+- `cost` reads 0 without `cost_input` / `cost_output`; the spend came from the provider
+
+> ❗ Name a target in full (`MODEL@URL#KEY_ENV`): every run reads the env file afresh, so an edit to it mid eval switches the provider
 
 ## 23. Example consumer
 
@@ -1601,3 +1624,141 @@ answer (no vote), a reload keeps the plan; captured as `*-slicing.png` and
 template that injects `config.input`, and `story.py`, which subclasses `Agent` to
 set the model, the instructions, story specific config values and an exporter
 that copies the finished story out of the session workspace.
+
+## 24. Caveman SFT data
+
+`util/caveman_data.py` turns agent traces into SFT data that teaches a small agentic model (Qwen3.5 4B/9B, LFM2.5 class) to reason in fewer tokens. A standalone script: it never imports `agentic.py`.
+
+**trace → shrink think / analysis / plan → gates → replay → SFT JSONL**
+
+```mermaid
+flowchart LR
+  F[fetch] --> S[source.jsonl]
+  S --> C[compressor LLM]
+  C --> G{gates + replay}
+  G -- fail, first try --> C
+  G -- pass --> K[shrunk turn]
+  G -- fail twice --> O[original turn]
+  K --> T["level/train.jsonl"]
+  O --> T
+```
+
+- Rules adapted from [caveman](https://github.com/JuliusBrussee/caveman) (Apache-2.0, `skills/caveman/SKILL.md`)
+- Caveman only shapes output voice (its `docs/HONEST-NUMBERS.md`: thinking not compressed); this pipeline applies the voice to reasoning
+- Every action stays: only prose is rewritten, and a turn that fails a gate keeps its original bytes
+
+### Source
+
+`open-thoughts/OpenThoughts-Agent-SFT-100K` (Apache-2.0, 94,334 rows), Terminus-2 harness:
+- `conversations`: alternating `user` (task, then terminal output) and `assistant`
+- assistant turn: `<think>…</think>{"analysis","plan","commands":[{"keystrokes","duration"}],"task_complete"}`; body sometimes in a ` ```json ` fence (~20% of turns)
+- per turn medians: think ~257 chars, analysis + plan ~430 chars, keystrokes ~66 chars; `think` often restates `analysis` (main redundancy)
+- `result`: `None` / `AgentTimeoutError` / `ContextLengthExceededError`; no pass / fail label
+- `trace_source`: `main`, `summarization-1-answers`, `summarization-1-summary`, or none
+- teacher `hosted_vllm/glm`; rows up to ~127 KB
+- rejected: `Roman1111111/claude-opus-4.6-10000x` (single turn GSM8K-style, no tools, median reasoning ~40 tokens, Anthropic ToS risk)
+
+### Fetch
+
+Two paths, one sample: the same seed gives the same offsets, and a larger `--limit` is a superset:
+- viewer (default): `/rows?offset=N&length=1` per offset, `--pace 0.5` s, 6 tries, `Retry-After` honoured, exponential cap 60 s; truncated rows skipped
+- parquet (`--parquet`): the viewer's own export, 10 shards / 1.75 GB into `data/caveman/parquet/` (`.part`, size checked, then renamed); only row groups holding a wanted offset are read; `--limit 0` takes every row
+- resumes: rows already in `source.jsonl` are skipped; needs `pyarrow` for parquet (in `.venv` via `lighteval`)
+
+### Shrink
+
+One compressor call per assistant turn, one retry:
+- sent for rewrite: `think`, `analysis`, `plan`, plus the level; `commands` clipped to 160 chars as read-only context
+- `commands`, `task_complete` and every other key are re-assembled from the original JSON, never from the model
+- failed turn keeps its content byte for byte; unparseable turn passes through (`reasons: ["unparsed"]`)
+- retry feedback names lost facts, lost negations, "shorter", or the replay miss
+- turns of a trace run concurrently (`--workers 2`, 4 on a hosted API); traces run in order, so output order is deterministic
+- temperature 0, seed 0, `response_format=json_object`, `reasoning_effort: "none"` (thinking on: 8× slower, and it invented a fact); `--ctx N` → `options.num_ctx` for Ollama only (off by default)
+- `RULES` (the system prompt) is the same for every turn and level, so a provider's prefix cache holds it
+
+### Levels
+
+**ultra → full → lite**, terse to gentle:
+- `lite`: keep articles and full sentences; cut filler, hedging, repetition
+- `full`: short words, fragments; drop articles where a sentence still reads in one pass
+- `ultra`: telegraphic; short forms (dir, config, env, repo, deps); `->` for cause or sequence
+- hard turn starts one level gentler: the output before it shows an error (`Traceback`, `*Error`, `command not found`, `FAILED`…) or its prose runs past 400 tokens (~p90)
+- a replay miss retries one level gentler; every other failure retries at the same level, its feedback naming what was lost (a gentler retry after a lost fact ran `longer` on short turns: 3 of 29 lost)
+- budget tag: a system message `Reasoning budget: <level>` heads each trace (`--no-tag` skips it), so one student can learn every level; `turn` in `turns.jsonl` stays the source index
+
+### Gates
+
+`check_turn`; empty `reasons` keeps the rewrite:
+- `actions`: a non-prose body key changed, or `<think>` appeared / vanished
+- `empty`: a non-empty field emptied
+- `tag`: `<think>` / `</think>` injected
+- `facts`: lost code span, path, flag, number, mixed alnum, snake / camel case, dotted name (enumerators, `Step N`, `e.g.` ignored; whole word match)
+- `negation`: a class lost: not (with n't, cannot, no, none, nothing, without, zero, missing, empty, silent…), never, only, except
+- `longer`: o200k tokens of the new prose ≥ the old
+- `replay`: see below
+
+> not and no are one class: "didn't find any" → "none found" changes form, not meaning (5 of 7 baseline negation failures were this swap)
+
+### Replay
+
+A verifier model must reach the same commands from the shrunk reasoning:
+- input: task (text after `Task Description:`, first 3,000 chars), the output before the turn (last 3,000 chars), the reasoning; never the commands
+- output: `{"commands": [{"keystrokes"}]}`; score = difflib ratio of whitespace-squashed keystrokes
+- pass at ≥ 0.8, else when no worse than the original reasoning's score − 0.1 (scored once per turn, only when needed): a plan that never named its heredoc is not the shrink's fault
+- a turn without commands skips the verifier; `--verifier` picks the model (default the compressor), `--no-replay` turns the gate off
+
+### Filter / weight
+
+Rules `FIELD=VALUE:W`, repeatable:
+
+```bash
+uv run python util/caveman_data.py shrink --weight result=ContextLengthExceededError:0 --weight trace_source=None:0.5
+```
+
+- matching rules multiply; `None` matches a null or missing field
+- weight 0 drops the row before any model call; the rest carry `caveman.weight` for the trainer
+
+### Outputs
+
+`data/caveman/` (gitignored):
+- `source.jsonl`: raw rows + `row_idx`, shared by every level
+- `parquet/`: the shards (full scale only)
+- `<level>/train.jsonl`: source schema, tagged conversation, `caveman` meta (`version`, `model`, `level`, `weight`, `turns`, `parsed`, `shrunk`, `hard`, `prose_tokens`, `content_tokens`)
+- `<level>/turns.jsonl`: per turn before / after / draft, `reasons`, `attempts` (reasons per try), `missing`, `level`, `hard`, `replay`, tokens, `secs` (the review file)
+- `<level>/stats.json`: shrink rate, reasons, levels, replay, token savings, prose ratio p10 / p50 / p90
+- resume: a row in `train.jsonl` is done; turns are written before it; a half-written last line is trimmed on the next append; `stats` counts a turn once
+
+### Tests
+
+`util/caveman_data_bdd.py`, ~1 s, no network: a scripted fake model and verifier, a fake URL opener, tiny parquet shards written by `pyarrow` (skipped without it):
+
+```bash
+uv run python -m unittest discover -s util -p "caveman_data_bdd.py" -v
+```
+
+- covers: sampling, turn split / join (fences), facts, negations, gates, reply parsing, levels and hard turns, retries and their levels, replay (scoring, the base, hidden commands, clipping), the budget tag, weights, the CLI, crash-safe JSONL, parquet rows and downloads, resume
+- `test/` has no `__init__.py` and stdlib ships a `test` package: run by `discover`, the file puts the repo root on `sys.path`
+
+> ❗ PowerShell reports exit code 1 when retry warnings reach stderr: read the `OK` line
+
+### Results
+
+50 traces (seed 0), 613 assistant turns, 2026-10-15, `deepseek/deepseek-v4.1-flash` on OpenRouter as compressor and verifier, `--workers 4`, 11 min:
+- `full`: 504 of 588 parsed turns shrunk (85.7%); prose tokens −22.8%, whole content −9.3%; prose ratio p10 / p50 / p90: 0.55 / 0.72 / 0.93
+- 235 hard turns (40%) ran at `lite` and saved 22.8%; the `full` turns saved 35.5%
+- kept: facts 36, replay 22, longer 19, reply 6 (the model answered `{"think":", "}` twice), negation 5; 73 of 157 retries rescued
+- replay: 526 checked, 22 failed; 192 passed at ≥ 0.8 (or had no commands), 334 needed the original's score; median similarity 0.65
+- unparsed: 25 turns (prose outside the JSON, broken JSON)
+
+Levels on the first 10 traces (176 parsed turns), prose saved / shrink rate / prose ratio p50:
+- `lite`: −14.4% / 86.5% / 0.87
+- `full`: −22.5% / 84.6% / 0.71
+- `ultra`: −27.2% / 79.8% / 0.62; more turns lost facts (19) and negations (9)
+
+Earlier runs:
+- LAN Ollama `huihui_ai/Qwen3.8-abliterated:27b`, v1 rules, no replay, 3 traces: 84% shrunk, prose −24.8%, ~5 s a turn; with replay ~18 s a turn
+- parquet vs viewer: 50 of 50 sampled rows identical; 50 rows read from the 10 shards in 4 s
+
+> ❗ Hosted models are not deterministic at temperature 0 / seed 0: the same trace shrank 26, then 25 of 29 turns
+
+> ❗ Compressor and verifier default to the `.env` inference config (OpenRouter); `CAVEMAN_URL` + `CAVEMAN_LLM` switch both to another host as a set, and `AGENTIC_INFERENCE_KEY` is never sent to it
