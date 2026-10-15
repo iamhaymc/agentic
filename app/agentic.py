@@ -15,6 +15,7 @@ each be replaced by a consumer:
 | repository| `RepoSpec`, `RepoManager`, `Checkout`            |
 | resilience| `ErrorKind`, `RetryPolicy`, `Usage`              |
 | models    | `ModelSpec`, `ModelPool`                         |
+| decisions | `SystemOneClient`, `Noul`, `Choice`, `Score`     |
 | tools     | `Workspace`, `ToolRegistry`, `Sandbox`           |
 | console   | `ConsoleRenderer`                                |
 | commands  | `CommandRegistry`                                |
@@ -76,7 +77,7 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import (
     Any,
@@ -85,6 +86,7 @@ from typing import (
     Callable,
     Iterable,
     Literal,
+    Mapping,
     MutableMapping,
     Protocol,
     TypedDict,
@@ -98,6 +100,8 @@ __all__ = [
     "BubblewrapSandbox",
     "Cache",
     "Checkout",
+    "Choice",
+    "ChoiceAnswer",
     "CommandRegistry",
     "ConsoleRenderer",
     "ConversationMemory",
@@ -112,6 +116,8 @@ __all__ = [
     "ModelError",
     "ModelPool",
     "ModelSpec",
+    "Noul",
+    "NoulAnswer",
     "PromptRenderer",
     "RepoError",
     "RepoManager",
@@ -122,11 +128,16 @@ __all__ = [
     "RuleBook",
     "RunResult",
     "Sandbox",
+    "Score",
+    "ScoreAnswer",
     "SeatbeltSandbox",
     "Session",
     "SessionManager",
     "SqliteStore",
     "Store",
+    "SystemOneClient",
+    "SystemOneError",
+    "SystemOneResponse",
     "ToolCall",
     "ToolRegistry",
     "Transcript",
@@ -248,9 +259,13 @@ LEADER_ROLE = "leader"
 VISION_ROLE = "vision"
 SUMMARY_ROLE = "summary"
 WORKER_ROLE = "worker"
+DECISION_ROLE = "decision"
 
 #: Config field naming each role's model, where it is not ``<role>_model``.
-ROLE_MODEL_FIELDS = {VISION_ROLE: "inference_vlm"}
+ROLE_MODEL_FIELDS = {VISION_ROLE: "inference_vlm", DECISION_ROLE: "inference_ldm"}
+#: Config fields naming each role's endpoint and credential, where they are not
+#: ``<role>_api_url`` / ``<role>_api_key``.
+ROLE_ENDPOINT_FIELDS = {DECISION_ROLE: ("decision_url", "decision_key")}
 
 SECRET_FIELDS = ("api_key", "key", "token", "secret", "password")
 
@@ -570,6 +585,14 @@ class AgentConfig:
     vision_api_key: str = ""
     vision_instructions: str = DEFAULT_VISION_INSTRUCTIONS
     vision_max_tokens: int = 1024
+    # Decision model (clef, clef-flash, jev). It writes no text: it answers
+    # typed questions (`Noul`, `Choice`, `Score`) about a state with calibrated
+    # probabilities, through the System One API (`SystemOneClient`). Empty
+    # leaves the role off. The endpoint and credential fall back to the
+    # leader's, so a local Ollama serving both costs one setting.
+    inference_ldm: str = ""
+    decision_url: str = ""
+    decision_key: str = ""
     # Conversation memory. Every run journals the exchange to the transcript of
     # its session, which keeps every turn; the model is shown a window onto it
     # (see the context budget below).
@@ -826,11 +849,14 @@ class AgentConfig:
         name = getattr(self, ROLE_MODEL_FIELDS.get(role, f"{role}_model"), "") or ""
         if not name:
             return None
+        url_field, key_field = ROLE_ENDPOINT_FIELDS.get(
+            role, (f"{role}_api_url", f"{role}_api_key")
+        )
         return ModelSpec(
             role,
             name,
-            getattr(self, f"{role}_api_url", "") or self.inference_url,
-            getattr(self, f"{role}_api_key", "") or self.inference_key,
+            getattr(self, url_field, "") or self.inference_url,
+            getattr(self, key_field, "") or self.inference_key,
             self.inference_ctx,
         )
 
@@ -857,6 +883,9 @@ class AgentConfig:
         vision = self.model_spec(VISION_ROLE)
         if vision is not None:
             items.append(("Vision Model", vision.name))
+        decision = self.model_spec(DECISION_ROLE)
+        if decision is not None:
+            items.append(("Decision Model", decision.name))
         if self.repo_url:
             items.append(("Repository", self.repo_url))
         items.append(("Input", self.input_source or "(inline)"))
@@ -4389,6 +4418,412 @@ class ModelPool:
         """Drop every cached client and model. The totals are kept."""
         self._clients.clear()
         self._models.clear()
+
+
+# ---------------------------------------------------------------------------
+# Decisions
+#
+# A decision model (clef, clef-flash, jev) writes no text: it reads a state and
+# answers typed questions with calibrated probabilities in one forward pass.
+# `SystemOneClient` speaks the System One API (`POST /v1/systemone`, served by
+# Ollama) in the shape of `typesafe-sdk`, without depending on it: questions are
+# `Noul`, `Choice` or `Score` (or their raw dicts) keyed by name, and one typed
+# answer comes back per name. Calls are bounded, retried and accounted like any
+# other model call (`RetryPolicy`, `Usage`).
+# ---------------------------------------------------------------------------
+
+#: Root of a local Ollama server, the default System One endpoint.
+OLLAMA_URL = "http://127.0.0.1:11434"
+#: Path of the System One endpoint below the root of a server.
+DECISION_PATH = "/v1/systemone"
+#: Characters of an unrecognised error body kept in a `SystemOneError`.
+DECISION_ERROR_CHARS = 200
+
+
+def _drop_none(data: dict[str, Any]) -> dict[str, Any]:
+    """`data` without its top level ``None`` values (nested ones are meant)."""
+    return {key: value for key, value in data.items() if value is not None}
+
+
+@dataclass(frozen=True, kw_only=True)
+class Noul:
+    """A yes/no question, answered with the probability that it is true.
+
+    Content (`instructions`, the ``true`` / ``false`` descriptions in
+    `criteria`) is text, a JSON object or an array; one of them is required.
+    """
+
+    type = "noul"
+    instructions: Any = None
+    criteria: dict[str, Any] | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return _drop_none(
+            {"type": self.type, "instructions": self.instructions, "criteria": self.criteria}
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class Choice:
+    """A pick of one label; `criteria` maps each label to a description or ``None``."""
+
+    type = "choice"
+    criteria: dict[str, Any]
+    instructions: Any = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return _drop_none(
+            {"type": self.type, "instructions": self.instructions, "criteria": dict(self.criteria)}
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class Score:
+    """A rating on an ordered rubric; `criteria` describes each level, 0 first."""
+
+    type = "score"
+    criteria: list[Any]
+    instructions: Any = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return _drop_none(
+            {"type": self.type, "instructions": self.instructions, "criteria": list(self.criteria)}
+        )
+
+
+class _Answer:
+    """`to_dict` for the answer dataclasses: their fields, tagged by type."""
+
+    type = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": self.type, **asdict(self)}  # type: ignore[call-overload]
+
+
+@dataclass(frozen=True)
+class NoulAnswer(_Answer):
+    """The probability, from 0 to 1, that a `Noul` is true."""
+
+    type = "noul"
+    noul: float
+
+
+@dataclass(frozen=True)
+class ChoiceAnswer(_Answer):
+    """The chosen label, each label's probability and how concentrated they are.
+
+    `confidence` is not the chance the choice is right; it is how far the
+    probabilities are from even.
+    """
+
+    type = "choice"
+    choice: str
+    probabilities: dict[str, float]
+    confidence: float | None = None
+
+
+@dataclass(frozen=True)
+class ScoreAnswer(_Answer):
+    """The probability weighted level, and each level's description and probability."""
+
+    type = "score"
+    score: float
+    legend: dict[int, Any]
+    probabilities: dict[int, float]
+    confidence: float | None = None
+
+
+Answer = NoulAnswer | ChoiceAnswer | ScoreAnswer
+
+
+@dataclass
+class SystemOneResponse:
+    """The answers to one System One request, keyed by question name."""
+
+    model: str
+    answers: dict[str, Answer]
+    usage: Usage
+    #: The body as received, answers of unknown types included.
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    @property
+    def nouls(self) -> dict[str, NoulAnswer]:
+        return {k: v for k, v in self.answers.items() if isinstance(v, NoulAnswer)}
+
+    @property
+    def choices(self) -> dict[str, ChoiceAnswer]:
+        return {k: v for k, v in self.answers.items() if isinstance(v, ChoiceAnswer)}
+
+    @property
+    def scores(self) -> dict[str, ScoreAnswer]:
+        return {k: v for k, v in self.answers.items() if isinstance(v, ScoreAnswer)}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "answers": {name: answer.to_dict() for name, answer in self.answers.items()},
+            "usage": self.usage.to_dict(),
+        }
+
+
+class SystemOneError(RuntimeError):
+    """A System One response that was refused or could not be read.
+
+    `status_code` is what `classify_error` reads, so a refusal falls into the
+    same taxonomy, and the same retry rules, as any other provider failure.
+    """
+
+    def __init__(self, status_code: int, message: str, body: Any = None) -> None:
+        super().__init__(f"{status_code} {message}")
+        self.status_code = status_code
+        self.body = body
+
+
+def decision_root(url: str) -> str:
+    """The server root of a System One URL: bare, ``/v1`` or the endpoint itself."""
+    return url.strip().rstrip("/").removesuffix(DECISION_PATH).removesuffix("/v1")
+
+
+def decision_questions(questions: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """The wire form of `questions`, checked as the API would check them.
+
+    A question is a `Noul`, `Choice` or `Score`, or its wire dict; a type
+    this client does not know is passed through for the server to judge.
+    """
+    if not questions:
+        raise ValueError("at least one question is required")
+    out: dict[str, dict[str, Any]] = {}
+    for name, question in questions.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"a question name must be a nonempty string: {name!r}")
+        wire = question.to_wire() if hasattr(question, "to_wire") else question
+        if not isinstance(wire, Mapping) or not isinstance(wire.get("type"), str) or not wire["type"]:
+            raise ValueError(f'question "{name}" needs a nonempty string "type"')
+        kind, criteria = wire["type"], wire.get("criteria")
+        if kind == "choice" and (not isinstance(criteria, Mapping) or not criteria):
+            raise ValueError(f'choice "{name}" needs at least one label in "criteria"')
+        if kind == "score" and (not isinstance(criteria, (list, tuple)) or not criteria):
+            raise ValueError(f'score "{name}" needs at least one level in "criteria"')
+        if kind == "noul":
+            if criteria is not None and not isinstance(criteria, Mapping):
+                raise ValueError(f'noul "{name}" criteria must be an object')
+            described = isinstance(criteria, Mapping) and any(
+                value is not None for value in criteria.values()
+            )
+            if wire.get("instructions") is None and not described:
+                raise ValueError(f'noul "{name}" needs "instructions" or a described outcome')
+        out[name] = dict(wire)
+    return out
+
+
+def decision_image(image: str | bytes) -> str:
+    """An image as the `images` extension takes it: bare base64, no data URL."""
+    if isinstance(image, (bytes, bytearray)):
+        return base64.b64encode(bytes(image)).decode("ascii")
+    text = str(image).strip()
+    if text.startswith("data:") and "," in text:
+        return text.split(",", 1)[1]
+    return text
+
+
+def decision_error_message(body: Any) -> str:
+    """The reason a server gave, from any of the shapes servers give it in."""
+    if isinstance(body, dict):
+        for key in ("error", "message", "detail"):
+            value = body.get(key)
+            if isinstance(value, dict):
+                value = value.get("message")
+            if isinstance(value, list):
+                value = "; ".join(_validation_line(item) for item in value)
+            if isinstance(value, str) and value:
+                return value
+        body = json.dumps(body)
+    text = str(body or "").strip()
+    if len(text) > DECISION_ERROR_CHARS:
+        return text[:DECISION_ERROR_CHARS] + "…"
+    return text or "no body"
+
+
+def _validation_line(item: Any) -> str:
+    """One entry of a validation error list as ``path: message``."""
+    if not isinstance(item, dict):
+        return str(item)
+    path = ".".join(str(part) for part in item.get("loc") or [] if part != "body")
+    message = str(item.get("msg") or "")
+    return f"{path}: {message}" if path else message
+
+
+def decision_answer(raw: dict[str, Any]) -> Answer | None:
+    """One wire answer, typed; ``None`` for a type this client does not know."""
+    kind = raw["type"]
+    confidence = raw.get("confidence")
+    confidence = None if confidence is None else float(confidence)
+    if kind == "noul":
+        return NoulAnswer(float(raw["noul"]))
+    if kind == "choice":
+        probabilities = {str(k): float(v) for k, v in (raw.get("probabilities") or {}).items()}
+        return ChoiceAnswer(str(raw["choice"]), probabilities, confidence)
+    if kind == "score":
+        legend = {int(k): v for k, v in (raw.get("legend") or {}).items()}
+        probabilities = {int(k): float(v) for k, v in (raw.get("probabilities") or {}).items()}
+        return ScoreAnswer(float(raw["score"]), legend, probabilities, confidence)
+    return None
+
+
+def decision_body(response: Any) -> dict[str, Any]:
+    """The JSON object a System One server answered, or a `SystemOneError`."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = response.text
+    if not response.is_success:
+        raise SystemOneError(response.status_code, decision_error_message(body), body)
+    if not isinstance(body, dict):
+        raise SystemOneError(response.status_code, "response is not a JSON object", body)
+    return body
+
+
+def decision_response(body: dict[str, Any], model: str, status: int = 200) -> SystemOneResponse:
+    """Type the answers of a System One body; unknown answer types are skipped."""
+    answers = body.get("answers")
+    if not isinstance(answers, dict):
+        raise SystemOneError(status, "response has no answers", body)
+    typed: dict[str, Answer] = {}
+    for name, raw in answers.items():
+        if not isinstance(raw, dict) or not isinstance(raw.get("type"), str):
+            raise SystemOneError(status, f"answer {name!r} has no type", body)
+        try:
+            answer = decision_answer(raw)
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise SystemOneError(status, f"answer {name!r} is malformed: {exc!r}", body) from exc
+        if answer is not None:
+            typed[name] = answer
+    usage = Usage().record(body.get("usage") or {})
+    return SystemOneResponse(str(body.get("model") or model), typed, usage, body)
+
+
+class SystemOneClient:
+    """Async client of the System One API, after `typesafe_sdk.TypeSafeClient`.
+
+    `system_one(state, questions)` asks every question about one state in one
+    request; `models()` lists what the server serves. `base_url` may be the
+    server root, its OpenAI style ``/v1`` (the leader's, when inherited) or the
+    endpoint itself. A key is sent as a bearer token; a local Ollama needs
+    none. Every call goes through `policy` and is accounted on the `usage`
+    passed in, on the totals of the client and on the run in progress.
+    """
+
+    def __init__(
+        self,
+        base_url: str = OLLAMA_URL,
+        api_key: str = "",
+        model: str = "",
+        *,
+        policy: RetryPolicy | None = None,
+        headers: Mapping[str, str] | None = None,
+        transport: Any = None,
+        role: str = DECISION_ROLE,
+    ) -> None:
+        self.root = decision_root(base_url)
+        self.api_key = api_key
+        self.model = model
+        self.policy = policy or RetryPolicy()
+        self.headers = dict(headers or {})
+        self.role = role
+        #: Everything this client has spent.
+        self.usage = Usage()
+        self._transport = transport
+        self._http: Any = None
+
+    @classmethod
+    def from_spec(cls, spec: ModelSpec, **options: Any) -> "SystemOneClient":
+        """A client for a resolved role, usually ``config.model_spec(DECISION_ROLE)``."""
+        return cls(spec.api_url, spec.api_key, spec.name, role=spec.role, **options)
+
+    @property
+    def url(self) -> str:
+        return f"{self.root}{DECISION_PATH}"
+
+    def http(self) -> Any:
+        """The shared `httpx.AsyncClient`, built on first use."""
+        if self._http is None or self._http.is_closed:
+            import httpx
+
+            self._http = httpx.AsyncClient(
+                timeout=self.policy.timeout or None, transport=self._transport
+            )
+        return self._http
+
+    def request_headers(self) -> dict[str, str]:
+        headers = {"Accept": "application/json", **self.headers}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    async def system_one(
+        self,
+        state: Any,
+        questions: Mapping[str, Any],
+        *,
+        model: str | None = None,
+        images: Iterable[str | bytes] | None = None,
+        extra_body: Mapping[str, Any] | None = None,
+        policy: RetryPolicy | None = None,
+        usage: Usage | None = None,
+        on_retry: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> SystemOneResponse:
+        """Ask every question about `state` in one request.
+
+        `state` is text, a JSON object or an array. `images` (bytes, base64 or
+        data URLs) are Ollama's extension, scored with the state. `extra_body`
+        is merged over the body last (``keep_alive``, ...). An invalid request
+        raises `ValueError` before anything is sent; a refusal that outlasts
+        the policy raises `ModelError`.
+        """
+        if state is None:
+            raise ValueError("a state is required")
+        name = model or self.model
+        if not name:
+            raise ValueError("a decision model is required (inference_ldm)")
+        body: dict[str, Any] = {
+            "model": name,
+            "state": state,
+            "questions": decision_questions(questions),
+        }
+        encoded = [decision_image(image) for image in images or ()]
+        if encoded:
+            body["images"] = encoded
+        body.update(extra_body or {})
+
+        async def request() -> SystemOneResponse:
+            response = await self.http().post(self.url, json=body, headers=self.request_headers())
+            return decision_response(decision_body(response), name, response.status_code)
+
+        result = await (policy or self.policy).call(request, role=self.role, on_retry=on_retry)
+        record_usage(result.raw.get("usage") or {}, self.usage, usage)
+        return result
+
+    async def models(self, *, policy: RetryPolicy | None = None) -> list[str]:
+        """Names the server lists: OpenAI style ``data`` or System One ``models``."""
+
+        async def request() -> dict[str, Any]:
+            response = await self.http().get(f"{self.root}/v1/models", headers=self.request_headers())
+            return decision_body(response)
+
+        body = await (policy or self.policy).call(request, role=self.role)
+        listed = body.get("data") or body.get("models") or []
+        names = (item.get("id") or item.get("name") for item in listed if isinstance(item, dict))
+        return [str(name) for name in names if name]
+
+    async def aclose(self) -> None:
+        if self._http is not None:
+            await self._http.aclose()
+
+    async def __aenter__(self) -> "SystemOneClient":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.aclose()
 
 
 # ---------------------------------------------------------------------------

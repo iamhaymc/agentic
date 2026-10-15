@@ -169,6 +169,47 @@ class ModelSpecTest(unittest.TestCase):
         self.assertIn("Vision Model", keys)
         self.assertNotIn("Vision Model", [k for k, _ in A.AgentConfig().banner_items()])
 
+    def test_decision_is_unset_by_default(self):
+        self.assertIsNone(A.AgentConfig().model_spec(A.DECISION_ROLE))
+
+    def test_decision_comes_from_the_ldm_env_and_inherits_the_endpoint(self):
+        config = A.AgentConfig(inference_url="http://url/v1", inference_key="k").with_env(
+            {"AGENTIC_INFERENCE_LDM": "clef-flash"}
+        )
+        spec = config.model_spec(A.DECISION_ROLE)
+        self.assertEqual(
+            (spec.role, spec.name, spec.api_url, spec.api_key),
+            ("decision", "clef-flash", "http://url/v1", "k"),
+        )
+
+    def test_decision_may_use_its_own_endpoint(self):
+        config = A.AgentConfig().with_env(
+            {
+                "AGENTIC_INFERENCE_LDM": "jev-latest",
+                "AGENTIC_DECISION_URL": "http://other",
+                "AGENTIC_DECISION_KEY": "sk-abcdefghijklmnop",
+            }
+        )
+        spec = config.model_spec(A.DECISION_ROLE)
+        self.assertEqual((spec.api_url, spec.api_key), ("http://other", "sk-abcdefghijklmnop"))
+        self.assertEqual(config.to_dict()["decision_key"], "sk-abcde...mnop")
+
+    def test_decision_endpoint_reads_from_a_nested_config_group(self):
+        config = A.AgentConfig(inference_ldm="m").with_data(
+            {"decision": {"url": "http://other", "key": "k"}}
+        )
+        spec = config.model_spec(A.DECISION_ROLE)
+        self.assertEqual((spec.api_url, spec.api_key), ("http://other", "k"))
+
+    def test_decision_reads_from_a_nested_config_group(self):
+        config = A.AgentConfig().with_data({"inference": {"ldm": "clef-flash"}})
+        self.assertEqual(config.inference_ldm, "clef-flash")
+
+    def test_decision_model_appears_in_the_banner(self):
+        items = dict(A.AgentConfig(inference_ldm="clef-flash").banner_items())
+        self.assertEqual(items["Decision Model"], "clef-flash")
+        self.assertNotIn("Decision Model", dict(A.AgentConfig().banner_items()))
+
 
 class ModelPoolTest(unittest.TestCase):
     class FakeClient:
@@ -571,6 +612,215 @@ class UsageTest(unittest.TestCase):
 
     def test_usage_of_reports_nothing_when_the_sdk_keeps_nothing(self):
         self.assertIsNone(A.usage_of(types.SimpleNamespace()))
+
+
+class SystemOneClientTest(unittest.TestCase):
+    """The decision client speaks `POST /v1/systemone` and returns typed answers."""
+
+    ANSWERS = {
+        "model": "clef-flash",
+        "answers": {
+            "urgent": {"type": "noul", "noul": 0.97},
+            "team": {
+                "type": "choice",
+                "choice": "technical",
+                "probabilities": {"billing": 0.05, "technical": 0.95},
+                "confidence": 0.7,
+            },
+            "severity": {
+                "type": "score",
+                "score": 1.93,
+                "legend": {"0": "none", "1": "minor", "2": "major"},
+                "probabilities": {"0": 0.02, "1": 0.03, "2": 0.95},
+                "confidence": 0.8,
+            },
+            "where": {"type": "box", "box": {"top": 0, "bottom": 1, "left": 0, "right": 1}},
+        },
+        "usage": {"input_tokens": 282, "output_tokens": 0},
+    }
+
+    QUESTIONS = {
+        "urgent": A.Noul(instructions="Is this urgent?"),
+        "team": A.Choice(
+            instructions="Which team?", criteria={"billing": None, "technical": "Outages"}
+        ),
+        "severity": A.Score(criteria=["none", "minor", "major"]),
+    }
+
+    def client(self, handler, url="http://ollama:11434/v1", **kwargs):
+        import httpx
+
+        self.requests = []
+
+        def record(request):
+            self.requests.append(request)
+            return handler(request)
+
+        kwargs.setdefault("policy", A.RetryPolicy(backoff=0.0))
+        return A.SystemOneClient(
+            url, model="clef-flash", transport=httpx.MockTransport(record), **kwargs
+        )
+
+    def ok(self, request):
+        import httpx
+
+        return httpx.Response(200, json=self.ANSWERS)
+
+    def test_posts_the_wire_form_to_the_endpoint(self):
+        client = self.client(self.ok)
+        run(client.system_one("Checkout is down.", self.QUESTIONS))
+        request = self.requests[0]
+        self.assertEqual(str(request.url), "http://ollama:11434/v1/systemone")
+        self.assertEqual(request.method, "POST")
+        self.assertNotIn("authorization", request.headers)
+        body = json.loads(request.content)
+        self.assertEqual(body["model"], "clef-flash")
+        self.assertEqual(body["state"], "Checkout is down.")
+        self.assertEqual(body["questions"]["urgent"], {"type": "noul", "instructions": "Is this urgent?"})
+        self.assertEqual(
+            body["questions"]["team"],
+            {"type": "choice", "instructions": "Which team?", "criteria": {"billing": None, "technical": "Outages"}},
+        )
+        self.assertEqual(body["questions"]["severity"], {"type": "score", "criteria": ["none", "minor", "major"]})
+        self.assertNotIn("images", body)
+
+    def test_any_url_form_reaches_the_same_endpoint(self):
+        for url in ("http://h:1", "http://h:1/", "http://h:1/v1/", "http://h:1/v1/systemone"):
+            client = self.client(self.ok, url=url)
+            run(client.system_one("s", self.QUESTIONS))
+            self.assertEqual(str(self.requests[0].url), "http://h:1/v1/systemone", url)
+
+    def test_a_key_is_sent_as_a_bearer_token(self):
+        client = self.client(self.ok, api_key="k")
+        run(client.system_one("s", self.QUESTIONS))
+        self.assertEqual(self.requests[0].headers["authorization"], "Bearer k")
+
+    def test_answers_are_typed_and_grouped(self):
+        result = run(self.client(self.ok).system_one("s", self.QUESTIONS))
+        self.assertEqual(result.model, "clef-flash")
+        self.assertEqual(result.nouls["urgent"].noul, 0.97)
+        self.assertEqual(result.choices["team"].choice, "technical")
+        self.assertEqual(result.choices["team"].probabilities["billing"], 0.05)
+        self.assertEqual(result.scores["severity"].score, 1.93)
+        self.assertEqual(result.scores["severity"].legend[2], "major")
+        self.assertEqual(result.scores["severity"].probabilities[2], 0.95)
+        self.assertEqual(result.scores["severity"].confidence, 0.8)
+        # An answer type this client does not know is skipped, not fatal.
+        self.assertNotIn("where", result.answers)
+        self.assertIn("where", result.raw["answers"])
+        self.assertEqual(
+            result.to_dict()["answers"]["team"]["probabilities"], {"billing": 0.05, "technical": 0.95}
+        )
+
+    def test_usage_lands_on_the_response_the_client_and_the_sink(self):
+        client = self.client(self.ok)
+        sink = A.Usage()
+        result = run(client.system_one("s", self.QUESTIONS, usage=sink))
+        for usage in (result.usage, client.usage, sink):
+            self.assertEqual((usage.requests, usage.input_tokens), (1, 282))
+
+    def test_raw_dicts_model_override_images_and_extra_body(self):
+        client = self.client(self.ok)
+        run(
+            client.system_one(
+                {"ticket": "t"},
+                {"ok": {"type": "noul", "criteria": {"true": "fine"}}},
+                model="clef",
+                images=[b"\x89PNG", "data:image/png;base64,QUJD", "REVG"],
+                extra_body={"keep_alive": "5m"},
+            )
+        )
+        body = json.loads(self.requests[0].content)
+        self.assertEqual(body["model"], "clef")
+        self.assertEqual(body["state"], {"ticket": "t"})
+        self.assertEqual(body["questions"]["ok"], {"type": "noul", "criteria": {"true": "fine"}})
+        self.assertEqual(body["images"], [base64.b64encode(b"\x89PNG").decode(), "QUJD", "REVG"])
+        self.assertEqual(body["keep_alive"], "5m")
+
+    def test_invalid_requests_fail_before_sending(self):
+        client = self.client(self.ok)
+        cases = [
+            (None, self.QUESTIONS),
+            ("s", {}),
+            ("s", {"c": A.Choice(criteria={})}),
+            ("s", {"c": {"type": "choice"}}),
+            ("s", {"s": A.Score(criteria=[])}),
+            ("s", {"n": A.Noul()}),
+            ("s", {"n": {"type": "noul", "criteria": {"true": None}}}),
+            ("s", {"x": {"instructions": "no type"}}),
+            ("s", {"": A.Noul(instructions="q")}),
+        ]
+        for state, questions in cases:
+            with self.assertRaises(ValueError, msg=repr(questions)):
+                run(client.system_one(state, questions))
+        with self.assertRaises(ValueError):
+            run(A.SystemOneClient("http://h").system_one("s", self.QUESTIONS))
+        self.assertEqual(self.requests, [])
+
+    def test_a_refusal_is_a_model_error_with_the_server_message(self):
+        import httpx
+
+        client = self.client(lambda r: httpx.Response(404, json={"error": "model 'nosuch' not found"}))
+        with self.assertRaises(A.ModelError) as caught:
+            run(client.system_one("s", self.QUESTIONS))
+        self.assertEqual(caught.exception.kind, A.ErrorKind.INVALID)
+        self.assertEqual(caught.exception.role, A.DECISION_ROLE)
+        self.assertIn("model 'nosuch' not found", str(caught.exception))
+        self.assertEqual(len(self.requests), 1)
+
+    def test_validation_details_are_reported(self):
+        import httpx
+
+        detail = {"detail": [{"loc": ["body", "questions", "a"], "msg": "Field required"}]}
+        client = self.client(lambda r: httpx.Response(422, json=detail))
+        with self.assertRaises(A.ModelError) as caught:
+            run(client.system_one("s", self.QUESTIONS))
+        self.assertIn("questions.a: Field required", str(caught.exception))
+
+    def test_a_transient_failure_is_retried(self):
+        import httpx
+
+        replies = [httpx.Response(503, text="busy"), httpx.Response(200, json=self.ANSWERS)]
+        retries = []
+        client = self.client(lambda r: replies.pop(0))
+        result = run(client.system_one("s", self.QUESTIONS, on_retry=retries.append))
+        self.assertEqual(result.nouls["urgent"].noul, 0.97)
+        self.assertEqual(len(self.requests), 2)
+        self.assertEqual(retries[0]["error_kind"], A.ErrorKind.SERVER)
+        self.assertEqual(retries[0]["role"], A.DECISION_ROLE)
+
+    def test_a_malformed_body_is_an_error(self):
+        import httpx
+
+        client = self.client(lambda r: httpx.Response(200, json={"answers": {"a": {"noul": 1}}}))
+        with self.assertRaises(A.SystemOneError):
+            run(client.system_one("s", self.QUESTIONS))
+
+    def test_from_spec_takes_the_decision_role(self):
+        config = A.AgentConfig(inference_url="http://h:1/v1", inference_ldm="clef-flash")
+        client = A.SystemOneClient.from_spec(config.model_spec(A.DECISION_ROLE))
+        self.assertEqual((client.url, client.model, client.role), ("http://h:1/v1/systemone", "clef-flash", "decision"))
+
+    def test_models_lists_either_listing_shape(self):
+        import httpx
+
+        bodies = [
+            {"object": "list", "data": [{"id": "clef-flash:latest"}]},
+            {"models": [{"name": "jev-latest", "description": "", "release_date": ""}]},
+        ]
+        client = self.client(lambda r: httpx.Response(200, json=bodies.pop(0)))
+        self.assertEqual(run(client.models()), ["clef-flash:latest"])
+        self.assertEqual(run(client.models()), ["jev-latest"])
+        self.assertEqual(str(self.requests[0].url), "http://ollama:11434/v1/models")
+
+    def test_closes_as_a_context_manager(self):
+        async def scenario():
+            async with self.client(self.ok) as client:
+                await client.system_one("s", self.QUESTIONS)
+                http = client._http
+            return http
+
+        self.assertTrue(run(scenario()).is_closed)
 
 
 class ModelPoolResilienceTest(unittest.TestCase):

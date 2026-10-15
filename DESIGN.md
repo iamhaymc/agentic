@@ -210,6 +210,8 @@ genre: noir
 | `AGENTIC_INFERENCE_VLM`                                                       | Vision specialist (unset: the leader sees)  |
 | `AGENTIC_VISION_API_URL`, `AGENTIC_VISION_API_KEY`                            | Vision endpoint (defaults to the leader's)  |
 | `AGENTIC_VISION_INSTRUCTIONS`, `AGENTIC_VISION_MAX_TOKENS`                    | Vision system prompt and answer budget      |
+| `AGENTIC_INFERENCE_LDM`                                                       | Decision model (unset: role off)            |
+| `AGENTIC_DECISION_URL`, `AGENTIC_DECISION_KEY`                                | Decision endpoint (defaults to the leader's)|
 | `AGENTIC_MEMORY_ENABLED`                                                      | Remember the conversation of a session      |
 | `AGENTIC_MEMORY_TOOLS`                                                        | Replay journaled tool calls to the model    |
 | `AGENTIC_CONTEXT_WINDOW`, `AGENTIC_CONTEXT_RESERVE`                           | Window (`0` asks) and room for the reply    |
@@ -772,6 +774,44 @@ derived from it.
 sets the leader's client as the SDK default. `Agent.build_vision(config)` returns
 a `(data_url, question) -> text` delegate, or `None` when no vision model is
 configured — which is exactly what decides the image tool.
+
+### Decisions
+
+A decision model (`clef-flash`, `clef`, `jev`) writes no text: it reads a
+**state** and answers typed **questions** with calibrated probabilities, in one
+forward pass. The `decision` role resolves from `inference_ldm`, with
+`decision_url` / `decision_key` falling back to the leader's, and is
+served by `SystemOneClient` rather than the OpenAI client of the pool.
+
+**`config.model_spec(DECISION_ROLE)` → `SystemOneClient.from_spec(spec)` → `system_one(state, questions)` → `SystemOneResponse`**
+
+- [x] Wire: `POST {root}/v1/systemone`, body `{model, state, questions, images?}`; `root` strips `/v1` or `/v1/systemone`, so the leader's Ollama URL works as is
+- [x] Questions: `Noul(instructions, criteria={true, false})`, `Choice(criteria={label: desc|None})`, `Score(criteria=[level0, …])`, or raw wire dicts
+- [x] Checked before sending (`ValueError`): a state, ≥ 1 question, nonempty criteria, a noul with instructions or a described outcome
+- [x] Answers: `NoulAnswer.noul`, `ChoiceAnswer.choice`, `ScoreAnswer.score` (+ `probabilities`, `confidence`); grouped as `.nouls` / `.choices` / `.scores`
+- [x] An answer type the client does not know (`box`) is skipped; `response.raw` keeps it
+- [x] `images`: bytes, base64 or data URLs, sent as bare base64 (Ollama extension)
+- [x] `extra_body` merged last (`keep_alive`, …); a key, when set, is a bearer token
+- [x] Every call goes through `RetryPolicy.call(role="decision")`; `SystemOneError.status_code` feeds `classify_error`, so a 404 is `invalid_request` and a 503 is retried
+- [x] Spend lands on `response.usage`, `client.usage`, the `usage=` sink and the run in progress
+- [x] `models()` reads either listing (`data[].id` from Ollama, `models[].name` from System One)
+
+```python
+import asyncio
+from agentic import AgentConfig, Choice, DECISION_ROLE, Noul, SystemOneClient
+async def main():
+  spec = AgentConfig().with_env().model_spec(DECISION_ROLE)  # AGENTIC_INFERENCE_LDM=clef-flash
+  async with SystemOneClient.from_spec(spec) as client:
+    result = await client.system_one(
+      "Checkout has been failing for every customer for the last hour.",
+      {"urgent": Noul(instructions="Is this urgent?"),
+       "team": Choice(criteria={"billing": None, "technical": "Outages"})},
+    )
+  print(result.nouls["urgent"].noul, result.choices["team"].choice)
+asyncio.run(main())
+```
+
+> ❗ Ollama serves `/v1/systemone` from 0.35.1; an upgraded binary still runs the old server until it is restarted.
 
 ## 13. Tools
 

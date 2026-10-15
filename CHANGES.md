@@ -603,6 +603,32 @@ OpenAI-compatible `/v1` drops `options`, so the value takes effect only on a
 server that reads it; the harness window (`context_window`) is not derived from
 it, since a server that ignores it still truncates at its own `num_ctx`.
 
+### Decision models
+
+The second specialist is **decision** (`inference_ldm`), and it is the first
+that is not a chat model: Cloudflare's `clef` / `clef-flash` and TypeSafe's `jev`
+read a state and return a probability for every allowed answer of every typed
+question, in one non-autoregressive pass (`clef-flash` answered a three question
+request in ~40 ms warm on Ollama). They suit the small judgments an agent
+otherwise spends leader tokens on — route, gate, check — and their
+probabilities are calibrated, so code can threshold them.
+
+- **Own client, no SDK.** The System One API is one JSON endpoint, so
+  `SystemOneClient` follows the shape of `typesafe-sdk` (`system_one(state,
+  questions)`, `Noul` / `Choice` / `Score`, typed answers grouped by kind)
+  without its dependencies (`pydantic`, `httpx2`, `tenacity`). It uses
+  `httpx`, already installed with `openai`.
+- **Ollama first.** Ollama ≥ 0.35.1 serves `/v1/systemone` beside its OpenAI
+  `/v1`, so the role inherits the leader's URL and the root is derived from it.
+  The `images` field is Ollama's extension and is sent only when given.
+- **Same resilience as every model call.** Retries, timeouts and accounting
+  are the harness's `RetryPolicy` and `Usage`, not a second policy inside the
+  client; a refusal carries its HTTP status, so the error taxonomy applies
+  unchanged and the server's own reason (`model 'x' not found`) reaches the
+  message.
+- **Forward compatible.** An answer type the client does not model (`box`) is
+  skipped rather than failing the response, as the SDK does.
+
 ## Tools
 
 `Workspace` holds the sandboxed primitives and `ToolRegistry` exposes them to the

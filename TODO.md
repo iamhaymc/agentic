@@ -7,6 +7,35 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 ---
 
+- [ ] **Decision models, agentic use.** `SystemOneClient` calls `POST /v1/systemone`
+      (Ollama `clef-flash` / `clef`) with typed `Noul` / `Choice` / `Score`
+      questions, and the `decision` role resolves from `inference_ldm` (see
+      CHANGES.md). Still open, one path for every use: `Agent.build_decision`
+      returns a `decide(state, questions)` delegate (or `None` when the role is
+      off) that publishes `decision.*` events, is accounted on the run, cached
+      by `(model, state, questions)`, gated by confidence thresholds, and falls
+      back to today's leader path on any failure, so a decision never fails a run.
+  - Minimum Scope (the leader can decide, both UIs show it):
+    - [ ] `ModelPool.decision(spec)`: one `SystemOneClient` per endpoint; `clear()` closes them
+    - [ ] `Agent.build_decision(config)`: the `decide` delegate, mirroring `build_vision`
+    - [ ] `decide` tool: `state` (text or workspace paths) + `questions` (wire JSON) → compact answers; offered only when the role is on
+    - [ ] `decision.start` / `decision.end` events (questions, answers, ms); repl prints `⚖ team: technical 0.95`, web shows a chip with probability bars and ticks the mark
+    - [ ] `/decision <model|off>` command (like `/vision`); banner and `/config` show the role
+    - [ ] Live test against Ollama `clef-flash`, skipped when the server is unreachable
+  - Complete Scope (harness-side gates, each behind a flag and a threshold):
+    - [ ] Tool gate: before `shell`, an outside write or a push, ask "follows from the request?" and "destructive?"; run above the threshold, `ask_user` between, refuse below with the reason
+    - [ ] Prompt routing: one `Choice` per user prompt (answer / plan / delegate) and one for the role (leader or worker model), before the leader's first call
+    - [ ] `ask_user` answers: map free text onto the offered options; low confidence keeps the text
+    - [ ] Implicit feedback: a `Noul` on the next user message (satisfied / correcting) proposes a rule without a thumb
+    - [ ] Evals (`test/agentic_eval.py`) per gate: agreement with the leader, latency, leader tokens saved
+  - Extended Scope:
+    - [ ] Images: attachments and `view_image` data URLs as `images`, for visual gates
+    - [ ] Compaction relevance: `Score` old tool outputs against the goal, clear the least relevant first
+    - [ ] Tool subset: a `Choice` over tool names per turn for large registries
+    - [ ] Rule dedupe: "same as an existing rule?" before a learned rule is kept
+    - [ ] Decision journal: question, answer and outcome stored to tune thresholds
+    - [ ] Hosted endpoints: TypeSafe `jev` (same wire, bearer key) and Cloudflare Workers AI `/ai/run` (answers wrapped in `result`)
+
 - [ ] Move the text copy button on the markdown editor to the top right corner of the editor view.
   
 - [ ] implement an efficient way for token text that fades in quickly when displayed.

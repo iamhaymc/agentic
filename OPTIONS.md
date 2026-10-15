@@ -36,6 +36,24 @@ Inference model ID (vision)
 - OpenRouter ID: `deepseek/deepseek-v4-flash-0731`
 - Ollama ID: `huihui_ai/Qwen3.8-abliterated:27b`
 
+### `inference_ldm`
+Inference model ID (decision): typed answers (`noul` / `choice` / `score`) with probabilities, no text
+- Environment variable: `AGENTIC_INFERENCE_LDM`
+- Expected format `{{MODEL_ID}}`, default empty: decision role off
+- Ollama ID: `clef-flash` (9B, fast) or `clef` (27B), `ollama pull clef-flash`
+- ❗ Needs Ollama ≥ 0.35.1 (`/v1/systemone`); restart the server after an upgrade
+- Called through `SystemOneClient` (System One API), not the OpenAI client
+
+### `decision_url`
+Decision endpoint, when not the leader's.
+- Environment variable: `AGENTIC_DECISION_URL`
+- Expected format `http://{{SERVER_HOST}}:{{SERVER_PORT}}` (root, `/v1` or `/v1/systemone` all work), default empty: `inference_url`
+
+### `decision_key`
+Decision credential, when not the leader's; sent as a bearer token.
+- Environment variable: `AGENTIC_DECISION_KEY`
+- Expected format `{{SECRET_KEY}}` or empty, default empty: `inference_key` (Ollama ignores it)
+
 ### `request_timeout`
 Seconds a single model request may take (a specialist call, and the connect of every request).
 - Environment variable: `AGENTIC_REQUEST_TIMEOUT`

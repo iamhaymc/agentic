@@ -60,6 +60,7 @@ inference: # a group flattens onto inference_*
   key: ${oc.env:AGENTIC_INFERENCE_KEY}
   llm: some/general-model
   vlm: some/vision-model
+  ldm: clef-flash # decision model (System One API)
 ```
 
 ## ▶️ Use (Agent)
