@@ -112,10 +112,12 @@ or injected below works in both.
 
 ```bash
 python app/agentic.py                     # no argument -> REPL (or run VS Code task "repl")
-python app/agentic.py --input notes.md    # any arguments -> one-shot
+python app/agentic.py --input notes.md    # input -> one-shot
+python app/agentic.py --input notes.md --effort high
 ```
 
-`--input`, `--repl`, `--serve` and `--config` are the only command line arguments
+Arguments: `--input`, `--repl`, `--serve`, `--config`, `--effort`, `--a2a`, `--a2a-port`, `--peer` and `--repo`.
+`--effort` sets model reasoning effort in any mode; omission keeps the configured value or provider default. Supported levels and provider limits: [OPTIONS](OPTIONS.md#effort).
 
 ## ▶️ Run (Page)
 
@@ -124,6 +126,39 @@ python app/agentic.py --serve # or run VS Code task "serve"
 ```
 
 > Default URL: `http://127.0.0.1:8765/`
+
+## ▶️ Run (Peers)
+
+**One integrator, isolated checkouts, one shared Git origin.** Both machines need Git access to the same origin; only session/base branches are pushed automatically, never the origin's main branch.
+
+Generate a team bearer once; copy it into both terminals, never into tracked config:
+
+```powershell
+uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
+$env:AGENTIC_A2A_TOKEN = "paste-the-generated-bearer"
+```
+
+Start worker in terminal 1:
+
+```powershell
+uv run agentic --a2a --a2a-port 8767 --repo https://github.com/YOU/REPO.git
+```
+
+Start integrator in terminal 2, with the same bearer:
+
+```powershell
+uv run agentic --serve --a2a --peer http://127.0.0.1:8767 --repo https://github.com/YOU/REPO.git
+```
+
+Open `http://127.0.0.1:8765/` and give it a coordinated task:
+
+> Implement the feature. Use the peer for an independent module with explicit owned paths; work on other files while it runs. Integrate its verified result, test the combined changes, and leave the session branch ready for review.
+
+- Each instance keeps separate state under `.agentic/peer-PORT`; the original working tree stays unchanged.
+- The integrator gets `peer_submit`, `peer_prompt`, `peer_status`, `peer_cancel`, `peer_assign` and `peer_integrate`; inbound workers do not get peer tools.
+- The worker validates changed paths before publishing; the integrator independently verifies the exact commit and merges once. Use existing git tools to publish the reviewed combined branch.
+- For another machine: expose only its A2A port, use its LAN URL, TLS and the same bearer; keep the web UI on localhost. [DESIGN](DESIGN.md#26-a2a-peer-coordination) — LAN Setup, Trust Boundaries And Recovery; [OPTIONS](OPTIONS.md#a2a-peers) — Peer Settings.
+- On Windows, the existing confined shell remains unavailable without a sandbox backend; remote file/git work still works, but ask a supported sandbox host or the local user to run shell-based tests.
 
 ## ▶️ Run (Data)
 
@@ -182,6 +217,7 @@ Long prompts get a markdown editor with highlighting:
 Interactive state survives a crash:
 
 - `.agentic/` in the cwd holds the database and the workspaces (`state_dir`)
+- multiple local processes may share it: sessions, journals, rules and plans refresh without a restart; state writes are serialized, not model calls or tools
 - every step of a run is journaled as it finishes: prompt, tool calls, answers
 - a restart resumes the session: the repl its last one, the page its saved one
 - a dropped socket leaves the run going; reconnecting picks it up mid-stream
@@ -243,7 +279,7 @@ map:
 - `map` cuts inputs by tokens at line boundaries and runs one worker per part; the answers come back in order, sized to fit one slice
 - a worker's steps show nested under its call on the page and indented in the repl; a reload brings them back
 - `branch` / `return` fold a finished sub-task out of the context, the leader's or a worker's; only its goal and summary stay
-- every call ends with a budget note: context in use, the slice, the open plan
+- every call ends with a budget note: context in use, the slice, effective read-page size, stream silence timeout and open plan; pacing guidance asks for targeted reads, section-sized patches and brief explanations
 - the plan is written through to the store: `/resume` and a restart continue it
 - the plan rings the mark (one arc per step) and sits in the bar; `/plan` lists it with the speeds
 

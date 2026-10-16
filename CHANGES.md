@@ -18,6 +18,48 @@ version, with the phase log and the fixes at the end.
 
 ---
 
+## A2A peers
+
+2026-10-16 — implemented authenticated A2A 1.0 and verified Git coordination instead of the superseded research draft:
+
+- Added headless `--a2a`, combined web/A2A serving, peer/origin CLI options, isolated per-port state, TLS settings and a mandatory independent team bearer.
+- Added literal remote text, explicit context/session mapping, durable delivery state and message deduplication; preserved failed/canceled outcomes and rejected overload without queued fan-out.
+- Added allowlisted outbound SDK tools, reconnect/status recovery and explicit uncertain-submission handling; withheld recursive delegation and human questions from inbound work.
+- Added immutable-base assignments, path reservations, independent diff/SHA verification and recorded idempotent integration; left original checkouts and origin main untouched.
+- Fixed native Windows repository paths and closed Git stdin; the two-process daemon fixture exposed a checkout stall caused by inherited stdin, while in-process Git fixtures passed.
+- Added offline protocol/Git contracts and a separately selected two-process integration fixture; documented local/LAN setup, trust boundaries, sandbox limitations and recovery in [DESIGN](DESIGN.md#26-a2a-peer-coordination).
+- Validation: 99 focused protocol/harness/Git/CLI/web tests passed; four E2E checks passed for two-process coordination, TLS/CA trust, combined listeners and CLI bind errors; wheel build/import smoke and Python compilation passed.
+- Full offline suite also exposed seven pre-existing Windows failures (five failures, two errors), independently reproduced against unmodified HEAD and tracked in [TODO](TODO.md); unrelated cases were not changed. No live inference or external repository was used; physical LAN routing/firewall deployment remains operator validation.
+
+## Reasoning effort
+
+2026-10-16 — added a model reasoning effort argument without changing default requests:
+
+- [x] **Minimum Scope** — added offline tests for effort levels, configuration precedence, CLI modes and request payloads; confirmed failures before implementation.
+- [x] **Complete Scope** — exposed `--effort` and `AGENTIC_EFFORT`; wired leader and worker reasoning without changing provider defaults.
+- [x] **Extended Scope** — documented levels, precedence and provider limits; verified packaged CLI help, Python syntax and patch whitespace.
+
+Validation:
+
+- Eight new offline tests covered all seven levels, invalid input, config/env/API/CLI precedence, every CLI mode, exact Chat Completions payloads and streamed worker inheritance.
+- Final focused regression run: 106 tests, 105 passed; existing config filename expectation failed identically against HEAD and with effort behavior removed in memory (`settings.yml` expected, `agentic.yml` returned).
+- Initial adjacent run also failed worker event nesting once; isolated and final combined runs passed without event-relay changes.
+- No live inference, dependency changes or worktree resets.
+
+## Shared state
+
+- [x] **Minimum Scope** — transactional store operations; fresh sessions, journals and rules; eight regression tests plus existing subsystem tests pass.
+- [x] **Complete Scope** — merge independent edits; reject stale resurrection; protect workspace cleanup; refresh plans; exercise two simultaneous processes and sweeper threads.
+- [x] **Extended Scope** — document shared-state guarantees; close TODO; 71 focused tests pass, including 17 new shared-state regressions.
+
+Validation and boundaries:
+
+- Two simultaneous processes append 40 distinct journal turns with consecutive sequence numbers, preserve both session metadata edits, and retain all 40 rule vote increments.
+- Sweeper threads cannot reap workspaces still being registered; stale writes cannot recreate forgotten transcripts, closed sessions or dropped rules.
+- Full suite: 608 tests, 587 passed, four skipped, 17 failures/errors; all 17 reproduce against HEAD, mostly Windows path, shell and filesystem assumptions.
+- Python syntax checks and Pylance error/warning checks pass; no dependencies or configuration fields added.
+- Shared persistence only: live runs and transport remain process-local; implementation and limits documented in [DESIGN.md](DESIGN.md#shared-processes).
+
 ## Constraints and design intent
 
 ### Goals
@@ -1270,6 +1312,10 @@ reason in fewer tokens. The constraints that shaped it:
       the page's `replay()` / `revive()`), `nested_folds` and a folding
       scripted worker in the eval, the reload check of the `slicing` e2e,
       the local and hosted baseline and the docs.
+    - [x] Response pacing, in three scopes:
+      - [x] Minimum Scope: regression tests for effective read-page limits, the stream silence timeout, section-sized patch guidance and a measured write speed without a read sample.
+      - [x] Complete Scope: every enabled `[budget]` note recites the current `Engine.page_limit()` in characters and `stream_timeout` in seconds of silence, with `unlimited` / `disabled` explicit; `[pacing]` asks for targeted line reads, short patches (one section per call) and brief explanations rather than a giant read-then-write turn.
+      - [x] Extended Scope: real SDK prompt coverage, automatic time-capped / fixed / unlimited paging, disabled timeout and existing note opt-outs; 116 focused context, slicing, tool, stall, worker and engine tests passed, Python syntax and editor diagnostics clean; timeout enforcement unchanged.
 34. Caveman SFT data (`util/caveman_data.py`), in three scopes:
     - [x] Minimum scope: viewer `fetch` (seeded, paced, `Retry-After`),
       `split_turn` / `join_turn`, `facts` / `negations` / `check_turn`,

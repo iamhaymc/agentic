@@ -11,6 +11,8 @@ dependencies = [
     "openai",
     "openai-agents",
     "cachetools",
+    "a2a-sdk[http-server]==1.2.2",
+    "uvicorn>=0.35,<1",
     "tiktoken",
     "transformers @ git+https://github.com/huggingface/transformers",
     "accelerate",
@@ -20,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-e2e = ["playwright"]
+e2e = ["playwright", "cryptography>=43"]
 
 [project.scripts]
 agentic = "agentic:main"
@@ -33,5 +35,5 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-only-include = ["app/agentic.py", "app/agentic_ui.html", "app/agentic_ui.css", "app/agentic_ui.js"]
+only-include = ["app/agentic.py", "app/agentic_a2a.py", "app/agentic_ui.html", "app/agentic_ui.css", "app/agentic_ui.js"]
 sources = ["app"]

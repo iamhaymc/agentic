@@ -309,12 +309,19 @@ carries attachments, unless the template already contains that heading.
 
 `Store` is a namespaced key/value protocol (`get`, `set`, `delete`, `list`,
 `close`) with two implementations: `MemoryStore` for tests and `SqliteStore`,
-which keeps JSON values in a `store(namespace, key, value, updated_at)` table
+which keeps JSON values in a `kv(ns, key, value, updated_at)` table
 and falls back to an in-memory database when no path is given.
 
 A store may also offer `clear(namespace)` (both do, `SqliteStore` in one
 statement); `ConversationMemory.forget` uses it when present and deletes key by
 key otherwise.
+
+An optional `transaction()` context manager groups read/modify/write operations.
+`SqliteStore` uses `BEGIN IMMEDIATE`, commits on success and rolls back on failure;
+nested calls join the transaction, and a reentrant lock keeps sweeper threads
+from sharing another thread's transaction. `MemoryStore` serializes operations
+with a reentrant lock. Custom stores without this hook retain single-process
+behavior; cross-process backends must supply their own transaction semantics.
 
 `Cache` is `get`/`set`/`delete`/`clear`, implemented by `LruCache` over
 `cachetools` with an optional TTL. Sessions are written to both. `PlanBook`
@@ -369,6 +376,25 @@ The repl and the web server are durable by default (see [Modes](#modes)).
 - [x] Front ends tag what they open: `meta["client"]` is `repl` or `web`, and `/new` keeps the tag.
 - [x] A run renews its lease at every checkpoint; `Agent.reconcile()` forgets, at start, journals whose session did not come back.
 
+### Shared processes
+
+**One local state directory → fresh reads → transactional writes.**
+
+- Several repl/server processes may share `state_dir`; SQLite WAL and short write transactions replace a process-lifetime directory lock.
+- Session reads refresh store records; updates merge only changed metadata, including nested keys, and keep remote lease renewals.
+- Workspace creation and registration share a transaction; orphan discovery and removal hold the same lock, so another process cannot reap a workspace still being created.
+- Startup reconciliation and expiration consult current sessions; a peer's sessions and journals survive another process starting or sweeping.
+- Journals refresh on read and allocate sequence numbers under the write lock; independent appends cannot overwrite one another.
+- Turn edits merge changed fields and metadata against their stored snapshots; transcript generations reject stale writes after `/forget`, including when sequence numbers have been reused.
+- Rules refresh on read; edits merge unrelated changes and add vote increments, while stale saves cannot recreate dropped rules.
+- Distillation holds no database lock across a model call; a changed rule book retries from fresh rules, up to three attempts, then reports contention.
+- Plans refresh on read; an explicit full-plan replacement is atomic and the last replacement wins.
+- Conflicting edits to the same field use the last committed local change; unrelated fields survive.
+- SQLite waits up to its default five-second lock timeout, then raises an error; writes are never silently discarded.
+- Use a local filesystem shared by processes on the same host; SQLite WAL is not a network-filesystem coordination mechanism.
+
+> ❗ Shared persistence is not agent messaging: live runs, events, streams and cancellation remain process-local; use separate sessions for simultaneous workspace work, or coordinate tools externally. Closing a session in a peer is detected at the next journal write, which refuses to recreate it.
+
 ## 9. Memory
 
 **The journal keeps every turn; the model sees a window: newest summary → turns after its boundary.**
@@ -376,11 +402,11 @@ The repl and the web server are durable by default (see [Modes](#modes)).
 - `Turn` — one message: `role`, `text`, `created_at`, `seq` (order and store key), plus the block `kind` its role maps onto (`compact` → `compact`)
 - `Transcript` — the ordered turns of one session: `append` (numbers them), `summary()`, `boundary()`, `window()`, `messages()`
 - `ConversationMemory` — owns them, persisted one record per turn (namespace `transcripts:<session>`, key the zero padded `seq`) under a header record (`transcripts`, `format: 2`)
-  - `transcript(session_id)` — load once, then keep in memory; a header holding its turns inline (format 1) is rewritten one record per turn on load
+  - `transcript(session_id)` — refresh from the store, retaining turn identities and local edits; a header holding its turns inline (format 1) is rewritten one record per turn on load
   - `window(session_id)` / `history(session_id)` — the context window, with the turn behind each item / as model input
   - `replay(session_id)` — every turn as JSON for a client that (re)connects
-  - `journal(session_id, *turns)` — append and write only the new records; `remember()` is the same for a coroutine caller
-  - `persist(transcript, *turns)` — rewrite the records of the turns named (a vote, a status, a cleared output); all of them when none are
+  - `journal(session_id, *turns)` — allocate sequence numbers and append in one transaction, writing only new records; `remember()` is the same for a coroutine caller
+  - `persist(transcript, *turns)` — merge edits into records of the turns named (a vote, a status, a cleared output); all local turns when none are, without replacing remote additions
   - `forget(session_id)` — erase it, in memory and in the store
 - Nothing is trimmed: a write costs one record however long the chat has grown, and what the model sees is [Context](#context)'s business
 
@@ -506,7 +532,11 @@ Slice (`SliceBudget`, `ContextRun.limits()`):
 Note (`note_text()`, `with_note()`), when `plan_enabled`:
 
 - added after compaction to what is sent, never journaled: folded into a closing user message, else a user message of its own (never two in a row)
-- `NOTE_HEADER`, then `[budget] context U of L tokens; one step may read up to S; the model reads ~R and writes ~W tokens/s`, then `[plan] d/n done; now k. title`
+- `NOTE_HEADER`, then `[budget] context U of L tokens; one step may read up to S; read_output_limit C chars; stream_timeout Ts of silence (not a total response deadline); the model reads ~R and writes ~W tokens/s`
+- `read_output_limit` is the effective page size in characters, from the same `Engine.page_limit()` used by `read_text_file`: automatic sizing follows the time-capped budget on each call; a positive override stays fixed; `-1` is rendered `unlimited`
+- `stream_timeout` is the leader's silence guard, not `request_timeout` or a whole-response deadline; `0` is rendered `disabled`; no new timeout or output cap is imposed
+- `[pacing]` asks for targeted line ranges before editing, short targeted `apply_patch` calls (one section per call), no giant read-then-write turn and brief explanations; then `[plan] d/n done; now k. title` when a plan exists
+- measured write speed is shown even before read speed is known; the note remains off with `plan_enabled: false` or `context_trigger: 0`
 - cache cost: the provider re-reads the newest response and the note, nothing older
 
 Plan (`Planner`, the `plan` tool, `Engine.plans` by session):
@@ -1456,14 +1486,14 @@ back its URL. `--device`, `--out`, `--pace` and `--browser` cover the rest.
 
 ## 20. CLI
 
-`parse_args()` accepts `--input`, `--repl`, `--serve` and `--config`.
+`parse_args()` accepts `--input`, `--repl`, `--serve`, `--config` and `--effort`.
 `load_template()` resolves the template from `config.template` (a path or the
 template itself, which the config file or `AGENTIC_TEMPLATE` sets), then
 `agentic_prompt.md` in the current directory and next to `agentic.py`, and finally
 falls back to passing the input through.
 
 `Agent.cli(template, argv)` parses the arguments, passes `--config` to the
-constructor as `config_file` and runs `execute()`, which dispatches and returns a
+constructor as `config_file`, applies an explicit `--effort` as a constructor override and runs `execute()`, which dispatches and returns a
 process exit code, closing the agent either way:
 
 - `--serve` wins: the web layer is served.
@@ -1475,6 +1505,8 @@ process exit code, closing the agent either way:
 `main()` is the packaged entry point (`agentic` on the command line): it builds the
 agent, lets it resolve its config file and environment, and takes the template
 from there.
+
+`AgentConfig.effort` defaults to empty (provider default); `AGENTIC_EFFORT`, a config file, constructor arguments or per-run overrides can set it. `build_sdk_agent()` supplies SDK `ModelSettings.reasoning.effort`, serialized as Chat Completions `reasoning_effort`; delegated and map workers inherit it through `worker_config()`. Specialist calls keep their existing settings. This controls model reasoning, not `max_turns` or context size. Invalid levels fail explicitly; model-specific support is checked by the provider, not guessed by the harness. Levels and configuration reference: [OPTIONS](OPTIONS.md#effort).
 
 ## 21. Extending
 
@@ -1975,3 +2007,123 @@ Verified on 2026-10-15:
 - Pinned Linux/CUDA package set resolves without installation
 - Generated readiness checks pass against the existing source service: both model aliases, exact 98,304-token context, text output and structured tool call
 - No new GPU instance launched; clean-machine bootstrap and deployment in a second account remain untested
+
+## 26. A2A peer coordination
+
+**A2A carries tasks; Git carries verified commits; one integrator owns the combined result.**
+
+- Implementation: `app/agentic_a2a.py`; lazy adapter around `Agent`, not an alternative inference engine.
+- Dependency: A2A Python SDK `1.2.2`, separately declared uvicorn; advertised/accepted binding is A2A 1.0 JSON-RPC at `/`, SSE streaming/subscription, card at `/.well-known/agent-card.json`.
+- Assignment extension: `https://github.com/iamhaymc/agentic/a2a/git-v1`; ordinary A2A text peers remain usable for conversations, while assignments require this advertised extension.
+- No discovery, push callbacks, arbitrary attachment downloads, remote config overrides, automatic merge to main, or recursive peer delegation.
+
+### Configure (Local)
+
+Use the [README](README.md#-run-peers) two-terminal workflow:
+
+- Worker: `--a2a --a2a-port 8767 --repo ORIGIN`.
+- Integrator: `--serve --a2a --peer http://127.0.0.1:8767 --repo ORIGIN`.
+- Same `AGENTIC_A2A_TOKEN` in both environments; generate with `secrets.token_urlsafe(32)`; bearer is independent from inference/Git credentials.
+- State defaults to `.agentic/peer-PORT`; custom `state_dir`/`db_path` must remain distinct; an OS-held lock prevents two peer services adopting the same durable state.
+- Git origin must accept session branches and immutable `agentic/base/ASSIGNMENT_ID` branches; protected-main rules do not need to change.
+- An existing local bare origin works on one machine; across machines, use the same reachable HTTPS/SSH Git URL, not machine-specific filesystem paths.
+
+### Configure (LAN)
+
+Prefer authenticated HTTPS, with a certificate valid for the worker's LAN hostname/IP:
+
+```yaml
+a2a:
+  enabled: true
+  host: 0.0.0.0
+  port: 8767
+  url: https://worker.home:8767
+  tls_cert: C:\certs\worker.pem
+  tls_key: C:\certs\worker-key.pem
+```
+
+On the integrator, trust its issuer and allowlist that exact origin:
+
+```yaml
+a2a:
+  peers: https://worker.home:8767
+  ca_file: C:\certs\home-ca.pem
+```
+
+- Supply the same bearer through local environment, not either tracked YAML file; start with `--config` pointing to local config.
+- Certificates/keys are operator-provided; never copy private keys to peers or commit them.
+- Allow the A2A TCP port through the worker firewall only from trusted household hosts; keep the web listener on localhost.
+- `a2a_insecure: true` explicitly permits HTTP on a trusted LAN when TLS is unavailable; authentication remains mandatory, but network observers can read the bearer and tasks.
+- Outbound clients ignore proxy environment variables, reject redirects, validate TLS, and require every advertised RPC interface to stay on the allowlisted origin.
+
+### Use (Tasks)
+
+Tools are registered only for local initiating runs with configured peers:
+
+- `peer_submit(peer, prompt, context_id="", request_id="")`: return immediately with task/context IDs; explicit `request_id` recovers the identical submission without replay.
+- `peer_prompt(peer, prompt, context_id="")`: submit and wait; SSE progress flows through the calling tool's existing `tool.progress` channel.
+- `peer_status(peer, task_id, wait=false)`: authoritative answer/status; `wait=true` uses SSE, then polling if streaming is unsupported or interrupted.
+- `peer_cancel(peer, task_id)`: stop remote execution/subprocesses and confirm cancellation; keep the conversation/workspace for inspection or ordinary follow-up.
+- `peer_assign(peer, prompt, paths, assignment_id="")`: reserve explicit, disjoint repository-relative paths and submit work asynchronously.
+- `peer_integrate(assignment_id)`: fetch, verify and merge the exact completed assignment into its original integrator session, once.
+
+Task lifecycle and identity:
+
+- Remote message text enters `input_text`, never the CLI's file-or-text `input` resolver; only user-role text parts are accepted.
+- Opaque A2A contexts map explicitly to durable session IDs; follow-ups replay that session; unknown/expired contexts fail rather than silently creating replacement history.
+- Task state is SDK delivery state, not model history; session journals remain the sole model-history source.
+- Message IDs deduplicate identical submissions within retention; reused IDs with changed content fail. Uncertain submissions are never automatically resent with a new ID; requested `historyLength` is honored even for duplicate responses.
+- Non-streaming submission honors `returnImmediately`; blocking responses use SDK task subscriptions rather than a server-side polling loop; both send modes use the same validation/deduplication boundary.
+- Failed engine results become failed tasks, not completed empty answers; canceled/failed/rejected outcomes remain explicit.
+- Active tasks found after restart become failed/interrupted, never implicitly replayed; completed task/context records survive normal restarts.
+- Terminal tasks and message-ID deduplication records expire after `a2a_task_ttl`; contexts follow session expiry; assignment/integration receipts are retained independently.
+
+### Use (Git Handoff)
+
+**Private edits may overlap; published ownership and integration may not.** Path ownership is a handoff rule, not a security sandbox or a promise that worker tools can never write another file in their private clone.
+
+1. Integrator commits local work; assignment records an ID, repository identity, exact base SHA, immutable published base ref, owned paths, caller session and peer.
+2. Active assignments in that integrator's state reserve overlapping paths, including directory descendants and portable case-insensitive equivalents.
+3. Worker clones only its configured origin, verifies repository/base identity, and checks out its unique session branch at that exact base.
+4. Worker reads dependencies and works privately; inbound runs cannot ask a human, broaden workspace reach, or get peer tools.
+5. Before publication, harness checks current branch, base ancestry and all committed/uncommitted/untracked changed paths; out-of-scope edits, changed symlinks and submodules fail the task.
+6. Harness commits remaining authorized changes and pushes the worker session branch; handoff contains assignment ID, repository, base, exact result SHA, branch and paths.
+7. Integrator requires a clean checkout; verifies handoff identity, fetched SHA, base ancestry and remote diff independently; rejects moved branches and locally modified assigned paths.
+8. Git transactions serialize changes in that clone; conflict failures abort the merge and retain the local branch. Successful receipt records peer SHA, merge SHA and integrator branch; repeated integration returns the receipt.
+9. Integrator tests combined changes and publishes its reviewed branch through existing Git tools; original user checkout and origin main remain untouched.
+
+Limitations and recovery:
+
+- One designated integrator per coordinated feature; reservations are scoped to its instance state, not a global distributed lock across unrelated integrators.
+- No guarantee that a clean merge is semantically correct; combined validation remains required.
+- No-op assignments are valid; unsupported/failed work returns explicit task state rather than an invented commit.
+- If submission outcome is uncertain, retry the same assignment ID and identical prompt/paths; do not release its reservation by inventing another ID.
+- Query failed/canceled/rejected tasks to release their path reservation; completed work reserves paths until integrated.
+- If a result branch moves or the integrator changes assigned files, resolve deliberately; never reset, force-push or silently accept a different SHA.
+- Remote tokens authorize the entire trusted team, including task access and code execution under workspace policy; no per-person authorization or hostile-agent isolation is claimed.
+- Existing Windows sandbox limitation remains: confined shell tools are withheld there; file/Git work is available, but shell-based tests need a supported sandbox host or manual local execution.
+
+### Run (Lifecycle)
+
+Bound resources before accepting work:
+
+- Inbound admission rejects excess work at `a2a_parallel`; no unbounded waiting-session queue; body limit is 256 KiB; uvicorn also limits live HTTP concurrency.
+- Shared `Agent.session_run` ownership starts before checkout preparation and covers web, A2A and embedded runs; SDK child tools inherit logical run ownership.
+- `a2a_timeout` bounds total inbound work and outbound waits independently of model-silence/shell limits.
+- Wait timeouts detach, not cancel; stream loss triggers authoritative status retrieval, never resubmission.
+- Git subprocess stdin is closed; cancellation/timeout kills its process tree so a daemon cannot block on inherited terminal input or leave Git children behind.
+- `await Agent.aclose()` drains/cancels peer work, closes outbound HTTP and releases process state before storage closes; use async lifetime management for agents using peers.
+- Diagnostics report task/assignment IDs and prepare/run/publish stages without logging credentials or prompt bodies.
+
+### Test (Peers)
+
+Run focused offline contracts and explicitly selected real-listener integration separately:
+
+```powershell
+uv run python -m unittest test.agentic_a2a_bdd -q
+uv run --extra e2e python -m unittest test.agentic_a2a_e2e -q
+```
+
+- BDD: in-process ASGI, scripted inference, temporary Git origins/stores; authentication, literal input, contexts, duplicates, cancellation, capacity/deadline, restart, URL confinement, SDK tools and Git handoff failures.
+- E2E: two real processes, ephemeral responsive listeners, actual SDK tool calls, disjoint parallel edits, verified/idempotent merge and unchanged original checkout; HTTPS/CA verification, bearer rejection, combined web/A2A lifecycle and clean CLI bind-conflict errors; no live inference or external forge.
+- Real LAN routing/firewall/certificates and live-model collaboration remain deployment-specific checks, not claims made by the scripted fixture.

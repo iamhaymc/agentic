@@ -23,6 +23,17 @@ Inference model ID (general)
 - OpenRouter ID: `deepseek/deepseek-v4-flash-0731`
 - Ollama ID: `huihui_ai/Qwen3.8-abliterated:27b`
 
+### `effort`
+Model reasoning effort for the leader and delegated workers.
+- Command line: `--effort {{LEVEL}}`, including `--repl` and `--serve`
+- Environment variable: `AGENTIC_EFFORT`
+- Expected format: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`; default empty: provider default
+- Config file: `effort: high`; Python API: `Agent(effort="high")`, `Engine(effort="high")` or per-run `effort="high"`
+- Precedence: config file → environment → constructor / run overrides; an explicit CLI level overrides the configured value
+- Empty config/API value omits the request setting; `none` explicitly requests no reasoning
+- Sent as Chat Completions `reasoning_effort`; supported levels depend on the endpoint and model, whose errors remain visible
+- Does not change turn limits, context budgets or specialist calls (vision, summary, rules and decisions)
+
 ### `inference_ctx`
 Context size sent with every model request as `options.num_ctx` (Ollama).
 - Environment variable: `AGENTIC_INFERENCE_CTX`
@@ -67,6 +78,8 @@ Seconds the leader's stream may send nothing before the attempt fails (`leader m
 - Expected format `{{SECONDS}}` (float), default `600`, `0` disables
 - Ollama sends a tool call only once it is complete, so a model writing a long file is silent until it is done; raise it for large or slow local models
 - Extended by `shell_timeout` while a tool runs and restarted by each heartbeat
+- Shown in the `[budget]` note as seconds of silence, not a total response deadline; `0` is shown as `disabled`
+- Pacing guidance favors targeted reads, short patches (one section per call) and brief explanations over a giant read-then-write turn
 
 ### `stream_heartbeat`
 Seconds between heartbeats (`model.wait`) while the leader's stream is silent and no tool call is open.
@@ -93,6 +106,8 @@ Characters one `read_text_file` call returns; a longer file comes back a page of
 - Expected format `{{CHARS}}` (integer), default `0`: a quarter of the usable context budget; `-1` returns files whole
 - Each page ends with `[lines A-B of N of path; continue with offset=B+1]`
 - A page always fits beside the conversation, so compaction never clips a fresh read (which the model would answer by reading it again)
+- The `[budget]` note shows the effective page size in characters, recalculated as the automatic budget changes; `-1` is shown as `unlimited`
+- Budget and pacing notes require `plan_enabled: true` and `context_trigger` greater than `0`
 
 ### `outside_read`
 Let the read tools (`list_directory`, `read_text_file`, `view_image`, `describe_image`) and the shell read outside the session workspace.
@@ -122,6 +137,8 @@ Directory that durable state lives in: `agentic.db` and `workspaces/`.
 - Expected format `{{PATH}}` or unset
 - Unset follows the mode: repl and web `.agentic` in the current directory, embedded `Engine` / one shot run nothing (in-memory database, temporary workspaces)
 - `db_path` and `workspace_root` win when set
+- Several processes on the same host may share this directory on a local filesystem; sessions, journals, rules and plans read fresh state, and SQLite serializes state mutations
+- Live events and run control remain process-local; use separate sessions for simultaneous workspace work
 
 ### `session_durable`
 Keep sessions (workspaces, journals) across a shutdown or a crash, and rehydrate them on the next start.
@@ -302,6 +319,32 @@ Give the leader the `ask_user` tool, which puts a question (with optional choice
 - Expected format `true`, `false` or unset
 - Unset follows the mode: repl `true` (numbered choices at an `answer>` prompt), web `true` (a question card on the discussion), embedded `Engine` / one shot `--input` run `false` (nobody to answer)
 - A question waits for as long as the user takes: the stall guard never fails a run that waits on a person; stop or Ctrl-C cancels it
+
+## A2A peers
+
+**One shared bearer = one fully trusted team.** Never expose this endpoint to untrusted peers or send inference credentials as the peer bearer.
+
+All keys accept the `AGENTIC_` environment prefix; config groups such as `a2a: {enabled: true}` flatten onto these names:
+
+- `a2a_enabled` — start A2A alongside `--serve`; default `false`; `--a2a` enables it and runs headless unless paired with `--serve`.
+- `a2a_host` — bind address; default `127.0.0.1`; wildcard bindings require a reachable `a2a_url`.
+- `a2a_port` — listener port; default `8766`; `--a2a-port` overrides it; `0` selects an ephemeral port for embedding/tests.
+- `a2a_url` — advertised endpoint origin; default derived from listener; set an actual LAN hostname/IP when listening on `0.0.0.0` or `::`.
+- `a2a_token` — required shared random bearer, at least 32 non-whitespace ASCII characters; no default; required for cards and all RPCs.
+- `a2a_peers` — comma-separated allowlisted origins, e.g. `http://127.0.0.1:8767`; default empty disables peer tools and outbound card fetching; repeated `--peer` arguments replace this setting.
+- `a2a_parallel` — maximum admitted inbound runs; default `2`, valid `1..32`; excess tasks are rejected immediately, not queued.
+- `a2a_timeout` — total inbound run / outbound wait deadline in seconds; default `1800`; positive values only; an outbound wait timeout detaches and preserves the remote task.
+- `a2a_task_ttl` — terminal task and submission-deduplication retention in seconds; default `86400`; positive values only; assignment/integration receipts remain in instance state until explicitly removed by its owner.
+- `a2a_tls_cert` / `a2a_tls_key` — PEM certificate chain/private-key paths; both required together; default unset; enables HTTPS listener.
+- `a2a_ca_file` — PEM CA/certificate bundle for outbound peer verification; default unset uses system trust; verification is never disabled.
+- `a2a_insecure` — allow non-loopback plaintext HTTP/listeners; default `false`; explicit trusted-LAN opt-in only, bearer and task content otherwise travel unencrypted.
+
+Related settings:
+
+- `repo_url` / `--repo` — same reachable Git origin on both instances; normal Git/SSH credentials apply; no forge API is required for handoffs.
+- `state_dir` — separate durable state per instance; default for A2A-enabled instances is `.agentic/peer-PORT`; a process lock rejects simultaneous peer services sharing one database.
+- `host` / `port` — existing web listener, unchanged; default localhost `8765`; not protected by the A2A bearer.
+- `outside_read` / `outside_write` / `ask_enabled` — inbound peer runs always force these off; the existing sandbox policy still controls shell availability.
 
 ## Caveman data
 

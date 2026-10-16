@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import concurrent.futures
 import contextlib
 import functools
 import io
@@ -19,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import types
 import unittest
@@ -140,6 +142,146 @@ class ConfigTest(unittest.TestCase):
         )
         self.assertIs(config.outside_read, False)
         self.assertIs(config.outside_write, True)
+
+
+class EffortTest(unittest.TestCase):
+    levels = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+    def test_effort_defaults_to_the_provider_and_resolves_config_layers(self):
+        self.assertEqual(A.AgentConfig().effort, "")
+        for level in self.levels:
+            with self.subTest(level=level):
+                config = A.AgentConfig().with_data({"effort": level})
+                self.assertEqual(config.effort, level)
+                self.assertEqual(config.to_dict()["effort"], level)
+        config = A.AgentConfig().with_data({"effort": "low"})
+        config = config.with_env({"AGENTIC_EFFORT": "medium"})
+        self.assertEqual(config.effort, "medium")
+        self.assertEqual(config.merge(effort="high").effort, "high")
+        self.assertEqual(config.merge(effort="").effort, "")
+
+    def test_invalid_effort_is_rejected_in_every_config_layer(self):
+        for value in ("urgent", "HIGH", 5):
+            for load in (
+                lambda value: A.AgentConfig(effort=value),
+                lambda value: A.AgentConfig().merge(effort=value),
+                lambda value: A.AgentConfig().with_data({"effort": value}),
+                lambda value: A.AgentConfig().with_env({"AGENTIC_EFFORT": str(value)}),
+            ):
+                with self.subTest(value=value, load=load):
+                    with self.assertRaisesRegex(ValueError, "effort"):
+                        load(value)
+
+    def test_cli_accepts_effort_levels_and_rejects_invalid_or_missing_values(self):
+        self.assertIsNone(A.parse_args([]).effort)
+        for level in self.levels:
+            with self.subTest(level=level):
+                args = A.parse_args(["--effort", level])
+                self.assertEqual(args.effort, level)
+                self.assertEqual(A.mode_of(args), "repl")
+        for argv in (["--effort", "urgent"], ["--effort"]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as err:
+                with self.assertRaises(SystemExit) as raised:
+                    A.parse_args(argv)
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("--effort", err.getvalue())
+
+    def test_cli_effort_reaches_every_mode_and_overrides_other_layers(self):
+        seen = []
+
+        class FakeAgent(A.Agent):
+            async def run(self, template, **overrides):
+                seen.append(("run", self.config.effort))
+                return A.RunResult()
+
+            async def serve(self):
+                seen.append(("web", self.config.effort))
+
+            def repl(self):
+                async def start(opening=""):
+                    seen.append(("repl", self.config.effort))
+                    return 0
+
+                return types.SimpleNamespace(start=start)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "agentic.json"
+            path.write_text('{"effort": "low"}', encoding="utf-8")
+            with unittest.mock.patch.dict(os.environ, {"AGENTIC_EFFORT": "medium"}):
+                for argv, mode in ((["--input", "hi"], "run"), ([], "repl"), (["--serve"], "web")):
+                    with self.subTest(mode=mode):
+                        status = FakeAgent.cli(
+                            argv=[*argv, "--config", str(path), "--effort", "high"],
+                            env_file=False, console=False, store=A.MemoryStore(), mode=None, effort="low",
+                        )
+                        self.assertEqual(status, 0)
+                        self.assertEqual(seen[-1], (mode, "high"))
+                FakeAgent.cli(
+                    argv=["--input", "hi", "--config", str(path)],
+                    env_file=False, console=False, store=A.MemoryStore(), mode=None,
+                )
+                self.assertEqual(seen[-1], ("run", "medium"))
+                FakeAgent.cli(
+                    argv=["--input", "hi", "--config", str(path)],
+                    env_file=False, console=False, store=A.MemoryStore(), mode=None, effort="minimal",
+                )
+                self.assertEqual(seen[-1], ("run", "minimal"))
+
+    def test_sdk_settings_preserve_defaults_and_existing_request_options(self):
+        engine = A.Engine(env=False, config_file=False, inference_ctx=16384)
+        self.addCleanup(engine.close)
+        with unittest.mock.patch.object(engine, "build_model", return_value="test-model"):
+            for level in ("", *self.levels):
+                with self.subTest(level=level):
+                    config = engine.resolve_config(effort=level)
+                    settings = engine.build_sdk_agent(config, []).model_settings
+                    self.assertTrue(settings.include_usage)
+                    self.assertEqual(settings.extra_body, {"options": {"num_ctx": 16384}})
+                    if level:
+                        self.assertEqual(settings.reasoning.effort, level)
+                    else:
+                        self.assertIsNone(settings.reasoning)
+
+    def test_effort_reaches_the_chat_completion_request(self):
+        import httpx
+        from agents import Runner, RunConfig
+        from openai import AsyncOpenAI
+
+        bodies = []
+
+        def respond(request):
+            bodies.append(json.loads(request.content))
+            return httpx.Response(200, json={
+                "id": "chatcmpl-test", "object": "chat.completion", "created": 0, "model": "test",
+                "choices": [{"index": 0, "finish_reason": "stop",
+                             "message": {"role": "assistant", "content": "done"}}],
+            })
+
+        engine = A.Engine(env=False, config_file=False, inference_llm="test")
+        self.addCleanup(engine.close)
+
+        async def drive():
+            async with AsyncOpenAI(
+                api_key="test", base_url="http://host/v1",
+                http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+            ) as client:
+                with unittest.mock.patch.object(engine.models, "client", return_value=client):
+                    for level in ("", "none", "high"):
+                        agent = engine.build_sdk_agent(engine.resolve_config(effort=level), [])
+                        result = await Runner.run(agent, "hi", run_config=RunConfig(tracing_disabled=True))
+                        self.assertEqual(result.final_output, "done")
+
+        run(drive())
+        self.assertNotIn("reasoning_effort", bodies[0])
+        self.assertEqual(bodies[1]["reasoning_effort"], "none")
+        self.assertEqual(bodies[2]["reasoning_effort"], "high")
+
+    def test_run_overrides_and_workers_inherit_effort_without_mutating_defaults(self):
+        engine = A.Engine(env=False, config_file=False, effort="low", worker_model="small")
+        self.addCleanup(engine.close)
+        config = engine.resolve_config(effort="high")
+        self.assertEqual(engine.worker_config(config).effort, "high")
+        self.assertEqual(engine.config.effort, "low")
 
 
 class ModelSpecTest(unittest.TestCase):
@@ -1589,6 +1731,328 @@ class DurableSessionTest(unittest.TestCase):
         run(scenario())
 
 
+class SharedStateTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.stores = [A.SqliteStore(self.root / "agentic.db") for _ in range(2)]
+        for store in self.stores:
+            self.addCleanup(store.close)
+        self.sessions = [
+            A.SessionManager(root=self.root / "workspaces", store=store, durable=True)
+            for store in self.stores
+        ]
+        self.memories = [A.ConversationMemory(store) for store in self.stores]
+        self.books = [A.RuleBook(store) for store in self.stores]
+
+    def test_sessions_appear_change_and_disappear_without_a_restart(self):
+        first, second = self.sessions
+        session = first.create(client="repl")
+        self.assertEqual([s.id for s in second.list()], [session.id])
+        remote = second.get(session.id)
+        session.meta["repo"] = {"branch": "one"}
+        first.update(session)
+        remote.meta["label"] = "two"
+        second.update(remote)
+        self.assertEqual(first.get(session.id).meta,
+                         {"client": "repl", "repo": {"branch": "one"}, "label": "two"})
+        self.assertEqual(second.latest(client="repl").id, session.id)
+        second.close(session.id)
+        self.assertIsNone(first.get(session.id))
+        self.assertEqual(first.list(), [])
+        with self.assertRaises(KeyError):
+            first.update(session)
+
+    def test_a_remote_lease_renewal_prevents_stale_expiration(self):
+        first, second = self.sessions
+        session = first.create()
+        session.expires_at = time.time() - 1
+        first.update(session)
+        # The first manager must discard its expired snapshot after a renewal.
+        record = self.stores[1].get("sessions", session.id)
+        record["expires_at"] = time.time() + 60
+        self.stores[1].set("sessions", session.id, record)
+        self.assertEqual(first.purge_expired(), [])
+        self.assertTrue(session.workspace.is_dir())
+        self.assertIsNotNone(second.get(session.id))
+
+    def test_remote_workspaces_are_not_orphans(self):
+        first, second = self.sessions
+        session = first.create()
+        self.assertEqual(second.sweep(), ([], []))
+        self.assertTrue(session.workspace.is_dir())
+
+    def test_cached_journals_append_without_overwriting_and_follow_forget(self):
+        first, second = self.memories
+        first.transcript("s")
+        second.transcript("s")
+        for index in range(6):
+            self.memories[index % 2].journal("s", A.Turn("user", str(index)))
+        for memory in self.memories:
+            turns = memory.replay("s")
+            self.assertEqual([t["text"] for t in turns], [str(i) for i in range(6)])
+            self.assertEqual([t["seq"] for t in turns], list(range(1, 7)))
+        second.forget("s")
+        self.assertEqual(first.history("s"), [])
+
+    def test_stale_turn_updates_merge_metadata_without_rewriting_other_turns(self):
+        first, second = self.memories
+        first.journal("s", A.Turn("user", "prompt", meta={"status": "running"}))
+        left, right = first.transcript("s"), second.transcript("s")
+        left.turns[0].meta["vote"] = "up"
+        first.persist(left, left.turns[0])
+        right.turns[0].meta["status"] = "ok"
+        second.persist(right, right.turns[0])
+        second.journal("s", A.Turn("assistant", "answer"))
+        first.persist(left)
+        self.assertEqual(second.replay("s")[0]["meta"], {"status": "ok", "vote": "up"})
+        self.assertEqual(len(first.replay("s")), 2)
+
+    def test_stale_persist_cannot_resurrect_a_forgotten_turn(self):
+        first, second = self.memories
+        transcript = first.journal("s", A.Turn("user", "old"))
+        second.forget("s")
+        second.journal("s", A.Turn("user", "new"))
+        transcript.turns[0].meta["vote"] = "up"
+        with self.assertRaises(KeyError):
+            first.persist(transcript, transcript.turns[0])
+        self.assertEqual([t["text"] for t in second.replay("s")], ["new"])
+
+    def test_new_metadata_merges_and_persist_adopts_remote_text_changes(self):
+        first, second = self.memories
+        left = first.journal("s", A.Turn("assistant", "old"))
+        right = second.transcript("s")
+        left.turns[0].text = "new"
+        left.turns[0].meta["vote"] = "up"
+        first.persist(left)
+        right.turns[0].meta["cleared"] = "stub"
+        second.persist(right)
+        self.assertEqual(right.turns[0].text, "new")
+        second.persist(right)
+        self.assertEqual(first.replay("s")[0]["meta"], {"vote": "up", "cleared": "stub"})
+        self.assertEqual(first.replay("s")[0]["text"], "new")
+        left, right = first.transcript("s"), second.transcript("s")
+        left.turns[0].meta["extra"] = True
+        first.persist(left)
+        right.turns[0].meta.clear()
+        second.persist(right)
+        self.assertEqual(first.replay("s")[0]["meta"], {"extra": True})
+
+    def test_rules_are_fresh_and_edits_keep_the_latest_vote_count(self):
+        first, second = self.books
+        self.assertEqual(second.rules(), [])
+        rule = first.add("do", "One.")
+        self.assertEqual(second.get(rule.id).text, "One.")
+        first.edit(rule.id, "do", "Two.")
+        second.edit(rule.id, "avoid", "Three.")
+        self.assertEqual(first.get(rule.id).votes, 3)
+        second.drop(rule.id)
+        self.assertEqual(first.rules(), [])
+
+    def test_stale_rule_saves_merge_edits_and_do_not_resurrect_dropped_rules(self):
+        first, second = self.books
+        left = first.add("do", "Initial.")
+        right = second.get(left.id)
+        left.text = "Edited."
+        left.votes += 1
+        first.save(left)
+        right.polarity = "avoid"
+        right.votes += 1
+        second.save(right)
+        merged = first.get(left.id)
+        self.assertEqual((merged.text, merged.polarity, merged.votes), ("Edited.", "avoid", 3))
+        second.drop(left.id)
+        with self.assertRaises(KeyError):
+            first.save(left)
+
+    def test_sqlite_transactions_roll_back_all_writes_on_failure(self):
+        store = self.stores[0]
+        with self.assertRaisesRegex(ValueError, "abort"):
+            with store.transaction():
+                store.set("test", "a", 1)
+                store.set("test", "b", 2)
+                raise ValueError("abort")
+        self.assertEqual(self.stores[1].list("test"), [])
+
+    def test_threads_sharing_a_connection_do_not_share_transactions(self):
+        store = self.stores[0]
+
+        def increment():
+            for _ in range(15):
+                with store.transaction():
+                    value = store.get("test", "count") or 0
+                    time.sleep(0.001)
+                    store.set("test", "count", value + 1)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(increment) for _ in range(2)]
+            for future in futures:
+                future.result(timeout=5)
+        self.assertEqual(self.stores[1].get("test", "count"), 30)
+
+    def test_reaping_waits_until_workspace_creation_is_registered(self):
+        created, release = threading.Event(), threading.Event()
+        attempted = threading.Event()
+        mkdtemp = tempfile.mkdtemp
+
+        def pause_creation(*args, **kwargs):
+            path = mkdtemp(*args, **kwargs)
+            created.set()
+            if not release.wait(3):
+                raise TimeoutError("workspace creation was not released")
+            return path
+
+        def reap():
+            attempted.set()
+            return self.sessions[1].reap_orphans()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            with unittest.mock.patch.object(A.tempfile, "mkdtemp", pause_creation):
+                creation = pool.submit(self.sessions[0].create)
+                try:
+                    self.assertTrue(created.wait(3))
+                    cleanup = pool.submit(reap)
+                    self.assertTrue(attempted.wait(3))
+                    with self.assertRaises(concurrent.futures.TimeoutError):
+                        cleanup.result(timeout=0.05)
+                finally:
+                    release.set()
+                session = creation.result(timeout=3)
+                self.assertEqual(cleanup.result(timeout=3), [])
+        self.assertTrue(session.workspace.is_dir())
+
+    def test_plans_refresh_after_remote_changes_and_deletion(self):
+        first, second = [A.PlanBook(store) for store in self.stores]
+        first.set("s", A.Plan([A.PlanStep("Read")]))
+        self.assertEqual(second.get("s").steps[0].status, "pending")
+        first.set("s", A.Plan([A.PlanStep("Read", status="done")]))
+        self.assertEqual(second.get("s").steps[0].status, "done")
+        first.delete("s")
+        self.assertIsNone(second.get("s"))
+
+    def test_agent_reconciliation_and_remote_close_preserve_session_ownership(self):
+        options = dict(console=False, config_file=False, env=False)
+        first = A.Agent(store=self.stores[0], sessions=self.sessions[0], **options)
+        self.addCleanup(first.close)
+        session = first.sessions.create()
+        first.journal(session.id, A.Turn("user", "prompt"))
+        second = A.Agent(store=self.stores[1], sessions=self.sessions[1], **options)
+        self.addCleanup(second.close)
+        self.assertEqual(second.memory.history(session.id), [user("prompt")])
+        second.sessions.close(session.id)
+        with self.assertRaisesRegex(KeyError, "closed or expired"):
+            first.journal(session.id, A.Turn("assistant", "late answer"))
+        self.assertEqual(first.memory.history(session.id), [])
+        self.assertFalse(session.workspace.exists())
+        expired = first.sessions.create()
+        expired.expires_at = 0
+        first.sessions.update(expired)
+        with self.assertRaisesRegex(KeyError, "closed or expired"):
+            first.journal(expired.id, A.Turn("user", "too late"))
+        self.assertIsNone(self.stores[1].get("sessions", expired.id))
+        self.assertFalse(expired.workspace.exists())
+
+    def test_learning_retries_if_another_process_changes_the_book(self):
+        calls = []
+
+        async def distill(messages):
+            calls.append(messages)
+            if len(calls) == 1:
+                self.books[1].add("do", "Remote.")
+                return '{"action": "add", "rule": "Stale."}'
+            return json.dumps({"action": "edit", "id": self.books[1].rules()[0].id,
+                               "rule": "Merged."})
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            action, rule = run(self.books[0].learn("up", [A.Turn("assistant", "a")], distill))
+        self.assertEqual(len(calls), 2)
+        self.assertIn("Remote.", calls[1][1]["content"])
+        self.assertEqual((action, rule.text, rule.votes), ("edit", "Merged.", 2))
+        self.assertEqual(len(self.books[1].rules()), 1)
+
+    def test_learning_reports_continuous_contention(self):
+        async def distill(messages):
+            self.books[1].add("do", "Remote.")
+            return '{"action": "add", "rule": "Stale."}'
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "three distillation attempts"):
+                run(self.books[0].learn("up", [], distill))
+        self.assertEqual([r.text for r in self.books[1].rules()], ["Remote."] * 3)
+
+    def test_two_processes_share_sessions_journals_and_rules(self):
+        session = self.sessions[0].create()
+        rule = self.books[0].add("do", "Initial.")
+        code = textwrap.dedent("""
+            import sys, time
+            from pathlib import Path
+            from app import agentic as A
+            root, worker, session_id, rule_id = sys.argv[1:]
+            root = Path(root)
+            store = A.SqliteStore(root / "agentic.db")
+            try:
+                sessions = A.SessionManager(root=root / "workspaces", store=store, durable=True)
+                memory, rules = A.ConversationMemory(store), A.RuleBook(store)
+                session = sessions.get(session_id)
+                memory.transcript(session_id)
+                rules.rules()
+                (root / ("ready-" + worker)).write_text("ready")
+                deadline = time.monotonic() + 10
+                while not (root / "go").exists():
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("start signal did not arrive")
+                    time.sleep(0.005)
+                session.meta["worker-" + worker] = True
+                sessions.update(session)
+                for index in range(20):
+                    memory.journal(session_id, A.Turn("user", worker + ":" + str(index)))
+                    rules.edit(rule_id, "do", worker + ":" + str(index))
+                    time.sleep(0.001)
+                for _ in range(2):
+                    sessions.create(worker=worker)
+                    sessions.sweep()
+            finally:
+                store.close()
+        """)
+        processes = []
+
+        def cleanup():
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=5)
+
+        self.addCleanup(cleanup)
+        for worker in range(2):
+            processes.append(subprocess.Popen(
+                [sys.executable, "-c", code, str(self.root), str(worker), session.id, rule.id],
+                cwd=Path(A.__file__).resolve().parent.parent,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            ))
+        deadline = time.monotonic() + 10
+        while not all((self.root / f"ready-{worker}").exists() for worker in range(2)):
+            for process in processes:
+                if process.poll() is not None:
+                    out, err = process.communicate()
+                    self.fail(f"worker exited before readiness: {out}\n{err}")
+            self.assertLess(time.monotonic(), deadline, "workers did not become ready")
+            time.sleep(0.005)
+        (self.root / "go").write_text("go")
+        for process in processes:
+            out, err = process.communicate(timeout=15)
+            self.assertEqual(process.returncode, 0, f"{out}\n{err}")
+        turns = self.memories[0].replay(session.id)
+        self.assertEqual({turn["text"] for turn in turns},
+                         {f"{worker}:{index}" for worker in range(2) for index in range(20)})
+        self.assertEqual([turn["seq"] for turn in turns], list(range(1, 41)))
+        self.assertEqual(self.books[0].get(rule.id).votes, 41)
+        self.assertEqual(self.sessions[0].get(session.id).meta,
+                         {"worker-0": True, "worker-1": True})
+        self.assertEqual(len(self.sessions[0].list()), 5)
+        self.assertTrue(all(s.workspace.is_dir() for s in self.sessions[0].list()))
+
+
 class MemoryTest(unittest.TestCase):
     def setUp(self):
         self.store = A.MemoryStore()
@@ -2288,6 +2752,32 @@ class ContextRunTest(unittest.TestCase):
         self.assertIsNone(result.context)
         self.assertEqual(len(model.calls[-1].input), 1 + 2 * 3)
 
+    def test_every_model_call_gets_the_pacing_limits(self):
+        engine, model = self.engine(
+            self.reads(1), plan_enabled=True, read_output_limit=1234,
+            request_timeout=12, stream_timeout=45,
+        )
+        result = run(engine.run("read", tools=[self.tool]))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(len(model.calls), 2)
+        for call in model.calls:
+            note = call.input[-1]["content"]
+            self.assertIn("read_output_limit 1234 chars", note)
+            self.assertIn("stream_timeout 45s of silence (not a total response deadline)", note)
+            self.assertIn("one section per call", note)
+            self.assertNotIn("request_timeout", note)
+        self.assertNotIn(A.ContextRun.NOTE_HEADER, json.dumps(result.context.items))
+
+    def test_pacing_notes_respect_the_existing_opt_outs(self):
+        for options in ({"plan_enabled": False}, {"plan_enabled": True, "context_trigger": 0}):
+            with self.subTest(**options):
+                engine, model = self.engine(self.reads(1), **options)
+                result = run(engine.run("read", tools=[self.tool]))
+                self.assertTrue(result.ok, result.error)
+                for call in model.calls:
+                    self.assertNotIn(A.ContextRun.NOTE_HEADER, json.dumps(call.input))
+                    self.assertNotIn("[pacing]", json.dumps(call.input))
+
 
 class SliceTest(unittest.TestCase):
     """Work slicing: measured speed, the slice budget, the note and the plan."""
@@ -2523,6 +3013,58 @@ class SliceTest(unittest.TestCase):
         self.assertIn("of 30k tokens; one step may read up to 7.5k", note)
         self.assertIn("~100 tokens/s", note)
         self.assertIn("[plan] 1/2 done; now 2. Write", note)
+
+    def test_the_note_recites_the_current_read_page_limit(self):
+        limit = [1234]
+        context = self.context(read_limit=lambda: limit[0])
+        self.assertIn("read_output_limit 1234 chars", context.note_text())
+        limit[0] = 567
+        self.assertIn("read_output_limit 567 chars", context.note_text())
+
+    def test_the_note_names_unlimited_reads_and_a_disabled_timeout(self):
+        context = self.context(read_limit=0, stall=0)
+        note = context.note_text()
+        self.assertIn("read_output_limit unlimited", note)
+        self.assertIn("stream_timeout disabled", note)
+        self.assertNotIn("0s of silence", note)
+
+    def test_the_note_paces_reads_patches_and_explanations(self):
+        note = self.context().note_text()
+        self.assertIn("Read targeted line ranges before editing", note)
+        self.assertIn("short, targeted apply_patch calls, one section per call", note)
+        self.assertIn("Keep explanations brief", note)
+        self.assertIn("not a total response deadline", note)
+
+    def test_the_note_shows_write_speed_even_without_a_read_sample(self):
+        note = self.context(A.Throughput(decode=283.0)).note_text()
+        self.assertIn("the model writes ~283 tokens/s", note)
+        self.assertNotIn("reads ~0", note)
+
+    def test_engine_notes_use_the_same_page_limit_as_the_read_tool(self):
+        for configured in (0, 1234, -1):
+            with self.subTest(read_output_limit=configured):
+                engine = A.Engine(
+                    env=False, config_file=False, context_window=100_000,
+                    context_reserve=20_000, read_output_limit=configured,
+                    request_timeout=12, stream_timeout=600, context_tokenizer="",
+                )
+                self.addCleanup(engine.close)
+                result = A.RunResult()
+                result.context = run(engine.build_context(engine.config, result))
+                page = engine.page_limit(
+                    engine.config, result, run(engine.read_limit(engine.config))
+                )
+                for prefill in (0, 100.0):
+                    engine.throughput(engine.config).prefill = prefill
+                    result.context.retime()
+                    chars = page() if callable(page) else page
+                    expected = f"{chars} chars" if chars else "unlimited"
+                    note = result.context.note_text()
+                    self.assertIn(f"read_output_limit {expected}", note)
+                    self.assertIn("stream_timeout 600s of silence", note)
+                    self.assertNotIn("request_timeout", note)
+                    if configured == 0:
+                        self.assertEqual(chars, 30_000 if prefill else 80_000)
 
     def test_a_plan_is_measured_and_kept_for_the_session(self):
         self.write("a.md", 4000)
@@ -2903,6 +3445,20 @@ class WorkerTest(unittest.TestCase):
 
     def scripted(self, steps, **overrides):
         return SliceTest.scripted(self, steps, **overrides)
+
+    def test_the_worker_inherits_the_runs_reasoning_effort(self):
+        from agents.testing import assistant_message, function_call
+
+        engine, model = self.scripted([
+            [function_call("delegate", {"task": "Say hello"}, call_id="d1")],
+            [assistant_message("hello")],
+            [assistant_message("done")],
+        ], effort="low")
+        result = run(engine.run("go", workspace=self.root, effort="high"))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(len(model.calls), 3)
+        self.assertTrue(all(call.model_settings.reasoning.effort == "high" for call in model.calls))
+        self.assertEqual(engine.config.effort, "low")
 
     @staticmethod
     def outputs(call):
@@ -6106,7 +6662,10 @@ class CliTest(unittest.TestCase):
         self.assertTrue(args.serve)
         self.assertEqual(
             vars(A.parse_args([])),
-            {"input": "", "repl": False, "serve": False, "config": ""},
+            {
+                "input": "", "repl": False, "serve": False, "a2a": False,
+                "a2a_port": None, "peer": [], "repo": "", "config": "", "effort": None,
+            },
         )
         self.assertTrue(A.parse_args(["--repl"]).repl)
         self.assertEqual(A.parse_args(["--config", "c.yaml"]).config, "c.yaml")

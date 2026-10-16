@@ -25,14 +25,6 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       (a number, a path, a yes/no), an optional `ask_timeout` after which the tool answers for the user,
       and a way for a one shot `--input` run to answer on stdin.
 
-- [ ] **Response pacing.** Generation ran out of the response-time window twice:
-      a long read left the context heavy, and the following turn generated a large
-      edit (or a long explanation) at ~283 tokens/s, which exceeded the budget.
-      Big edits must go out as short, targeted patches — one section per call —
-      after slicing reads, never one giant read-then-write turn. The harness
-      should surface the pacing limits (`read_output_limit`, the response
-      timeout) in its `[budget]` note so a run can plan around them.
-
 - [ ] **Decision models, as a role.** `SystemOneClient` asks Ollama
       `clef-flash` / `clef` typed questions (`Noul` / `Choice` / `Score`) and
       the `decision` role resolves from `inference_ldm` (see DESIGN.md §12). A
@@ -90,12 +82,6 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       run the sandbox tests on macOS (CI runner) and tune the read allow-list
       (`/private/var/folders`, Homebrew prefixes) against real commands.
 
-- [ ] **Several processes on one state directory.** Sessions, journals and
-      rules are cached per process, so a repl and a server sharing `.agentic/`
-      overwrite each other's journals and miss each other's sessions and rules
-      until a restart. Take a lock on the state directory (and say who holds
-      it), or read through the store and merge on write.
-
 - [ ] **Forge portability and a richer git workflow.** Pull requests are GitHub
       REST only, clones are shallow by default and the checkout can only commit,
       push and open a pull request. Add GitLab and Gitea (merge requests), let
@@ -115,7 +101,7 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
   - [ ] implement an efficient way for token text that fades in quickly when displayed.
   - [ ] Redesign the context usage meter so it is communicated through the main icon (maybe a ring around the icon that fills up like in vscode)
 
-- [ ] **Repl ergonomics.** The terminal reads plain lines: there is no history
+- [ ] **Extra Repl ergonomics.** The terminal reads plain lines: there is no history
       across restarts, no editing beyond what the platform's `input()` gives,
       no command completion, no multi-line composition and no way to attach a
       file the way the web client can. Add a history file, tab completion over
@@ -143,3 +129,5 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
   - [ ] A real 4B verifier: OpenRouter serves no Qwen3.5 4B (9B: 91% pass; a 3B of another family: 76%, noise); serve one and `replay --verifier-url`
   - [ ] Eval on the student's own history (rollout), not the teacher's verbose turns
   - [ ] Rows past `--max-len` 16k tokens are cut; a chunked loss would fit 32k on one GPU
+
+- [ ] **Windows BDD portability (open).** Repair seven baseline cases in `test/agentic_bdd.py`: config candidate paths, SQLite file cleanup, symlink privilege assumptions, Seatbelt path escaping, attachment separators and POSIX-only `pwd`/`sleep`; all seven also failed against unmodified HEAD during A2A validation.
