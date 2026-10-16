@@ -4,7 +4,29 @@
 
 [CORE](Core/) | [TOOLS](Tools/) | [TESTS](../Decisive.Tests/)
 
-> Status: design scaffold. Source files and project files are empty placeholders. Descriptions below define planned responsibilities, not implemented classes or working APIs.
+> Status: library design scaffold. The core project targets .NET 8; source files and the test project remain empty placeholders. Descriptions below define planned responsibilities, not implemented classes or working APIs.
+
+## Build (Core)
+
+Restore and build the package-backed project from the repository root:
+
+```powershell
+dotnet restore util\Decisive.Core\Decisive.Core.csproj
+dotnet build util\Decisive.Core\Decisive.Core.csproj --no-restore
+```
+
+Dependency policy:
+
+- All 23 requested packages use explicit stable versions; no floating references.
+- ASP.NET Core SignalR, Entity Framework Core, and Serilog.AspNetCore stay on their .NET 8 release lines.
+- LLamaSharp and both native backends share version 0.27.0; runtime backend selection remains part of the planned library implementation.
+- Package availability does not imply implemented integrations; no cloud, model, or document-processing APIs run during the build.
+
+Project setup checklist:
+
+- [x] Minimum Scope: replace package URLs with an SDK-style .NET 8 class library.
+- [x] Complete Scope: reference all 23 requested packages with compatible, explicit versions.
+- [x] Extended Scope: verify package restore and a warning-free build; leave library implementation out of scope.
 
 The reference is Agentic's media ingestion, LLM extraction, metadata binding, and bounded tool loop. Decisive deliberately removes product knowledge from extraction: MediaImport reads the media, ProductQuery identifies and fetches relevant product data, and SelectionBinder binds and reconciles against that data. Explicit exit and export tools are proposed additions.
 

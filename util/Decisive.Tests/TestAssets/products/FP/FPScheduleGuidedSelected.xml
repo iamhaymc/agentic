@@ -1,0 +1,106 @@
+<ScheduleViewRules>
+	<GuidedSelection>
+		<!--Unit Model-->
+		<LoopingField FieldId="8339" />
+	</GuidedSelection>
+
+	<FindResultType Type="Price">
+		<!--Unit model-->
+		<Field FieldId="8339" />
+		<!--Communication Type-->
+		<Field FieldId="103658" />
+		<!--Unit control type-->
+		<Field FieldId="8340" />
+		<!--Customer supplied controls/No controls-->
+		<Field FieldId="17189" />
+		<!--Disconnect Switch-->
+		<Field FieldId="61735" />
+		<!--Power fuse-->
+		<Field FieldId="61736" />
+		<!--Electric heater voltage-->
+		<Field FieldId="8376" />
+		<!--Electric heater control-->
+		<Field FieldId="15250" />
+		<!--Electric heater airflow-->
+		<Field FieldId="61737" />
+		<!--Unit Insulation-->
+		<Field FieldId="8348"/>
+		<!--Sensor Options-->
+		<Field FieldId="66022" />
+		<!--Factory installed duct temp sensor-->
+		<Field FieldId="79609" />
+		<!--Piping package-->
+		<Field FieldId="79549" />
+		
+		<!--LEED Wrap-->
+		<Field FieldId="103655" />
+		<!--Communication Type-->
+		
+		<!--Actuator-->
+		<Field FieldId="103660" />
+
+		<!--Motor Type-->
+		<Field FieldId="9049" />
+		<!--Outlet Connection-->
+		<Field FieldId="103656" />
+		<!--Bottom Access-->
+		<Field FieldId="103659" />
+
+
+	</FindResultType>
+
+	<FindResultType Type="Submittal">
+		<!--Unit model-->
+		<Field FieldId="8339" />
+		<!--Unit control type-->
+		<Field FieldId="8340" />
+		<!--Customer supplied controls/No controls-->
+		<Field FieldId="17189" />
+		<!--Disconnect Switch-->
+		<Field FieldId="61735" />
+		<!--Power fuse-->
+		<Field FieldId="61736" />
+		<!--Unit Insulation-->
+		<Field FieldId="8348" />
+		<!--Electric heater voltage-->
+		<Field FieldId="8376" />
+		<!--Electric heater control-->
+		<Field FieldId="15250" />
+		<!--Piping package-->
+		<Field FieldId="79549" />
+		<!--Motor Type-->
+		<Field FieldId="9049" />
+		<!--Bottom Access-->
+		<Field FieldId="103659" />
+
+	</FindResultType>
+
+	<FindResultType Type="Performance">
+		<!--Unit model-->
+		<Field FieldId="8339" />
+		
+		<!--Electric heater voltage-->
+		<Field FieldId="8376" />
+		<!--Electric heater control-->
+		<Field FieldId="15250" />
+		<!--Unit Insulation-->
+		<Field FieldId="8348" />
+		<!--Fluid Type-->
+		<Field FieldId="8374" />
+		<!--Fluid concentration-->
+		<Field FieldId="8375" />
+		<!--Hot water valves?-->
+		<Field FieldId="8367" />
+		<!--Piping package-->
+		<Field FieldId="79549" />
+		<!--Bottom Access-->
+		<Field FieldId="103659" />
+		<!--Motor Type-->
+		<Field FieldId="9049" />
+		<!--Motor Voltage-->
+		<Field FieldId="8351" />
+	
+
+	</FindResultType>
+
+</ScheduleViewRules>

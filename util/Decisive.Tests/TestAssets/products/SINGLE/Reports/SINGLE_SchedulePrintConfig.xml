@@ -1,0 +1,106 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<Groups>
+	<Group Heading="">
+		<Item Heading="" FieldIdentifier="Unit_Type" />
+	</Group>
+	<Group Heading="">
+		<Item Heading="" FieldIdentifier="Unit_Size" />
+	</Group>
+	<Group Heading="Airflow">
+		<Item Heading="" FieldIdentifier="C_AirFlow" />
+		<Item Heading="" FieldIdentifier="Min_C_Airflow" />
+		<Item Heading="" FieldIdentifier="H_Airflow" />
+	</Group>
+	<Group Heading="Hot Water Heating">
+		<Item Heading="" FieldIdentifier="Rows" />
+    <Item Heading="" FieldIdentifier="M_H_Capacity">
+      <FieldCondition FieldIdentifier="Unit_Type" OptionList="Heating"></FieldCondition>
+    </Item>
+    <Item Heading="" FieldIdentifier="H_Fluid_Flow_Rate" />
+		<Item Heading="" FieldIdentifier="M_H_EWT" />
+	</Group>
+	<Group Heading="Electric Heating">
+    <Item Heading="" FieldIdentifier="M_H_Capacity">
+      <FieldCondition FieldIdentifier="Unit_Type" OptionList="Electric"></FieldCondition>
+    </Item>
+    <Item Heading="" FieldIdentifier="KWs" />
+		<Item Heading="" FieldIdentifier="Unit_Voltage" />
+		<Item Heading="" FieldIdentifier="Electheat_stages" />
+	</Group>
+	<Group Heading="Notes">
+		<Item Id="1.1" Heading="Units to be Trane model, size, and configuration as indicated in schedule and on drawings">
+			<FieldCondition FieldIdentifier="Unit_Type"></FieldCondition>
+		</Item>
+		<Item Id="2.1" Heading="Provide factory-mounted and pre-programmed, pressure-independent, BACnet DDC controller with airflow measurement and wireless communication receiver">
+			<FieldCondition FieldIdentifier="Control_Type" OptionList="DD97;DD96;DD95;DD93;DD92;DD91;DD90;DD89;DD88;DD87;DD86;DD85;DD84;DD83;DD82;DD81;DD80;DD79;DD77;DD76;DD75;DD74;DD73;DD72;DD71;DD67;DD66;DD65;DD62;DD61;DD60;DD59;DD58;DD57;DD56;DD55;DD54;DD53;DD63;DD52;DD51;DD50;DD49;DD47;DD46;DD45;DD44;DD43;DD42;DD41"></FieldCondition>
+			<FieldCondition FieldIdentifier="S" OptionList="WLES;wcia"></FieldCondition>
+		</Item>
+		<Item Id="2.2" Heading="Provide factory-mounted and pre-programmed, pressure-independent, BACnet DDC controller with airflow measurement">
+			<FieldCondition FieldIdentifier="Control_Type" OptionList="DD97;DD96;DD95;DD93;DD92;DD91;DD90;DD89;DD88;DD87;DD86;DD85;DD84;DD83;DD82;DD81;DD80;DD79;DD77;DD76;DD75;DD74;DD73;DD72;DD71;DD67;DD66;DD65;DD62;DD61;DD60;DD59;DD58;DD57;DD56;DD55;DD54;DD53;DD63;DD52;DD51;DD50;DD49;DD47;DD46;DD45;DD44;DD43;DD42;DD41"></FieldCondition>
+			<FieldCondition FieldIdentifier="S" OptionList="WIRE"></FieldCondition>
+		</Item>
+		<Item Id="3.1" Heading="Provide with zone temperature sensor">
+			<FieldCondition FieldIdentifier="S" OptionList="WIRE"></FieldCondition>
+		</Item>
+		<Item Id="3.2" Heading="Provide with wireless zone temperature sensor">
+			<FieldCondition FieldIdentifier="S" OptionList="WLES;wcia"></FieldCondition>
+			<FieldCondition FieldIdentifier="WirelessZoneSensor" OptionList="1;2;3;4;5;6"></FieldCondition>
+		</Item>
+		<Item Id="3.3" Heading="Provide with wireless zone temperature sensor and wireless CO2 sensor with demand-controlled ventilation sequence">
+			<FieldCondition FieldIdentifier="S" OptionList="wcia"></FieldCondition>
+			<FieldCondition FieldIdentifier="WirelessZoneSensor" OptionList="7"></FieldCondition>
+		</Item>
+		<Item Id="4.1" Heading="Provide with factory-wired discharge air temperature sensor">
+			<FieldCondition FieldIdentifier="Unit_Type" OptionList="Electric"></FieldCondition>
+		</Item>
+		<Item Id="4.2" Heading="Provide with factory-wired discharge air temperature sensor">
+			<FieldCondition FieldIdentifier="Unit_Type" OptionList="Cooling;Heating"></FieldCondition>
+			<FieldCondition FieldIdentifier="TEMP" OptionList="WITH;DTVH;DATS;DM;DMVH"></FieldCondition>
+		</Item>
+		<Item Id="5.1" Heading="Provide with factory-wired and tagged hot-water valve">
+			<FieldCondition FieldIdentifier="Unit_Type" OptionList="Heating"></FieldCondition>
+			<FieldCondition FieldIdentifier="M_Valve_Type" OptionList="Yes"></FieldCondition>
+			<FieldCondition FieldIdentifier="M_Pipe_Pkg" OptionList="0"></FieldCondition>
+		</Item>
+		<Item Id="5.2" Heading="Provide with factory-wired and tagged hot-water valve and piping package">
+			<FieldCondition FieldIdentifier="Unit_Type" OptionList="Heating"></FieldCondition>
+			<FieldCondition FieldIdentifier="M_Pipe_Pkg" OptionList="A;B"></FieldCondition>
+		</Item>
+		<Item Id="6.1" Heading="Provide unit-mounted control power transformer">
+			<FieldCondition FieldIdentifier="Transformer" OptionList="1;2;3;4;5;6;7;8"></FieldCondition>
+			<FieldCondition FieldIdentifier="Disconnect" OptionList="none"></FieldCondition>
+			<FieldCondition FieldIdentifier="Powerfuse" OptionList="none"></FieldCondition>
+		</Item>
+		<Item Id="6.2" Heading="Provide unit-mounted disconnect">
+			<FieldCondition FieldIdentifier="Transformer" OptionList="9"></FieldCondition>
+			<FieldCondition FieldIdentifier="Disconnect" OptionList="with"></FieldCondition>
+			<FieldCondition FieldIdentifier="Powerfuse" OptionList="none"></FieldCondition>
+		</Item>
+		<Item Id="6.3" Heading="Provide unit-mounted power fuse">
+			<FieldCondition FieldIdentifier="Transformer" OptionList="9"></FieldCondition>
+			<FieldCondition FieldIdentifier="Disconnect" OptionList="none"></FieldCondition>
+			<FieldCondition FieldIdentifier="Powerfuse" OptionList="with"></FieldCondition>
+		</Item>
+		<Item Id="6.4" Heading="Provide unit-mounted control power transformer and disconnect">
+			<FieldCondition FieldIdentifier="Transformer" OptionList="1;2;3;4;5;6;7;8"></FieldCondition>
+			<FieldCondition FieldIdentifier="Disconnect" OptionList="with"></FieldCondition>
+			<FieldCondition FieldIdentifier="Powerfuse" OptionList="none"></FieldCondition>
+		</Item>
+		<Item Id="6.5" Heading="Provide unit-mounted control power transformer and power fuse">
+			<FieldCondition FieldIdentifier="Transformer" OptionList="1;2;3;4;5;6;7;8"></FieldCondition>
+			<FieldCondition FieldIdentifier="Disconnect" OptionList="none"></FieldCondition>
+			<FieldCondition FieldIdentifier="Powerfuse" OptionList="with"></FieldCondition>
+		</Item>
+		<Item Id="6.6" Heading="Provide unit-mounted disconnect and power fuse">
+			<FieldCondition FieldIdentifier="Transformer" OptionList="9"></FieldCondition>
+			<FieldCondition FieldIdentifier="Disconnect" OptionList="with"></FieldCondition>
+			<FieldCondition FieldIdentifier="Powerfuse" OptionList="with"></FieldCondition>
+		</Item>
+		<Item Id="6.7" Heading="Provide unit-mounted control power transformer, disconnect, and power fuse">
+			<FieldCondition FieldIdentifier="Transformer" OptionList="1;2;3;4;5;6;7;8"></FieldCondition>
+			<FieldCondition FieldIdentifier="Disconnect" OptionList="with"></FieldCondition>
+			<FieldCondition FieldIdentifier="Powerfuse" OptionList="with"></FieldCondition>
+		</Item>
+	</Group>	
+</Groups>
+

@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<Groups>
+	<Group Heading="">
+		<Item Heading="" FieldIdentifier="Unit_Type" />
+	</Group>
+	<Group Heading="">
+		<Item Heading="" FieldIdentifier="PrimarySize" />
+	</Group>
+	<Group Heading="">
+		<Item Heading="" FieldIdentifier="SecondarySize" />
+	</Group>
+	<Group Heading="Airflow">
+		<Item Heading="" FieldIdentifier="C_AirFlow" />
+		<Item Heading="" FieldIdentifier="Min_C_Airflow" />
+		<Item Heading="" FieldIdentifier="H_Airflow" />
+		<Item Heading="" FieldIdentifier="Min_H_Airflow" />
+		<Item Heading="" FieldIdentifier="Const_Vol_Airflow" />
+	</Group>
+</Groups>
+

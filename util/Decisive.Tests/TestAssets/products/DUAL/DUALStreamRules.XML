@@ -1,0 +1,19 @@
+<Rules RuleVersion="2">
+	<Rule Id="1" RuleType="N" Status="P" Action="" Description="VV550 controllers no longer offered." ErrorString="Rule 1: LonTalk VV550 controllers are no longer available. Please contact product support for assistance." BaseExpression="3">
+		<StreamSubRule Operator="or" SequenceNumber="2">
+			<StreamRuleElement Field="Control_Type" Value="DD11" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD18" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+	<Rule Id="2" RuleType="N" Status="C" Action="" Description="Foil Faced insulation is not available in Canada temporarily." ErrorString="Rule 2: Foil Faced insulation is not available in Canada temporarily." BaseExpression="3">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Shipping_Location" Value="CAN" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Unit_Insulation" Value="1D" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+	<Rule Id="3" RuleType="W" Status="C" Action="" Description="Please confirm each unit selected with Factory Addressing has the correct Controller and WCI address. This can be done using the “Edit Tags” field." ErrorString="Rule 3: Please confirm each unit selected with Factory Addressing has the correct Controller and WCI address. This can be done using the “Edit Tags” field." BaseExpression="1">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Factory_Addressing" Value="YES" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+</Rules>

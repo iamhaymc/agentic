@@ -1,0 +1,18 @@
+<Rules RuleVersion="2">
+	<Rule Id="1" RuleType="N" Status="C" Action="" Description="Foil Faced insulation is not available in Canada temporarily." ErrorString="Rule 1: Foil Faced insulation is not available in Canada temporarily." BaseExpression="1">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Shipping_Location" Value="CAN" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Unit_Insulation" Value="FF1" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+	<Rule Id="2" RuleType="W" Status="C" Action="" Description="Please confirm each unit selected with Factory Addressing has the correct Controller and WCI address. This can be done using the “Edit Tags” field." ErrorString="Rule 2: Please confirm each unit selected with Factory Addressing has the correct Controller and WCI address. This can be done using the “Edit Tags” field." BaseExpression="1">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Factory_Addressing" Value="YES" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+	<Rule Id="3" RuleType="N" Status="C" Action="" Description="Design special quick ship must be approved by product support" ErrorString="Rule 3: Design special quick ship must be approved by product support" BaseExpression="1">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Ship_Cycle" Value="DESQ" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+</Rules>

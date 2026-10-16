@@ -1,0 +1,86 @@
+<ScheduleViewRules>
+	<GuidedSelection>
+		<!--Unit Model-->
+		<LoopingField FieldId="142645" />
+	</GuidedSelection>
+
+	<FindResultType Type="Price">
+		<!--Unit model-->
+		<Field FieldId="142645" />
+		<!--Control Type-->
+		<Field FieldId="142023" />
+		<!--Controls Interface-->
+		<Field FieldId="142024" />
+		<!--Control Module-->
+		<Field FieldId="142025" />
+		<!--Controls Program-->
+		<Field FieldId="142013" />
+		<!--Toggle Switch-->
+		<Field FieldId="142650" />
+		<!--Power fuse-->
+		<Field FieldId="142664" />
+		<!--Electric heater voltage-->
+		<Field FieldId="144210" />
+		<!--Electric heater control-->
+		<Field FieldId="144223" />
+		<!--Electric heater airflow switch-->
+		<Field FieldId="144232" />
+		<!--Unit Insulation-->
+		<Field FieldId="142643"/>
+		<!--Factory installed duct temp sensor-->
+		<Field FieldId="144235" />	
+		<!--LEED Wrap-->
+		<Field FieldId="142665" />		
+		<!--Actuator-->
+		<Field FieldId="144233" />
+		<!--Motor Type-->
+		<Field FieldId="142649" />
+	</FindResultType>
+
+	<FindResultType Type="Submittal">
+		<!--Unit model-->
+		<Field FieldId="142645" />
+		<!--Control Type-->
+		<Field FieldId="142023" />
+		<!--Controls Interface-->
+		<Field FieldId="142024" />
+		<!--Control Module-->
+		<Field FieldId="142025" />
+		<!--Controls Program-->
+		<Field FieldId="142013" />
+		<!--Toggle Switch-->
+		<Field FieldId="142650" />
+		<!--Power fuse-->
+		<Field FieldId="142664" />
+		<!--Unit Insulation-->
+		<Field FieldId="142643" />
+		<!--Electric heater voltage-->
+		<Field FieldId="144210" />
+		<!--Electric heater control-->
+		<Field FieldId="144223" />
+		<!--Motor Type-->
+		<Field FieldId="142649" />
+	</FindResultType>
+
+	<FindResultType Type="Performance">
+		<!--Unit model-->
+		<Field FieldId="142645" />		
+		<!--Electric heater voltage-->
+		<Field FieldId="144210" />
+		<!--Electric heater control-->
+		<Field FieldId="144223" />
+		<!--Unit Insulation-->
+		<Field FieldId="142643" />
+		<!--Fluid Type-->
+		<Field FieldId="145639" />
+		<!--Fluid concentration-->
+		<Field FieldId="145640" />
+		<!--Hot water valves?-->
+		<Field FieldId="144236" />
+		<!--Motor Type-->
+		<Field FieldId="142649" />
+		<!--Motor Voltage-->
+		<Field FieldId="142663" />
+	</FindResultType>
+
+</ScheduleViewRules>

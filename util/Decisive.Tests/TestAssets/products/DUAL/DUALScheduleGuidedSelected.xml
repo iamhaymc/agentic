@@ -1,0 +1,59 @@
+<ScheduleViewRules>
+	<GuidedSelection>
+		<!--Unit Model-->
+		<LoopingField FieldId="8949" />
+	</GuidedSelection>
+
+	<FindResultType Type="Price">
+		<!--Unit model-->
+		<Field FieldId="8949" />
+		<!--Unit control type-->
+		<Field FieldId="8950" />
+		
+		<!--Disconnect Switch-->
+		<Field FieldId="61733" />
+		<!--Power fuse-->
+		<Field FieldId="61734" />
+		<!--Transformer-->
+		<Field FieldId="61732" />
+		<!--Bottom access-->
+		<Field FieldId="89269" />
+		
+		<!--Unit Insulation-->
+		<Field FieldId="8965" />
+		<!--Sensor Options-->
+		<Field FieldId="103628" />
+		<!--Factory installed duct temp sensor-->
+		<Field FieldId="103626" />
+		
+		<!--LEED Wrap-->
+		<Field FieldId="103625" />
+		<!--Communication Type-->
+		<Field FieldId="104113" />
+		<!--Actuator-->
+		<Field FieldId="103630" />
+	</FindResultType>
+
+	<FindResultType Type="Submittal">
+		<!--Unit model-->
+		<Field FieldId="8949" />
+		<!--Unit control type-->
+		<Field FieldId="8950" />
+		<!--Disconnect Switch-->
+		<Field FieldId="61733" />
+		<!--Power fuse-->
+		<Field FieldId="61734" />
+		<!--Transformer-->
+		<Field FieldId="61732" />
+	</FindResultType>
+
+	<FindResultType Type="Performance">
+		<!--Unit model-->
+		<Field FieldId="8949" />
+	
+		<!--Unit Insulation-->
+		<Field FieldId="8965" />
+	
+	</FindResultType>
+
+</ScheduleViewRules>

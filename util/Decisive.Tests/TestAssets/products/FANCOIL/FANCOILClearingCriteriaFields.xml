@@ -1,0 +1,5 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<FieldsToClear>
+	<Field Code="Unit_Size" DeleteResults="1"></Field>
+	<Field Code="M_Coil_Type" DeleteResults="1"></Field>
+</FieldsToClear>

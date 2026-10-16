@@ -1,0 +1,113 @@
+<ScheduleViewRules>
+	<GuidedSelection>
+		<!--Cabinet style-->
+		<LoopingField FieldId="22205"/>
+  		<!--Unit voltage-->
+		<LoopingField FieldId="133"/>
+
+	</GuidedSelection>
+
+	<FindResultType Type="Price">
+		<!--Cabinet style-->
+		<Field FieldId="22205"/>
+		<!--Unit voltage-->
+		<Field FieldId="133"/>
+		<!--Inlet style-->
+		<Field FieldId="270"/>
+		<!--Outlet style-->
+		<Field FieldId="269"/>
+		<!--Fresh air damper-->
+		<Field FieldId="7909"/>
+                <!--Main coil type-->
+                <Field FieldId="78"/>
+		<!--Reheat coil type-->
+                <Field FieldId="136"/>
+                <!--Piping package/end valves-->
+		<Field FieldId="103192"/>
+                <!--Drain pan material-->
+		<Field FieldId="104323"/>
+                <!--Coil air vent-->
+		<Field FieldId="104324"/>
+                <!--Disconnect switch-->
+		<Field FieldId="7910"/>
+                <!--Filter type/quantity-->
+		<Field FieldId="79"/>
+		<!--Control type-->
+		<Field FieldId="7912"/>
+		<!--Zone sensor style-->
+		<Field FieldId="7913"/>
+		<!--ECM motor config-->
+		<Field FieldId="82079"/>
+		
+	</FindResultType>
+
+	<FindResultType Type="Submittal">
+  <!--Cabinet style-->
+		<!--Cabinet style-->
+                <Field FieldId="22205"/>
+		<!--Unit voltage-->
+		<Field FieldId="133"/>
+		<!--Inlet style-->
+		<Field FieldId="270"/>
+		<!--Outlet style-->
+		<Field FieldId="269"/>
+		<!--Fresh air damper-->
+		<Field FieldId="7909"/>
+		<!--Main coil type-->
+                <Field FieldId="78"/>
+		<!--Reheat coil type-->
+                <Field FieldId="136"/>
+  		<!--Piping package/end valves-->
+		<Field FieldId="103192"/>
+                <!--Drain pan material-->
+		<Field FieldId="104323"/>
+                <!--Coil air vent-->
+		<Field FieldId="104324"/>
+                <!--Disconnect switch-->
+		<Field FieldId="7910"/>
+                <!--Filter type/quantity-->
+		<Field FieldId="79"/>
+		<!--Control type-->
+		<Field FieldId="7912"/>
+		<!--Zone sensor style-->
+		<Field FieldId="7913"/>
+		<!--ECM motor config-->
+		<Field FieldId="82079"/>
+		
+        </FindResultType>
+
+	<FindResultType Type="Performance">
+  <!--Cabinet style-->
+		<!--Cabinet style-->
+                <Field FieldId="22205"/>
+		<!--Unit voltage-->
+		<Field FieldId="133"/>
+		<!--Inlet style-->
+		<Field FieldId="270"/>
+		<!--Outlet style-->
+		<Field FieldId="269"/>
+		<!--Fresh air damper-->
+		<Field FieldId="7909"/>
+		<!--Main coil type-->
+                <Field FieldId="78"/>
+		<!--Reheat coil type-->
+                <Field FieldId="136"/>
+  		<!--Piping package/end valves-->
+		<Field FieldId="103192"/>
+                <!--Drain pan material-->
+		<Field FieldId="104323"/>
+                <!--Coil air vent-->
+		<Field FieldId="104324"/>
+                <!--Disconnect switch-->
+		<Field FieldId="7910"/>
+                <!--Filter type/quantity-->
+		<Field FieldId="79"/>
+		
+	</FindResultType>
+
+</ScheduleViewRules>
+
+
+
+
+

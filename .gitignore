@@ -2,6 +2,8 @@
 # Build
 
 build/
+bin/
+obj/
 *.obj
 *.o
 *.exe

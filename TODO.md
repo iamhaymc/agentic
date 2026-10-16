@@ -7,6 +7,10 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
 
 ---
 
+- [ ] Implement ability to send message while the agent is working to steer it
+
+- [ ] Add Inference and Decision REST endpoints
+
 - [ ] **Context compaction, extended scope.** Compaction is token aware,
       tiered and runs before every model call (see CHANGES.md). Still open:
   - [ ] Paged history replay: `hello` sends the newest N turns, older ones load on scroll (an endless journal is replayed whole today)

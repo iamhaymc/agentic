@@ -1,0 +1,92 @@
+<ScheduleViewRules>
+	<GuidedSelection>
+		<!--Unit Model-->
+		<LoopingField FieldId="8139" />
+		<!--Exhaust Box-->
+		<LoopingField FieldId="157956" />
+	</GuidedSelection>
+
+	<FindResultType Type="Price">
+		<!--Unit model-->
+		<Field FieldId="8139" />
+		<!--Unit control type-->
+		<Field FieldId="8169" />
+		<!--Customer supplied controls/No controls-->
+		<Field FieldId="17179" />
+		<!--Disconnect Switch-->
+		<Field FieldId="61730" />
+		<!--Power fuse-->
+		<Field FieldId="61731" />
+		<!--Transformer-->
+		<Field FieldId="61729" />
+		<!--Bottom access-->
+		<Field FieldId="89269" />
+		<!--Electric heater voltage-->
+		<Field FieldId="8313" />
+		<!--Electric heater control-->
+		<Field FieldId="15249" />
+		<!--Unit Insulation-->
+		<Field FieldId="8176" />
+		<!--Sensor Options-->
+		<Field FieldId="64849" />
+		<!--Factory installed duct temp sensor-->
+		<Field FieldId="60619" />
+		<!--Piping package-->
+		<Field FieldId="79531" />
+		<!--Proportional water valve-->
+		<Field FieldId="79533" />
+		<!--LEED Wrap-->
+		<Field FieldId="103443" />
+		<!--Communication Type-->
+		<Field FieldId="103447" />
+		<!--Actuator-->
+		<Field FieldId="103448" />
+	</FindResultType>
+
+	<FindResultType Type="Submittal">
+		<!--Unit model-->
+		<Field FieldId="8139" />
+		<!--Unit control type-->
+		<Field FieldId="8169" />
+		<!--Customer supplied controls/No controls-->
+		<Field FieldId="17179" />
+		<!--Disconnect Switch-->
+		<Field FieldId="61730" />
+		<!--Power fuse-->
+		<Field FieldId="61731" />
+		<!--Transformer-->
+		<Field FieldId="61729" />
+		<!--Bottom access-->
+		<Field FieldId="89269" />
+		<!--Electric heater voltage-->
+		<Field FieldId="8313" />
+		<!--Electric heater control-->
+		<Field FieldId="15249" />
+
+	</FindResultType>
+
+	<FindResultType Type="Performance">
+		<!--Unit model-->
+		<Field FieldId="8139" />
+		<!--Bottom access-->
+		<Field FieldId="89269" />
+		<!--Electric heater voltage-->
+		<Field FieldId="8313" />
+		<!--Electric heater control-->
+		<Field FieldId="15249" />
+		<!--Unit Insulation-->
+		<Field FieldId="8176" />
+		<!--Fluid Type-->
+		<Field FieldId="8199" />
+		<!--Fluid concentration-->
+		<Field FieldId="8200" />
+		<!--Hot water valves?-->
+		<Field FieldId="8189" />
+		<!--Piping package-->
+		<Field FieldId="79531" />
+		<!--Proportional water valve-->
+		<Field FieldId="79533" />
+
+	</FindResultType>
+
+</ScheduleViewRules>

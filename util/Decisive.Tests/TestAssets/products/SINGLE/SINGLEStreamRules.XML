@@ -1,0 +1,44 @@
+<Rules RuleVersion="2">
+	<Rule Id="1" RuleType="N" Status="C" Action="" Description="Design special quick ship must be approved by product support" ErrorString="Rule 1: Design special quick ship must be approved by product support" BaseExpression="1">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Ship_Cycle" Value="DESQ" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+	<Rule Id="2" RuleType="N" Status="C" Action="" Description="VV550 controllers no longer offered." ErrorString="Rule 2: LonTalk VV550 controllers are no longer available. Please contact product support for assistance." BaseExpression="1">
+		<StreamSubRule Operator="or" SequenceNumber="1">
+			<StreamRuleElement Field="Control_Type" Value="DD11" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD12" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD13" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD14" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD15" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD16" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD17" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD19" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD20" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD21" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD22" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD33" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD23" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD24" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD25" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD26" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD27" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD28" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD29" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD30" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD31" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD32" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+	</StreamSubRule>
+	</Rule>
+	<Rule Id="3" RuleType="N" Status="C" Action="" Description="Foil Faced insulation is not available in Canada temporarily." ErrorString="Rule 3: Foil Faced insulation is not available in Canada temporarily." BaseExpression="1">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Shipping_Location" Value="CAN" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Unit_Insulation" Value="1D" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+	<Rule Id="4" RuleType="W" Status="C" Action="" Description="Please confirm each unit selected with Factory Addressing has the correct Controller and WCI address. This can be done using the “Edit Tags” field." ErrorString="Rule 4: Please confirm each unit selected with Factory Addressing has the correct Controller and WCI address. This can be done using the “Edit Tags” field." BaseExpression="1">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Factory_Addressing" Value="YES" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+</Rules>

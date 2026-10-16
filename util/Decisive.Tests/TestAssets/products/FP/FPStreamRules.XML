@@ -1,0 +1,40 @@
+<Rules RuleVersion="2">
+	<Rule Id="2" RuleType="N" Status="C" Action="" Description="VV550 controllers no longer offered." ErrorString="Rule 2: LonTalk VV550 controllers are no longer available. Please contact product support for assistance." BaseExpression="3">
+		<StreamSubRule Operator="or" SequenceNumber="2">
+			<StreamRuleElement Field="Control_Type" Value="DD11" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD12" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD13" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD14" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD15" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Control_Type" Value="DD17" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+	<Rule Id="3" RuleType="N" Status="C" Action="" Description="Fan Airflow must be greater than or equal to Design Cooling Airflow." ErrorString="Rule 3: Fan Airflow must be greater than or equal to Design Cooling Airflow." BaseExpression="3">
+		<StreamSubRule Operator="or" SequenceNumber="1">
+			<StreamRuleElement Field="Error1" Value="TRUE" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+	<Rule Id="4" RuleType="N" Status="C" Action="" Description="Foil Faced insulation is not available in Canada temporarily." ErrorString="Rule 4: Foil Faced insulation is not available in Canada temporarily." BaseExpression="3">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Shipping_Location" Value="CAN" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Unit_Insulation" Value="1D" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+	<Rule Id="5" RuleType="W" Status="C" Action="" Description="Please confirm each unit selected with Factory Addressing has the correct Controller and WCI address. This can be done using the “Edit Tags” field." ErrorString="Rule 5: Please confirm each unit selected with Factory Addressing has the correct Controller and WCI address. This can be done using the “Edit Tags” field." BaseExpression="1">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Factory_Addressing" Value="YES" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+		<Rule Id="6" RuleType="N" Status="C" Action="" Description="VSxF Phase Out" ErrorString="Rule 6: Last order date for the VSxF model is 12/31/2024. The new VSxG model is now available for ordering. For additional details click here (https://hub.tranetechnologies.com/message/80066)" BaseExpression="3">
+		<StreamSubRule Operator="or" SequenceNumber="2">
+			<StreamRuleElement Field="Unit_Type" Value="VSCF" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Unit_Type" Value="VSWF" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+			<StreamRuleElement Field="Unit_Type" Value="VSEF" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+		<Rule Id="7" RuleType="N" Status="C" Action="" Description="Design special quick ship must be approved by product support" ErrorString="Rule 3: Design special quick ship must be approved by product support" BaseExpression="1">
+		<StreamSubRule Operator="and" SequenceNumber="1">
+			<StreamRuleElement Field="Ship_Cycle" Value="DESQ" SequenceNumber="-1" StreamDirection="" NumberOfModules="-1" Complement="0"/>
+		</StreamSubRule>
+	</Rule>
+</Rules>

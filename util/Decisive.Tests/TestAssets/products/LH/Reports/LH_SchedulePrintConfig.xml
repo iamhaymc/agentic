@@ -1,0 +1,28 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<Groups>
+	<Group Heading="">
+		<Item Heading="" FieldIdentifier="Unit_Type" />
+	</Group>
+	<Group Heading="">
+		<Item Heading="" FieldIdentifier="Unit_Size" />
+	</Group>
+	<Group Heading="Airflow">
+		<Item Heading="" FieldIdentifier="C_AirFlow" />
+		<Item Heading="" FieldIdentifier="Min_C_Airflow" />
+		<Item Heading="" FieldIdentifier="Min_H_Airflow" />
+		<Item Heading="" FieldIdentifier="H_Airflow" />
+		<Item Heading="" FieldIdentifier="Air Flow" />
+	</Group>
+	<Group Heading="Hot Water Heating">
+		<Item Heading="" FieldIdentifier="Rows" />
+		<Item Heading="" FieldIdentifier="M_H_Capacity" />
+		<Item Heading="" FieldIdentifier="H_Fluid_Flow_Rate" />
+		<Item Heading="" FieldIdentifier="M_H_EWT" />
+	</Group>
+	<Group Heading="Electric Heating">
+		<Item Heading="" FieldIdentifier="KWs" />
+		<Item Heading="" FieldIdentifier="Unit_Voltage" />
+		<Item Heading="" FieldIdentifier="Electheat_stages" />
+	</Group>
+</Groups>
+

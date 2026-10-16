@@ -1,0 +1,1369 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ProductFamilyInfo>
+  <ReplicationDate YYYY="2026" MM="6" DD="26" />
+  <Product ProdFamily="EGVWF" ProdFamilyDesc="XStream Excellent GVWF Water-Cooled Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006545">
+    <Translation LangID="33" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="14" LangConvStatus="C">GVWF - centrifugo condensato ad acqua ad alta velocità a levitazione magnetica serie Xstream</Translation>
+    <Translation LangID="3" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="6" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="20" LangConvStatus="C">EGVWF - High speed centrifugal Xstream™</Translation>
+    <Translation LangID="30" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="4" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="13" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="10" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="11" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="25" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="5" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="9" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="21" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+    <Translation LangID="22" LangConvStatus="C">EGVWF - High speed centrifugal Xstream</Translation>
+  </Product>
+  <Product ProdFamily="TEST1" ProdFamilyDesc="Test product family" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2004136" />
+  <Product ProdFamily="TEST" ProdFamilyDesc="Test product family" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2004125" />
+  <Product ProdFamily="EGVAF" ProdFamilyDesc="Sintesis eXcellent GVAF Air-Cooled Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006537">
+    <Translation LangID="9" LangConvStatus="C">Sintesis eXcellent GVAF, Refroidisseur de liquide à condensation par air</Translation>
+    <Translation LangID="3" LangConvStatus="C">Vzduchem chlazený chiller Sintesis o výkonech 125-450 t</Translation>
+    <Translation LangID="6" LangConvStatus="C">Sintesis - unidades condensadas por aire 125-450 toneladas Sintesis eXcellent - Epinal</Translation>
+    <Translation LangID="14" LangConvStatus="C">Sintesis eXcellent Refrigeratore di liquido raffreddato ad aria 125-450 Ton - Epinal</Translation>
+    <Translation LangID="25" LangConvStatus="C">125-450 Ton Air-Cooled Sintesis eXcellent - Epinal</Translation>
+    <Translation LangID="11" LangConvStatus="C">125-450 Ton Αερό-ψυκτο Sintesis-Epinal</Translation>
+    <Translation LangID="4" LangConvStatus="C">125-450 Ton Air-Cooled Sintesis eXcellent - Epinal</Translation>
+    <Translation LangID="5" LangConvStatus="C">SINTESIS Arrefecido a ar 125-450 Ton Sintesis eXcellent - Epinal</Translation>
+    <Translation LangID="13" LangConvStatus="C">125-450 Ton Léghűtéses Sintesis eXcellent - Epinal</Translation>
+    <Translation LangID="20" LangConvStatus="C">125-450 Ton Air-Cooled Sintesis eXcellent - Epinal</Translation>
+    <Translation LangID="22" LangConvStatus="C">125-450 Воздухоохлаждаемая холодильная машина - Эпиналь</Translation>
+    <Translation LangID="21" LangConvStatus="C">EGVAF-125-450 Ton Air-Cooled Sintesis - Epinal</Translation>
+    <Translation LangID="10" LangConvStatus="C">Wasserkühlmaschine luftgekühlt mit Axialventilatoren - GVAF</Translation>
+  </Product>
+  <Product ProdFamily="CVHP" ProdFamilyDesc="Medium Lift Heat Pump" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006963" />
+  <Product ProdFamily="CHSWE" ProdFamilyDesc="HSWE Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006951" />
+  <Product ProdFamily="CHSWB" ProdFamilyDesc="HSWB Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006769">
+    <Translation LangID="23" LangConvStatus="C">无油磁悬浮水冷冷水机组太仓</Translation>
+  </Product>
+  <Product ProdFamily="CHSWA" ProdFamilyDesc="HSWA Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006624">
+    <Translation LangID="23" LangConvStatus="C">无油磁悬浮水冷冷水机组</Translation>
+  </Product>
+  <Product ProdFamily="CHMWA" ProdFamilyDesc="HMWA Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006908">
+    <Translation LangID="23" LangConvStatus="P">HMWA无油磁悬浮水冷冷水机组</Translation>
+  </Product>
+  <Product ProdFamily="CHDW" ProdFamilyDesc="HDW Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006720">
+    <Translation LangID="0" LangConvStatus="C">Centrifugal Chiller Water-Cooled Agility</Translation>
+    <Translation LangID="23" LangConvStatus="C">磁悬浮离心机  太仓</Translation>
+  </Product>
+  <Product ProdFamily="CCGC" ProdFamilyDesc="Gear Drive Compressor" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2000471" />
+  <Product ProdFamily="CECTV" ProdFamilyDesc="ECTV Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006435">
+    <Translation LangID="23" LangConvStatus="C">CECTV 离心机 太仓</Translation>
+  </Product>
+  <Product ProdFamily="CECDH" ProdFamilyDesc="ECDH Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006436">
+    <Translation LangID="23" LangConvStatus="C">CECDH 离心机 太仓</Translation>
+  </Product>
+  <Product ProdFamily="CCVHS" ProdFamilyDesc="CVHM Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006461">
+    <Translation LangID="23" LangConvStatus="C">CVHS 太仓</Translation>
+  </Product>
+  <Product ProdFamily="ECTV" ProdFamilyDesc="CVHH R-1233zd 800T-2200T" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006289">
+    <Translation LangID="9" LangConvStatus="C">Groupe froid Centrifuge ECTV</Translation>
+  </Product>
+  <Product ProdFamily="CTV" ProdFamilyDesc="CVHE/F/G R-514A 200T-2000T" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="41">
+    <Translation LangID="27" LangConvStatus="C">離心式主機</Translation>
+    <Translation LangID="16" LangConvStatus="C"></Translation>
+    <Translation LangID="18" LangConvStatus="C">Enfriadora Centrífuga</Translation>
+    <Translation LangID="23" LangConvStatus="C">离心机</Translation>
+  </Product>
+  <Product ProdFamily="CCTV" ProdFamilyDesc="CTV Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006352">
+    <Translation LangID="23" LangConvStatus="C">单机头离心机 太仓</Translation>
+    <Translation LangID="18" LangConvStatus="C">Enfriadora Centrífuga</Translation>
+    <Translation LangID="27" LangConvStatus="C">離心式主機</Translation>
+    <Translation LangID="16" LangConvStatus="C"></Translation>
+  </Product>
+  <Product ProdFamily="ECDH" ProdFamilyDesc="CDHH R-1233zd 1500T- 4200T" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006290" />
+  <Product ProdFamily="CDH" ProdFamilyDesc="CDHF/G R-514A 1500T-4000T" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2000522" />
+  <Product ProdFamily="CCDH" ProdFamilyDesc="CDH Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006351">
+    <Translation LangID="23" LangConvStatus="C">双机头离心机 太仓</Translation>
+  </Product>
+  <Product ProdFamily="TACW" ProdFamilyDesc="Arctic Magnetic Bearing Water Cooled" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006785">
+    <Translation LangID="9" LangConvStatus="C">Groupe froid Centrifuge ECTV</Translation>
+  </Product>
+  <Product ProdFamily="CHSAG" ProdFamilyDesc="Air cooled High Speed Maglev Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006935" />
+  <Product ProdFamily="HDT" ProdFamilyDesc="Agility R-513A 600T-800T" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006959" />
+  <Product ProdFamily="HDW" ProdFamilyDesc="Agility R-513A 170T-525T" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006577" />
+  <Product ProdFamily="PRCTST2" ProdFamilyDesc="2nd Product Family for Price System Testing" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2000259" />
+  <Product ProdFamily="FFCTV" ProdFamilyDesc="CTV Customization" ProdSeqNbr="999" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTV" ProdDesc="Centrifugal Liquid Chillers" ID="2006928" />
+  <Product ProdFamily="CVKB" ProdFamilyDesc="Wye-Delta starters (CVKB) for  CH530/AdView" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006135" />
+  <Product ProdFamily="CVKL" ProdFamilyDesc="WYE DELTA STARTER" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006521" />
+  <Product ProdFamily="CVKM" ProdFamilyDesc="SOLID STATE STARTERS" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006522" />
+  <Product ProdFamily="PRG_" ProdFamilyDesc="Purge" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006872" />
+  <Product ProdFamily="CVST" ProdFamilyDesc="Medium Voltage Starters for CH530/AdView" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2005305" />
+  <Product ProdFamily="IN_EX" ProdFamilyDesc="INDIA LYNX EXAMPLE" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006469" />
+  <Product ProdFamily="PRGD" ProdFamilyDesc="EarthWise Purge" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2002622" />
+  <Product ProdFamily="CVRF" ProdFamilyDesc="CTV SYMBIO UPGRADE FOR UCP2 AND OLDER - FULL PANEL (CVRF)" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006771" />
+  <Product ProdFamily="CDUB" ProdFamilyDesc="CTV SYMBIO UPGRADE FOR CH530 AND NEWER - DISPLAY" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006781" />
+  <Product ProdFamily="AFDH_" ProdFamilyDesc="Air Cooled Adaptive Freq Drive w/AdaptiView" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006716" />
+  <Product ProdFamily="AFDK" ProdFamilyDesc="Adaptive Freq Drive Water/Refrig Cool CH530/AdView" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006288" />
+  <Product ProdFamily="AFDL" ProdFamilyDesc="Adaptive Freq Drive (AFDL) Air Cool AdView remote only" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006730" />
+  <Product ProdFamily="AFDJ" ProdFamilyDesc="Adaptive Freq Drive (AFDJ) Medium Voltage" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006732" />
+  <Product ProdFamily="AFD_R" ProdFamilyDesc="AFD Rnewal for Water/Refrig Cooled AFDs" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CTVU" ProdDesc="Centrifugal Chiller Upgrade Products" ID="2006326" />
+  <Product ProdFamily="ACCY_CHR" ProdFamilyDesc="Engineered Conversion Product Accessories" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CONV" ProdDesc="Centrifugal Chiller Refrigerant Retrofit Products" ID="2001671" />
+  <Product ProdFamily="ECSC" ProdFamilyDesc="ECSC -CTV CONVERSION TO R514A" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CONV" ProdDesc="Centrifugal Chiller Refrigerant Retrofit Products" ID="2006567" />
+  <Product ProdFamily="ERTWFXSE" ProdFamilyDesc="XStream RTWF XSE Water-to-Water" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006731">
+    <Translation LangID="6" LangConvStatus="C">ERTWF XSE - Screw V-Vi Chiller XStream</Translation>
+    <Translation LangID="9" LangConvStatus="C">ERTWF XSE - Xstream  Groupe EAU/EAU à compresseurs à Vis</Translation>
+  </Product>
+  <Product ProdFamily="ERTWF" ProdFamilyDesc="XStream RTWF Water-to-Water" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006508">
+    <Translation LangID="10" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+    <Translation LangID="9" LangConvStatus="C">ERTWF - Xstream  Groupe EAU/EAU à compresseurs à Vis</Translation>
+    <Translation LangID="33" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+    <Translation LangID="11" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+    <Translation LangID="3" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+    <Translation LangID="6" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+    <Translation LangID="20" LangConvStatus="C">Agregat Chłodzony Wodą ze Sprężarką Śrubową Serii XStream™</Translation>
+    <Translation LangID="30" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+    <Translation LangID="5" LangConvStatus="C">ERTWF - Chillers com Compressor Parafuso XStream</Translation>
+    <Translation LangID="21" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+    <Translation LangID="22" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+    <Translation LangID="4" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+    <Translation LangID="13" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+    <Translation LangID="14" LangConvStatus="C">RTWF - CHILLER A VITE serie XStream</Translation>
+    <Translation LangID="25" LangConvStatus="C">ERTWF - Screw Chiller XStream</Translation>
+  </Product>
+  <Product ProdFamily="ERTHF" ProdFamilyDesc="XStream RTHF Water-Cooled Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006546">
+    <Translation LangID="33" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+    <Translation LangID="30" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+    <Translation LangID="14" LangConvStatus="C">RTHF - Chiller a Vite serie XStream</Translation>
+    <Translation LangID="25" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+    <Translation LangID="5" LangConvStatus="C">ERTHF - Chillers com Compressor Parafuso XStream</Translation>
+    <Translation LangID="20" LangConvStatus="C">Agregat Chłodzony Wodą ze Sprężarką Śrubową Serii XStream™</Translation>
+    <Translation LangID="4" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+    <Translation LangID="13" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+    <Translation LangID="10" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+    <Translation LangID="11" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+    <Translation LangID="3" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+    <Translation LangID="6" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+    <Translation LangID="9" LangConvStatus="C">ERTHF - Xstream  Groupe EAU/EAU à compresseurs à Vis</Translation>
+    <Translation LangID="21" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+    <Translation LangID="22" LangConvStatus="C">ERTHF - Screw Chiller XStream</Translation>
+  </Product>
+  <Product ProdFamily="AQ" ProdFamilyDesc="XStream - AQG2 Water-to-Water" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006869" />
+  <Product ProdFamily="TCA" ProdFamilyDesc="Trane AC Magnetic Bearing" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006917" />
+  <Product ProdFamily="TCAA" ProdFamilyDesc="Trane AC Magnetic Bearing" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006800" />
+  <Product ProdFamily="ERTAFXSE" ProdFamilyDesc="Sintesis Prime RTAF XSE Air-Cooled Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006681">
+    <Translation LangID="5" LangConvStatus="C">Chiller de parafuso arrefecido a ar ERTAF XSE V-Vi</Translation>
+    <Translation LangID="14" LangConvStatus="C">RTAF XSE - Chiller a vite con Variable VI condensato ad aria</Translation>
+    <Translation LangID="10" LangConvStatus="C">ERTAF XSE Schraube V-Vi luftgekühlter Kaltwassersatz</Translation>
+    <Translation LangID="4" LangConvStatus="C">ERTAF XSE V-Vi luchtgekoelde koelmachine met schroefcompressor</Translation>
+    <Translation LangID="21" LangConvStatus="C">Răcitor de lichid cu compresor cu șurub răcit cu aer V-Vi ERTAF XSE</Translation>
+    <Translation LangID="6" LangConvStatus="C">Enfriadora de condensación por aire de tornillo V-Vi ERTAF XSE</Translation>
+    <Translation LangID="13" LangConvStatus="C">ERTAF XSE csavaros V-Vi léghűtéses hűtő</Translation>
+    <Translation LangID="22" LangConvStatus="C">Воздухоохлаждаемый чиллер ERTAF XSE с винтовым компрессором V-Vi</Translation>
+    <Translation LangID="3" LangConvStatus="C">ERTAF XSE šroubový vzduchový chladič V-Vi</Translation>
+    <Translation LangID="11" LangConvStatus="C">ERTAF XSE αερόψυκτο ψυκτικό συγκρότημα με ελικοειδή συμπιεστή V-Vi</Translation>
+    <Translation LangID="9" LangConvStatus="C">Sintesis RTAFXSE, Refroidisseur de liquide à condensation par air, compresseurs à vis</Translation>
+    <Translation LangID="20" LangConvStatus="C">Agregat chłodniczy ERTAF XSE śrubowy V-Vi chłodzony powietrzem</Translation>
+  </Product>
+  <Product ProdFamily="ERTAF" ProdFamilyDesc="Sintesis Prime RTAF Air-Cooled Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006438">
+    <Translation LangID="6" LangConvStatus="C">Sintesis - unidades condensadas por aire 090-205 toneladas- Epinal</Translation>
+    <Translation LangID="13" LangConvStatus="C">ERTAF 090-550 Ton Léghűtéses Sintesis - Epinal</Translation>
+    <Translation LangID="20" LangConvStatus="C">ERTAF — agregaty z chłodzeniem powietrznym Sintesis 090-550 ton — Epinal</Translation>
+    <Translation LangID="9" LangConvStatus="C">Sintesis RTAF, Refroidisseur de liquide à condensation par air, compresseurs à vis</Translation>
+    <Translation LangID="21" LangConvStatus="C">ERTAF - 090-450 Ton Air-Cooled Sintesis - Epinal</Translation>
+    <Translation LangID="10" LangConvStatus="C">Wasserkühlmaschine luftgekühlt mit Axialventilatoren Serie R™ - RTAF</Translation>
+    <Translation LangID="33" LangConvStatus="C">090-450 Ton Air-Cooled Sintesis - Epinal</Translation>
+    <Translation LangID="30" LangConvStatus="C">090-450 Ton Air-Cooled Sintesis - Epinal</Translation>
+    <Translation LangID="3" LangConvStatus="C">Vzduchový chladič Sintesis Epinal ERTAF - 90-550 t</Translation>
+    <Translation LangID="5" LangConvStatus="C">SINTESIS Arrefecido a ar 090-205 Ton - Epinal</Translation>
+    <Translation LangID="14" LangConvStatus="C">RTAF - Chiller a vite condensato ad aria</Translation>
+    <Translation LangID="22" LangConvStatus="C">090-550 Воздухоохлаждаемая холодильная машина - Эпиналь</Translation>
+    <Translation LangID="25" LangConvStatus="C">090-450 Ton Air-Cooled Sintesis - Epinal</Translation>
+    <Translation LangID="11" LangConvStatus="C">ERTAF - 090-550 Ton Αερόψυκτο Sintesis - Epinal</Translation>
+    <Translation LangID="4" LangConvStatus="C">ERTAF - 090-550 Ton luchtgekoelde Sintesis - Epinal</Translation>
+  </Product>
+  <Product ProdFamily="FFRLC" ProdFamilyDesc="Rotary Liquid Chiller Customization" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006921" />
+  <Product ProdFamily="CRTXC" ProdFamilyDesc="RTXC Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006518">
+    <Translation LangID="23" LangConvStatus="C">RTXC</Translation>
+  </Product>
+  <Product ProdFamily="ERTXC" ProdFamilyDesc="RTXC Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006750">
+    <Translation LangID="9" LangConvStatus="C">RTXC CE Air Cooled Series Heat Pump Chiller</Translation>
+    <Translation LangID="4" LangConvStatus="C">RTXC Taicang</Translation>
+    <Translation LangID="6" LangConvStatus="C">RTXC Taicang</Translation>
+    <Translation LangID="20" LangConvStatus="C">RTXC Taicang</Translation>
+    <Translation LangID="14" LangConvStatus="C">RTXC Taicang</Translation>
+    <Translation LangID="13" LangConvStatus="C">RTXC Taicang</Translation>
+    <Translation LangID="5" LangConvStatus="C">RTXC Taicang</Translation>
+    <Translation LangID="22" LangConvStatus="C">RTXC, Тайцан</Translation>
+    <Translation LangID="3" LangConvStatus="C">RTXC Taicang</Translation>
+    <Translation LangID="10" LangConvStatus="C">RTXC Taicang</Translation>
+    <Translation LangID="21" LangConvStatus="C">RTXC Taicang</Translation>
+    <Translation LangID="11" LangConvStatus="C">RTXC Taicang</Translation>
+  </Product>
+  <Product ProdFamily="RTXA" ProdFamilyDesc="RTXA+ (CH530)  Air-cooled Screw Heat Pump" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2003775">
+    <Translation LangID="18" LangConvStatus="C">Bomba de Calor Tipo Tornillo Enfriada por Aire - China </Translation>
+    <Translation LangID="23" LangConvStatus="C">风冷螺杆热泵机组－中国</Translation>
+  </Product>
+  <Product ProdFamily="RTWS" ProdFamilyDesc="RTWS Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006285">
+    <Translation LangID="23" LangConvStatus="C">65-125 冷吨R系列水冷螺杆冷水机组 -             太仓</Translation>
+  </Product>
+  <Product ProdFamily="CRTWL" ProdFamilyDesc="RTWL Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006896">
+    <Translation LangID="23" LangConvStatus="C">RTWL 水地源热泵机组</Translation>
+  </Product>
+  <Product ProdFamily="CRTWH" ProdFamilyDesc="RTWH-Water Souce Heat Pump Screw Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006489" />
+  <Product ProdFamily="ERTWD2" ProdFamilyDesc="RTWD Water-to-Water" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006759">
+    <Translation LangID="13" LangConvStatus="C">ERTWD - csavarkompresszoros hűtő új generáció</Translation>
+    <Translation LangID="5" LangConvStatus="C">ERTWD - Chiller de parafuso de nova geração</Translation>
+    <Translation LangID="6" LangConvStatus="C">Enfriadora con compresor de tornillo ERTWD de nueva generación</Translation>
+    <Translation LangID="20" LangConvStatus="C">ERTWD — agregat śrubowy nowej generacji</Translation>
+    <Translation LangID="22" LangConvStatus="C">ERTWD —  чиллер с винтовым компрессором — новое поколение</Translation>
+    <Translation LangID="3" LangConvStatus="C">ERTWD - chladicí jednotka se šroubovým kompresorem nové generace</Translation>
+    <Translation LangID="10" LangConvStatus="C">ERTWD – Schraubenverdichter Neue Generation</Translation>
+    <Translation LangID="4" LangConvStatus="C">ERTWD -  New generation-koelmachine met schroefcompressor</Translation>
+    <Translation LangID="21" LangConvStatus="C">ERTWD - Răcitor cu compresor cu șurub Noua generație</Translation>
+    <Translation LangID="11" LangConvStatus="C">ERTWD - Νέα γενιά ελικοειδών συμπιεστών</Translation>
+    <Translation LangID="9" LangConvStatus="C">Refroidisseur de liquide à compresseurs à vis ERTWD nouvelle génération</Translation>
+    <Translation LangID="14" LangConvStatus="C">ERTWD - Refrigeratore a vite di nuova generazione</Translation>
+  </Product>
+  <Product ProdFamily="CRTWD" ProdFamilyDesc="RTWD Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006459">
+    <Translation LangID="10" LangConvStatus="C">Kompakte Wasserkühlmaschine mit Schraubenverdichter Serie R(TM), wassergekühlt, 245 – 880 kW Kälteleistung</Translation>
+    <Translation LangID="25" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton vodno hlajen hladilni agregat</Translation>
+    <Translation LangID="3" LangConvStatus="C">Vodou chlazený chiller RTWD se šroubovými kompresoryřady R™  70-250 Tun</Translation>
+    <Translation LangID="4" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="28" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="6" LangConvStatus="C">RTWD Series R(TM) 70-250 Tn Enfriadora refrigerada por agua</Translation>
+    <Translation LangID="20" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="12" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="23" LangConvStatus="C">70-250冷吨R系列水冷螺杆冷水机组</Translation>
+    <Translation LangID="5" LangConvStatus="C">RTWD Série R(TM) 70-250 Ton Chiller arrefecido a água</Translation>
+    <Translation LangID="13" LangConvStatus="C">RTWD Széria R(TM) 70-150 Ton vízhűtéses folyadékhűtő</Translation>
+    <Translation LangID="11" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton ΥΔΡΟΨΥΚΤΟ ΨΥΚΤΙΚΟ ΣΥΓΚΡΟΤΗΜΑ</Translation>
+    <Translation LangID="14" LangConvStatus="C">RTWD serie 70-250 Ton gruppo frigo raffreddato ad acqua</Translation>
+    <Translation LangID="22" LangConvStatus="C">RTWD серия R™ 70-250 Тон водоохлаждемый охладитель жидкости</Translation>
+    <Translation LangID="7" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="29" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="24" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="9" LangConvStatus="C">Refroidisseur de liquide à compresseurs à vis RTWD Series R(TM)</Translation>
+    <Translation LangID="30" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="21" LangConvStatus="C">RTWD Seriile R(TM) 70-250 Ton Chiller cu Condensator Racit cu Apa</Translation>
+    <Translation LangID="32" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+  </Product>
+  <Product ProdFamily="ERTWD" ProdFamilyDesc="RTUD - Condenser -less Screw" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006487">
+    <Translation LangID="9" LangConvStatus="C">Refroidisseur de liquide à compresseurs à vis RTUD Series R(TM)</Translation>
+    <Translation LangID="30" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="11" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton ΥΔΡΟΨΥΚΤΟ ΨΥΚΤΙΚΟ ΣΥΓΚΡΟΤΗΜΑ</Translation>
+    <Translation LangID="22" LangConvStatus="C">RTWD серия R™ 60-270 Тон водоохлаждемый охладитель жидкости</Translation>
+    <Translation LangID="29" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="23" LangConvStatus="C">70-250冷吨R系列水冷螺杆冷水机组</Translation>
+    <Translation LangID="10" LangConvStatus="C">Kompakte Wasserkühlmaschinen-Modell mit Schraubenverdichter Serie R(TM), wassergekühlt, 245 – 880 kW Kälteleistu</Translation>
+    <Translation LangID="13" LangConvStatus="C">RTWD Széria R(TM) 60-270 Ton vízhűtéses folyadékhűtő</Translation>
+    <Translation LangID="14" LangConvStatus="C">RTWD serie 60-270 Ton gruppo frigo raffreddato ad acqua</Translation>
+    <Translation LangID="25" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="3" LangConvStatus="C">Vodou chlazený chiller RTWD se šroubovými kompresoryřady R™  60-270 Tun</Translation>
+    <Translation LangID="7" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="4" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="24" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="28" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="6" LangConvStatus="C">RTWD Series R(TM) 60-270 Tn Enfriadora refrigerada por agua</Translation>
+    <Translation LangID="20" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="21" LangConvStatus="C">RTWD Seriile R(TM) 60-270 Ton Chiller cu Condensator Racit cu Apa</Translation>
+    <Translation LangID="12" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="32" LangConvStatus="C">RTWD Series R(TM) 60-270 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="5" LangConvStatus="C">Chiller com Compressor Parafuso Série RTWD™ - Epinal</Translation>
+    <Translation LangID="33" LangConvStatus="C">Screw Chiller RTWD - Epinal</Translation>
+  </Product>
+  <Product ProdFamily="ERTHD" ProdFamilyDesc="RTHDevo Water-Cooled Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2003675">
+    <Translation LangID="8" LangConvStatus="C">Refroidisseurs de liquide à refroidissement par eau Series R - RTHD</Translation>
+    <Translation LangID="10" LangConvStatus="C">Wasserkühlmaschine, wassergekühlt mit Schraubenverdichter Serie R™ - RTHD</Translation>
+    <Translation LangID="14" LangConvStatus="C">Refrigeratore con condensazione ad acqua e compressore a vite Serie R™</Translation>
+    <Translation LangID="6" LangConvStatus="C">Enfriadora de condensación por agua con compresores scroll Series R™</Translation>
+    <Translation LangID="7" LangConvStatus="C">Water Cooled Chiller Screw Compressor Series R(TM)</Translation>
+    <Translation LangID="24" LangConvStatus="C">Water Cooled Chiller Screw Compressor Series R(TM)</Translation>
+    <Translation LangID="28" LangConvStatus="C">Water Cooled Chiller Screw Compressor Series R(TM)</Translation>
+    <Translation LangID="33" LangConvStatus="C">ERTHD - Water Cooled Chiller Screw Compressor Series R(TM)</Translation>
+    <Translation LangID="4" LangConvStatus="C">Watergekoelde koelmachine schroefcompressor series R™</Translation>
+    <Translation LangID="13" LangConvStatus="C">Vízhűtésű hűtőberendezés csavarkompresszor, R™ sorozat</Translation>
+    <Translation LangID="3" LangConvStatus="C">Vodou chlazená chladicí jednotka se šroubovým kompresorem řady R™ : RTHD</Translation>
+    <Translation LangID="20" LangConvStatus="C">Agregat Chłodzony Wodą ze Sprężarką Śrubową Serii R™</Translation>
+    <Translation LangID="21" LangConvStatus="C">Răcitor de lichid răcit cu apă cu compresor cu şurub Seria R™</Translation>
+    <Translation LangID="22" LangConvStatus="C">Водоохладитель с винтовым компрессором серии R™</Translation>
+    <Translation LangID="18" LangConvStatus="C">Enfriadora  de condensacion por Aqua Serie R modelo RTHD</Translation>
+    <Translation LangID="30" LangConvStatus="C">RTHD Vätskekylt vätskekylaggregat</Translation>
+    <Translation LangID="32" LangConvStatus="C">Water Cooled Chiller Screw Compressor Series R(TM)</Translation>
+    <Translation LangID="25" LangConvStatus="C">Water Cooled Chiller Screw Compressor Series R(TM)</Translation>
+    <Translation LangID="29" LangConvStatus="C">Water Cooled Chiller Screw Compressor Series R(TM)</Translation>
+    <Translation LangID="9" LangConvStatus="C">ERTHD Refroidisseur de liquide à condensation par eau, compresseur à vis</Translation>
+    <Translation LangID="11" LangConvStatus="C">Yδρόψυκτο ψυκτικό συγκρότημα με ελικοειδή συμπιεστή (screw) σειράς</Translation>
+    <Translation LangID="5" LangConvStatus="C">Chiller Arrefecido a Água com Compressor Parafuso Série R™</Translation>
+    <Translation LangID="17" LangConvStatus="C">Chiller arrefecido a agua Serie R modelo RTHD</Translation>
+  </Product>
+  <Product ProdFamily="CRTHD" ProdFamilyDesc="RTHD Taicang and Bangkok" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2003855">
+    <Translation LangID="23" LangConvStatus="C">R系列冷水机组-中国太仓及泰国曼谷</Translation>
+  </Product>
+  <Product ProdFamily="PN" ProdFamilyDesc="MTA Phoenix Air-to-Water chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006871" />
+  <Product ProdFamily="IRTWD" ProdFamilyDesc="India Water Cooled Series R(TM)" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006447">
+    <Translation LangID="10" LangConvStatus="C">Kompakte Wasserkühlmaschine mit Schraubenverdichter Serie R(TM), wassergekühlt, 245 – 880 kW Kälteleistung</Translation>
+    <Translation LangID="14" LangConvStatus="C">RTWD serie 70-250 Ton gruppo frigo raffreddato ad acqua</Translation>
+    <Translation LangID="22" LangConvStatus="C">RTWD серия R™ 70-250 Тон водоохлаждемый охладитель жидкости</Translation>
+    <Translation LangID="28" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="9" LangConvStatus="C">Refroidisseur de liquide à compresseurs à vis RTWD Series R(TM)</Translation>
+    <Translation LangID="23" LangConvStatus="C">70-250冷吨R系列水冷螺杆冷水机组</Translation>
+    <Translation LangID="13" LangConvStatus="C">RTWD Széria R(TM) 70-150 Ton vízhűtéses folyadékhűtő</Translation>
+    <Translation LangID="11" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton ΥΔΡΟΨΥΚΤΟ ΨΥΚΤΙΚΟ ΣΥΓΚΡΟΤΗΜΑ</Translation>
+    <Translation LangID="25" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton vodno hlajen hladilni agregat</Translation>
+    <Translation LangID="3" LangConvStatus="C">Vodou chlazený chiller RTWD se šroubovými kompresoryřady R™  70-250 Tun</Translation>
+    <Translation LangID="7" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="29" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="4" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="24" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="6" LangConvStatus="C">RTWD Series R(TM) 70-250 Tn Enfriadora refrigerada por agua</Translation>
+    <Translation LangID="30" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="20" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="21" LangConvStatus="C">RTWD Seriile R(TM) 70-250 Ton Chiller cu Condensator Racit cu Apa</Translation>
+    <Translation LangID="12" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="32" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="5" LangConvStatus="C">RTWD Série R(TM) 70-250 Ton Chiller arrefecido a água</Translation>
+  </Product>
+  <Product ProdFamily="IRTAC" ProdFamilyDesc="India Air Cooled Series R(TM)" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006419">
+    <Translation LangID="25" LangConvStatus="C">120-400 Ton Air-Cooled Series R(TM) - Epinal</Translation>
+    <Translation LangID="29" LangConvStatus="C">120-400 Ton Air-Cooled Series R(TM) - Epinal</Translation>
+    <Translation LangID="7" LangConvStatus="C">120-400 Ton Air-Cooled Series R(TM) - Epinal</Translation>
+    <Translation LangID="24" LangConvStatus="C">120-400 Ton Air-Cooled Series R(TM) - Epinal</Translation>
+    <Translation LangID="9" LangConvStatus="C">ERTAC Refroidisseur de liquide à condensation par air, tailles 120 à 400</Translation>
+    <Translation LangID="11" LangConvStatus="C">Aερόψυκτο ψυκτικό συγκρότημα, σειράς R(TM) 120-400 τόνων</Translation>
+    <Translation LangID="10" LangConvStatus="C">Wasserkühlmaschine luftgekühlt mit Axialventilatoren Serie R™ - RTAC</Translation>
+    <Translation LangID="8" LangConvStatus="C">Refroidisseur de liquide à condensation par air Series R - RTAC</Translation>
+    <Translation LangID="14" LangConvStatus="C">Refrigeratori di liquido condensati ad aria Serie R™ 120-400</Translation>
+    <Translation LangID="5" LangConvStatus="C">Série R™ Arrefecido a Ar de 120-400 Toneladas</Translation>
+    <Translation LangID="6" LangConvStatus="C">Unidades de condensación por aire 120-400 Ton Series R™</Translation>
+    <Translation LangID="30" LangConvStatus="C">120-400 ton luftkyld serie R™</Translation>
+    <Translation LangID="13" LangConvStatus="C">120-400 tonnás léghűtésű R sorozat™</Translation>
+    <Translation LangID="1" LangConvStatus="P"></Translation>
+    <Translation LangID="4" LangConvStatus="C">120-400 ton luchtgekoeld series R™</Translation>
+    <Translation LangID="20" LangConvStatus="C">120-400 Ton - Serie z Chłodzeniem Powietrznym R™</Translation>
+    <Translation LangID="22" LangConvStatus="C">120-400 Воздухоохлаждаемая холодильная машина Series R™</Translation>
+    <Translation LangID="31" LangConvStatus="C">120-400 Ton Air-Cooled Series R(TM) - Epinal</Translation>
+    <Translation LangID="32" LangConvStatus="C">120-400 Ton Air-Cooled Series R(TM) - Epinal</Translation>
+    <Translation LangID="0" LangConvStatus="C">120-400 Ton Air-Cooled Series R(TM) - Epinal</Translation>
+    <Translation LangID="12" LangConvStatus="C">120-400 Ton Air-Cooled Series R(TM) - Epinal</Translation>
+    <Translation LangID="28" LangConvStatus="C">120-400 Ton Air-Cooled Series R(TM) - Epinal</Translation>
+    <Translation LangID="17" LangConvStatus="C">Chiller arrefecido a ar Series R - RTAC</Translation>
+    <Translation LangID="18" LangConvStatus="C">Enfriadora de agua de condensacion por aire  Series R - RTAC </Translation>
+    <Translation LangID="3" LangConvStatus="C">Vzduchem chlazené jednotky řady R™ RTAC o výkonu 120-400 t</Translation>
+    <Translation LangID="21" LangConvStatus="C">Răcitoare de lichid răcite cu aer 120-400 tone, Seria R™</Translation>
+  </Product>
+  <Product ProdFamily="ERTSF" ProdFamilyDesc="City RTSF Water-to-Water" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006633">
+    <Translation LangID="14" LangConvStatus="C">RSTF (City) - CHILLER A VITE serie Xstream</Translation>
+    <Translation LangID="10" LangConvStatus="C">City RTSF - Screw Chiller </Translation>
+    <Translation LangID="22" LangConvStatus="C">ERTSF — винтовой чиллер XStream</Translation>
+    <Translation LangID="3" LangConvStatus="C">ERTSF – chladicí jednotka se šroubovými kompresory XStream</Translation>
+    <Translation LangID="11" LangConvStatus="C">ERTSF - Ψυκτικό συγκρότημα με ελικοειδή συμπιεστή XStream</Translation>
+    <Translation LangID="20" LangConvStatus="C">ERTSF — agregat śrubowy XStream</Translation>
+    <Translation LangID="13" LangConvStatus="C">ERTSF - Csavarhűtő XStream</Translation>
+    <Translation LangID="5" LangConvStatus="C">ERTSF - Chiller de parafuso XStream</Translation>
+    <Translation LangID="0" LangConvStatus="C">ERTSF - Screw Chiller XStream</Translation>
+    <Translation LangID="9" LangConvStatus="C">Refroidisseurs à condensation par eau City™ et pompes à chaleur eau-eau avec compresseur à vis</Translation>
+    <Translation LangID="4" LangConvStatus="C">ERTSF - XStream-koelmachine met schroefcompressor</Translation>
+    <Translation LangID="21" LangConvStatus="C">ERTSF - Răcitor cu compresor cu șurub XStream</Translation>
+    <Translation LangID="6" LangConvStatus="C">Enfriadora con compresor de tornillo ERTSF XStream</Translation>
+  </Product>
+  <Product ProdFamily="CRTXG" ProdFamilyDesc="CRTXG Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006777">
+    <Translation LangID="23" LangConvStatus="C">CRTXG 太仓</Translation>
+  </Product>
+  <Product ProdFamily="CRTMG" ProdFamilyDesc="CRTMG Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006803">
+    <Translation LangID="23" LangConvStatus="C">CRTMG 太仓</Translation>
+  </Product>
+  <Product ProdFamily="CRTAGXSE" ProdFamilyDesc="CRTAG XSE Taicang and Bangkok" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006778">
+    <Translation LangID="23" LangConvStatus="C">CRTAG 太仓</Translation>
+  </Product>
+  <Product ProdFamily="CRTAGUSE" ProdFamilyDesc="CRTAG Ultra Taicang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006924">
+    <Translation LangID="23" LangConvStatus="P">CRTAG Ultra Taicang</Translation>
+  </Product>
+  <Product ProdFamily="CRTAG" ProdFamilyDesc="CRTAG Taicang and Bangkok" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006557">
+    <Translation LangID="23" LangConvStatus="C">RTAG 太仓及曼谷</Translation>
+  </Product>
+  <Product ProdFamily="TEST6" ProdFamilyDesc="CRMTEST" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2004465" />
+  <Product ProdFamily="ACRB" ProdFamilyDesc="Ascend(TM) Air-Cooled Chiller Model" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006717" />
+  <Product ProdFamily="ACR" ProdFamilyDesc="Ascend (TM) Air-Cooled Chiller Model" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006788" />
+  <Product ProdFamily="ASDF" ProdFamilyDesc="ARIES Deep Freezing chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006961" />
+  <Product ProdFamily="RTWD" ProdFamilyDesc="70-250 Ton Water-Cooled" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2005715">
+    <Translation LangID="13" LangConvStatus="C">RTWD Széria R(TM) 70-150 Ton vízhűtéses folyadékhűtő</Translation>
+    <Translation LangID="14" LangConvStatus="C">RTWD serie 70-250 Ton gruppo frigo raffreddato ad acqua</Translation>
+    <Translation LangID="25" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton vodno hlajen hladilni agregat</Translation>
+    <Translation LangID="3" LangConvStatus="C">Vodou chlazený chiller RTWD se šroubovými kompresoryřady R™  70-250 Tun</Translation>
+    <Translation LangID="29" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="23" LangConvStatus="C">70-250冷吨R系列水冷螺杆冷水机组</Translation>
+    <Translation LangID="21" LangConvStatus="C">RTWD Seriile R(TM) 70-250 Ton Chiller cu Condensator Racit cu Apa</Translation>
+    <Translation LangID="12" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="5" LangConvStatus="C">RTWD Série R(TM) 70-250 Ton Chiller arrefecido a água</Translation>
+    <Translation LangID="4" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="24" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="32" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="10" LangConvStatus="C">Kompakte Wasserkühlmaschine mit Schraubenverdichter Serie R(TM), wassergekühlt, 245 – 880 kW Kälteleistung</Translation>
+    <Translation LangID="11" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton ΥΔΡΟΨΥΚΤΟ ΨΥΚΤΙΚΟ ΣΥΓΚΡΟΤΗΜΑ</Translation>
+    <Translation LangID="22" LangConvStatus="C">RTWD серия R™ 70-250 Тон водоохлаждемый охладитель жидкости</Translation>
+    <Translation LangID="7" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="20" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="28" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+    <Translation LangID="9" LangConvStatus="C">Refroidisseur de liquide à compresseurs à vis RTWD Series R(TM)</Translation>
+    <Translation LangID="6" LangConvStatus="C">RTWD Series R(TM) 70-250 Tn Enfriadora refrigerada por agua</Translation>
+    <Translation LangID="30" LangConvStatus="C">RTWD Series R(TM) 70-250 Ton Water-Cooled Chiller</Translation>
+  </Product>
+  <Product ProdFamily="RTHD" ProdFamilyDesc="175-400 Ton Water-Cooled" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2003495">
+    <Translation LangID="27" LangConvStatus="C">水冷式冰水主機 - 螺旋機系列</Translation>
+    <Translation LangID="16" LangConvStatus="C">수냉식 시리즈 R™</Translation>
+    <Translation LangID="23" LangConvStatus="C">R系列冷水机组-中国太仓</Translation>
+    <Translation LangID="18" LangConvStatus="C">Enfriada por Agua Series R (TM)</Translation>
+  </Product>
+  <Product ProdFamily="RTAC" ProdFamilyDesc="140-500 Ton Air-Cooled Series R(TM)" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2001601">
+    <Translation LangID="18" LangConvStatus="C">Enfriadora de agua Modelo  RTAC Series R® </Translation>
+    <Translation LangID="10" LangConvStatus="C">WASSERKÜHLMASCHINE LUFTGEKÜHLT MIT AXIALVENTILATOREN RTAC Series R®</Translation>
+    <Translation LangID="14" LangConvStatus="C">Refrigeratore di liquido condensato ad aria serie R (TM) modello RTAC+</Translation>
+    <Translation LangID="8" LangConvStatus="C">Refroidisseur de Liquide Modèle RTAC ® </Translation>
+    <Translation LangID="9" LangConvStatus="C">Refroidisseur de Liquide Modèle RTAC ® </Translation>
+    <Translation LangID="11" LangConvStatus="C">Aερόψυκτο ψυκτικό συγκρότημα, σειράς R ®</Translation>
+    <Translation LangID="5" LangConvStatus="C">CHILLER Modelo  RTAC Series R®</Translation>
+    <Translation LangID="17" LangConvStatus="P">CHILLER Modelo  RTAC Series R® </Translation>
+    <Translation LangID="6" LangConvStatus="C">Enfriadora de agua Modelo  RTAC Series R®</Translation>
+  </Product>
+  <Product ProdFamily="RTAF" ProdFamilyDesc="115-500 Ton Air-Cooled Sintesis (TM)" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="RLC" ProdDesc="Rotary Liquid Chillers" ID="2006474" />
+  <Product ProdFamily="TWE" ProdFamilyDesc="Water-to-Water process cooling" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006948" />
+  <Product ProdFamily="ECGWU" ProdFamilyDesc="Water Cooled Scroll Chiller " ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006931" />
+  <Product ProdFamily="TVWFSYS" ProdFamilyDesc="Trane Variable Water Flow System Outdoor Units" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006276" />
+  <Product ProdFamily="MWC" ProdFamilyDesc="Thermafit Water-Cooled [WXM][MWS]" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006804" />
+  <Product ProdFamily="AMC" ProdFamilyDesc="Thermafit Air-Cooled [AXM][MAS][MAR]" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006812" />
+  <Product ProdFamily="ECMAF" ProdFamilyDesc="Sintesis Balance CMAF Multi-Pipe Unit" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006741">
+    <Translation LangID="9" LangConvStatus="C">Sintesis Balance CMAF 4 tubes</Translation>
+    <Translation LangID="20" LangConvStatus="C">Rury CMAF 4 Agregat spiralny Sintesis Balance</Translation>
+    <Translation LangID="14" LangConvStatus="C">Refrigeratore Scroll 4 tubi Sintesis Balance CMAF</Translation>
+    <Translation LangID="5" LangConvStatus="C">Chiller scroll a 4 tubos CMAF Sintesis Balance</Translation>
+    <Translation LangID="22" LangConvStatus="C">4-трубный спиральный чиллер Sintesis Balance CMAF</Translation>
+    <Translation LangID="11" LangConvStatus="C">CMAF Ψυκτικό συγκρότημα με σπειροειδή συμπιεστή 4 σωλήνων Sintesis Balan</Translation>
+    <Translation LangID="3" LangConvStatus="C">CMAF 4trubková chladicí jednotka se spirálovým kompresorem Sintesis Balance</Translation>
+    <Translation LangID="10" LangConvStatus="C">CMAF 4-Rohr-Wasserkühlmaschine mit Spiralverdichter Sintesis Balance</Translation>
+    <Translation LangID="4" LangConvStatus="C">CMAF 4-pijps Sintesis Balance-koelmachine met scrollcompressor</Translation>
+    <Translation LangID="21" LangConvStatus="C">Răcitor cu compresor scroll CMAF cu 4 conducte Sintesis Balance</Translation>
+    <Translation LangID="6" LangConvStatus="C">Enfriadora scroll de 4 tubos CMAF Sintesis Balance</Translation>
+    <Translation LangID="13" LangConvStatus="C">CMAF 4 csöves spirálkompresszoros hűtő Sintesis Balance</Translation>
+  </Product>
+  <Product ProdFamily="ECGAF" ProdFamilyDesc="Sintesis Advantage CGAF / CXAF Air-to-Water" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006544">
+    <Translation LangID="14" LangConvStatus="C">Refrigeratori e pompe di calore scroll</Translation>
+    <Translation LangID="3" LangConvStatus="C">CGAF / CXAF – Chladicí jednotka se spirálovým kompresorem Sintesis Advantage</Translation>
+    <Translation LangID="9" LangConvStatus="C">Sintesis Advantage CGAF / CXAF à condensation par air</Translation>
+    <Translation LangID="22" LangConvStatus="C">Чиллер Sintesis Advantage с винтовым компрессором CGAF/CXAF</Translation>
+    <Translation LangID="11" LangConvStatus="C">CGAF / CXAF - Ψυκτικό συγκρότημα με σπειροειδή συμπιεστή Sintesis Advantage</Translation>
+    <Translation LangID="33" LangConvStatus="C">CGAF Air-Cooled Sintesis Advantage - Epinal</Translation>
+    <Translation LangID="5" LangConvStatus="C">CGAF/CXAF - Chiller scroll Sintesis Advantage</Translation>
+    <Translation LangID="6" LangConvStatus="C">Enfriadora scroll CGAF/CXAF Síntesis Advantage</Translation>
+    <Translation LangID="13" LangConvStatus="C">CGAF / CXAF - Ton Léghűtéses Sintesis - Epinal</Translation>
+    <Translation LangID="20" LangConvStatus="C">CGAF/CXAF — agregat spiralny Sintesis Advantage</Translation>
+    <Translation LangID="25" LangConvStatus="C">080-190 Ton Air-Cooled Sintesis Advantage - Epinal</Translation>
+    <Translation LangID="21" LangConvStatus="C">080-190 Ton Air-Cooled Sintesis Advantage - Epinal</Translation>
+    <Translation LangID="10" LangConvStatus="C">CXAF umschaltbarer luftgekühlter Scrollverdichter</Translation>
+    <Translation LangID="4" LangConvStatus="C">CGAF / CXAF - koelmachine met scrollcompressor Sintesis Advantage</Translation>
+    <Translation LangID="30" LangConvStatus="C">090-450 Ton Air-Cooled Sintesis Advantage - Epinal</Translation>
+  </Product>
+  <Product ProdFamily="FFCG" ProdFamilyDesc="Scroll Liquid Chiller Customization" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006922" />
+  <Product ProdFamily="ECXAU" ProdFamilyDesc="Module Chiller_CXAU" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006816" />
+  <Product ProdFamily="ACGWP" ProdFamilyDesc="Module Chiller_CGWP_Export" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006886" />
+  <Product ProdFamily="CXAJ" ProdFamilyDesc="Modular Chiller - CXAJ" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006499" />
+  <Product ProdFamily="TVWFHW" ProdFamilyDesc="Fan Coil Unit High Wall_TVWFSYS" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006293" />
+  <Product ProdFamily="TVWFCAST" ProdFamilyDesc="Fan Coil Unit Cassette_TVWFSYS" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006292" />
+  <Product ProdFamily="FLEX_N" ProdFamilyDesc="FLEX N Air-to-Water R290" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006946" />
+  <Product ProdFamily="FLEX_II" ProdFamilyDesc="FLEX II, HP HT Air to water" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006657">
+    <Translation LangID="9" LangConvStatus="C">FLEX II &amp; HSE Refroidisseur de liquide et pompe à chaleur à condensation par air, compresseurs scroll</Translation>
+    <Translation LangID="14" LangConvStatus="C">FLEX II, HP HT &amp; HSE Air to water</Translation>
+  </Product>
+  <Product ProdFamily="FLEX_3" ProdFamilyDesc="FLEX Air-to-Water" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006934">
+    <Translation LangID="14" LangConvStatus="C">FLEX Aria-Acqua</Translation>
+  </Product>
+  <Product ProdFamily="ECGAX" ProdFamilyDesc="Conquest CGAX / CXAX Air-to-Water" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006579">
+    <Translation LangID="22" LangConvStatus="C">Чиллер со спиральным компрессором Conquest ECGAX/ECXAX</Translation>
+    <Translation LangID="11" LangConvStatus="C">ECGAX / ECXAX Ψυκτικό συγκρότημα με σπειροειδή συμπιεστή Conquest</Translation>
+    <Translation LangID="3" LangConvStatus="C">Chladicí jednotka se spirálovým kompresorem ECGAX / ECXAX Conquest</Translation>
+    <Translation LangID="10" LangConvStatus="C">ECGAX / ECXAX Scrollverdichter Conquest</Translation>
+    <Translation LangID="4" LangConvStatus="C">ECGAX / ECXAX Conquest-koelmachine met scrollcompressor</Translation>
+    <Translation LangID="21" LangConvStatus="C">Răcitor cu compresor scroll ECGAX/ECXAX Conquest</Translation>
+    <Translation LangID="6" LangConvStatus="C">Enfriadora scroll ECGAX/ECXAX Conquest</Translation>
+    <Translation LangID="13" LangConvStatus="C">ECGAX / ECXAX Spirálkompresszoros hűtő Conquest</Translation>
+    <Translation LangID="5" LangConvStatus="C">Chiller Scroll ECGAX/ECXAX Conquest</Translation>
+    <Translation LangID="9" LangConvStatus="C">ECGAX / ECXAX Refroidisseur de liquide à condensation par air Conquest</Translation>
+    <Translation LangID="20" LangConvStatus="C">Agregat spiralny ECGAX / ECXAX Conquest</Translation>
+    <Translation LangID="14" LangConvStatus="C">Refrigeratore Scroll Conquest ECGAX/ECXAX</Translation>
+  </Product>
+  <Product ProdFamily="BCGWF" ProdFamilyDesc="City Advantage CGWF/CXWF/CCUF Water-to-Water" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006722">
+    <Translation LangID="14" LangConvStatus="C">CGWF/CXWF/CCUF - unità acqua acqua scroll City Advantage</Translation>
+    <Translation LangID="10" LangConvStatus="P"></Translation>
+    <Translation LangID="9" LangConvStatus="C">FLEX2O - CGWF/CXWF/CCUF Refroidisseurs à condensation par eau et pompes à chaleur eau-eau avec compresseur scroll</Translation>
+  </Product>
+  <Product ProdFamily="BCMAC" ProdFamilyDesc="CMAC Multi-pipe Unit" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006642">
+    <Translation LangID="14" LangConvStatus="C">Multi-pipe Unit</Translation>
+  </Product>
+  <Product ProdFamily="BCGB" ProdFamilyDesc="CGB - CXB Air cooled scroll chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006617">
+    <Translation LangID="14" LangConvStatus="C">CGB - CXB Air cooled scroll chiller</Translation>
+    <Translation LangID="9" LangConvStatus="C">CGB - CXB, Refroidisseur de liquide et pompe à chaleur à condensation par air, compresseurs scroll</Translation>
+  </Product>
+  <Product ProdFamily="MSTHCGAU" ProdFamilyDesc="CGAU Air Cooled Modular Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006880" />
+  <Product ProdFamily="MSTHCGAT" ProdFamilyDesc="CGAT Air Cool Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006686" />
+  <Product ProdFamily="MSTHCGAP" ProdFamilyDesc="CGAP Chilled Water Air Handling Unit" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006685" />
+  <Product ProdFamily="ACSA" ProdFamilyDesc="Ascend(TM) Air-Cooled Chiller Models ACS and ACX" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006622" />
+  <Product ProdFamily="PCU" ProdFamilyDesc="Air-Cooled Process Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006936" />
+  <Product ProdFamily="CCGAM" ProdFamilyDesc="Air-Cooled Chiller, Scroll Compressors" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006486">
+    <Translation LangID="10" LangConvStatus="C">Wasserkühlmaschine - luftgekühlt mit Spiralverdichter</Translation>
+    <Translation LangID="22" LangConvStatus="C">Scroll с воздушным охлаждением конденсатора</Translation>
+    <Translation LangID="4" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="6" LangConvStatus="C">Scroll refrigerado por aire</Translation>
+    <Translation LangID="23" LangConvStatus="C">涡旋式风冷冷水机组</Translation>
+    <Translation LangID="18" LangConvStatus="C">Espiral enfriada por aire</Translation>
+    <Translation LangID="13" LangConvStatus="C">Léghűtéses Scroll</Translation>
+    <Translation LangID="21" LangConvStatus="C">Racitoare de lichid cu compresor scroll</Translation>
+    <Translation LangID="11" LangConvStatus="C">Αερόψυκτο - Scroll</Translation>
+    <Translation LangID="14" LangConvStatus="C">Scroll ad aria</Translation>
+    <Translation LangID="25" LangConvStatus="C">Zracno hlajen scroll</Translation>
+    <Translation LangID="9" LangConvStatus="C">CGAM Refroidisseur de liquide à condensation par air, compresseur Scroll</Translation>
+    <Translation LangID="31" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="5" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="7" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="32" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="20" LangConvStatus="C">Agregat chłodzony powietrzem ze sprężarkami typu scroll</Translation>
+    <Translation LangID="24" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="30" LangConvStatus="C">Luftkylda Scrollagregat</Translation>
+    <Translation LangID="3" LangConvStatus="C">Vzduchem chlazený scroll</Translation>
+    <Translation LangID="29" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="17" LangConvStatus="C">_(CGAM) - Chiller Scroll com Condensação a Ar</Translation>
+  </Product>
+  <Product ProdFamily="ECXC" ProdFamilyDesc="Air to water Scroll with R454B" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006911">
+    <Translation LangID="9" LangConvStatus="C">Pompe à chaleur air/eau au R454B</Translation>
+  </Product>
+  <Product ProdFamily="LEAF" ProdFamilyDesc="Air Source Scroll Heat Pump with R290" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006889">
+    <Translation LangID="10" LangConvStatus="C">Luft-Wasser Scroll-Waermepumpe mit R290</Translation>
+    <Translation LangID="9" LangConvStatus="P">Pompe à chaleur air/eau au propane</Translation>
+  </Product>
+  <Product ProdFamily="ARIES" ProdFamilyDesc="Air Cooled Reciprocating Chiller with R290" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006884">
+    <Translation LangID="9" LangConvStatus="P">Refroidisseur à condensation à air</Translation>
+  </Product>
+  <Product ProdFamily="TAE" ProdFamilyDesc="Air Cooled Process Chiller" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006887">
+    <Translation LangID="10" LangConvStatus="C">Luftgekühlter Prozesskühler</Translation>
+    <Translation LangID="14" LangConvStatus="C">Chiller di processo condensato ad aria</Translation>
+  </Product>
+  <Product ProdFamily="ASCO" ProdFamilyDesc="ARIES N -  Air-to-Water R290" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006929" />
+  <Product ProdFamily="CGAH_MYS" ProdFamilyDesc="60 to 100 Ton Air Cooled Scroll Chiller - Penang" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2004705" />
+  <Product ProdFamily="CGAK" ProdFamilyDesc="5-30 Ton Air-Cooled Liquid Chiller Koolman 500 Series-Taiwan" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2001651">
+    <Translation LangID="18" LangConvStatus="C">Koolman Series 500 - Enfriadora de Agua Helada Enfriada por Aire de 5-30 Ton</Translation>
+  </Product>
+  <Product ProdFamily="MINICGAK" ProdFamilyDesc="3 - 5 Ton Mini CGAK Air Cooled Liquid Chiller - Taiwan" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2002171" />
+  <Product ProdFamily="CGAH" ProdFamilyDesc="20-60 Ton Air-Cooled Liquid Chiller - Taiwan" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2000772">
+    <Translation LangID="27" LangConvStatus="C">20-60冷噸氣冷式冰水主機 - 台灣製造</Translation>
+  </Product>
+  <Product ProdFamily="CGAM" ProdFamilyDesc="20-130 Ton Air-Cooled" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006125">
+    <Translation LangID="20" LangConvStatus="C">Agregat chłodzony powietrzem ze sprężarkami typu scroll</Translation>
+    <Translation LangID="10" LangConvStatus="C">Wasserkühlmaschine - luftgekühlt mit Spiralverdichter</Translation>
+    <Translation LangID="21" LangConvStatus="C">Racitoare de lichid cu compresor scroll</Translation>
+    <Translation LangID="14" LangConvStatus="C">Scroll ad aria</Translation>
+    <Translation LangID="22" LangConvStatus="C">Scroll с воздушным охлаждением конденсатора</Translation>
+    <Translation LangID="3" LangConvStatus="C">Vzduchem chlazený scroll</Translation>
+    <Translation LangID="29" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="17" LangConvStatus="C">_(CGAM) - Chiller Scroll com Condensação a Ar</Translation>
+    <Translation LangID="31" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="4" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="5" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="6" LangConvStatus="C">Scroll refrigerado por aire</Translation>
+    <Translation LangID="7" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="32" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="24" LangConvStatus="C">Air-Cooled Scroll</Translation>
+    <Translation LangID="30" LangConvStatus="C">Luftkylda Scrollagregat</Translation>
+    <Translation LangID="23" LangConvStatus="C">涡旋式风冷冷水机组</Translation>
+    <Translation LangID="18" LangConvStatus="C">Espiral enfriada por aire</Translation>
+    <Translation LangID="13" LangConvStatus="C">Léghűtéses Scroll</Translation>
+    <Translation LangID="11" LangConvStatus="C">Αερόψυκτο - Scroll</Translation>
+    <Translation LangID="25" LangConvStatus="C">Zracno hlajen scroll</Translation>
+    <Translation LangID="9" LangConvStatus="C">CGAM Refroidisseur de liquide à condensation par air, compresseur Scroll</Translation>
+  </Product>
+  <Product ProdFamily="CGWP" ProdFamilyDesc="10-100 Ton  Water Cooled Scroll Chiller - Taiwan" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2001981">
+    <Translation LangID="27" LangConvStatus="C">10-100冷噸水冷式冰水主機 - 台灣製造</Translation>
+  </Product>
+  <Product ProdFamily="ASG2" ProdFamilyDesc="ARIES G Air-to-Water and Free Cooling R454B" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="CG" ProdDesc="Scroll Liquid Chillers" ID="2006947" />
+  <Product ProdFamily="RMWH" ProdFamilyDesc="Refrigerant Monitor (TruSense RMWH MG)" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="SAFT" ProdDesc="Mechanical Room Safety Products" ID="2006581" />
+  <Product ProdFamily="RMW_" ProdFamilyDesc="Refrigerant Monitor" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="SAFT" ProdDesc="Mechanical Room Safety Products" ID="2006907" />
+  <Product ProdFamily="CAU_LG" ProdFamilyDesc="80-120 Ton Air-Cooled Condensers" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="ACDS" ProdDesc="Air-Cooled Condensers" ID="32" />
+  <Product ProdFamily="CXRC" ProdFamilyDesc="20-60 Ton Commercial SC Air-Cooled Condenser " ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="ACDS" ProdDesc="Air-Cooled Condensers" ID="2001122" />
+  <Product ProdFamily="CAU_SM" ProdFamilyDesc="20-120 Ton Air-Cooled Condensers" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="ACDS" ProdDesc="Air-Cooled Condensers" ID="34" />
+  <Product ProdFamily="CHILLER" ProdFamilyDesc="Trane Rental Services Temporary Cooling Equipment" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="TEMP" ProdDesc="Temporary Cooling" ID="2000691" />
+  <Product ProdFamily="CHILLER2" ProdFamilyDesc="Trane Rental Services Sales" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="TEMP" ProdDesc="Temporary Cooling" ID="2001291" />
+  <Product ProdFamily="EQUIP" ProdFamilyDesc="Trane Rental Services Equipment Modification" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="TEMP" ProdDesc="Temporary Cooling" ID="2002401" />
+  <Product ProdFamily="RSSA0565" ProdFamilyDesc="Rental Select Service Agreements" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="TEMP" ProdDesc="Temporary Cooling" ID="2005995" />
+  <Product ProdFamily="LSTO" ProdFamilyDesc="L-STORE - Portable cold store" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="MSCR" ProdDesc="Thermal Energy Storage" ID="2006960" />
+  <Product ProdFamily="ICESYSOP" ProdFamilyDesc="Ice System Options" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="MSCR" ProdDesc="Thermal Energy Storage" ID="2006621" />
+  <Product ProdFamily="ICEBANK" ProdFamilyDesc="Ice Bank Energy Storage Tanks" ProdSeqNbr="1" ProdClass="RF" ProdClassDesc="Refrigeration" Prod="MSCR" ProdDesc="Thermal Energy Storage" ID="2006595" />
+  <Product ProdFamily="MTZ" ProdFamilyDesc="R22 Rooftops" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006275" />
+  <Product ProdFamily="MTZ_60HZ" ProdFamilyDesc="MTZ Rooftops LAR 60Hz" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006724" />
+  <Product ProdFamily="MTZ_50HZ" ProdFamilyDesc="MTZ Rooftops LAR 50Hz" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006560" />
+  <Product ProdFamily="EICD-ACC" ProdFamilyDesc="Airfinity Packaged Rooftop" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006550" />
+  <Product ProdFamily="EICD" ProdFamilyDesc="Airfinity Packaged Rooftop" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006510">
+    <Translation LangID="14" LangConvStatus="C">Unità Rooftop </Translation>
+    <Translation LangID="10" LangConvStatus="C">EICD - Airfinity Kompakt-Dachklimagerät</Translation>
+    <Translation LangID="20" LangConvStatus="C">EICD Airfinity Packaged Rooftop</Translation>
+    <Translation LangID="21" LangConvStatus="C">Unitate de climatizare monobloc de acoperiș Airfinity</Translation>
+    <Translation LangID="6" LangConvStatus="C">EICD - Rooftop Compacto Airfinity</Translation>
+    <Translation LangID="9" LangConvStatus="C">EICD - Airfinity Rooftop</Translation>
+    <Translation LangID="11" LangConvStatus="C">Αυτόνομη μονάδα οροφής Airfinity</Translation>
+    <Translation LangID="22" LangConvStatus="C">EICD - Airfinity Packaged Rooftop</Translation>
+    <Translation LangID="30" LangConvStatus="C">EICD Airfinity Packaged Rooftop</Translation>
+    <Translation LangID="4" LangConvStatus="C">EICD Airfinity Packaged Rooftop</Translation>
+    <Translation LangID="5" LangConvStatus="C">EICD - Unidades Rooftop Airfinity</Translation>
+    <Translation LangID="3" LangConvStatus="C">Rooftopová jednotka Airfinity EICD</Translation>
+    <Translation LangID="25" LangConvStatus="C">EICD - Airfinity Packaged Rooftop</Translation>
+    <Translation LangID="13" LangConvStatus="C">EICD - Airfinity Rooftop</Translation>
+    <Translation LangID="28" LangConvStatus="C">Airfinity Packaged Rooftop</Translation>
+  </Product>
+  <Product ProdFamily="ROOFV3" ProdFamilyDesc="22-51 Ton Pkgd. Cooling/Heat Pump Rooftop R407C-CTK/CWK" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006277" />
+  <Product ProdFamily="FFRT" ProdFamilyDesc="Rooftop Air Conditioner Customization" ProdSeqNbr="9000" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006920" />
+  <Product ProdFamily="HAXX" ProdFamilyDesc="Horizon Flex Unit" ProdSeqNbr="1200" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006740" />
+  <Product ProdFamily="T4V" ProdFamilyDesc="12 1/2-25 Ton Packaged Unitary Cooling Rooftop - CTO" ProdSeqNbr="404" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006337" />
+  <Product ProdFamily="Y4V" ProdFamilyDesc="12 1/2 -25 Ton Packaged Unitary Gas/Elec Rooftop - CTO" ProdSeqNbr="403" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006347" />
+  <Product ProdFamily="T4C" ProdFamilyDesc="3-10 Ton R-410A PKGD Unitary Cooling Rooftop" ProdSeqNbr="402" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2004825" />
+  <Product ProdFamily="Y4C" ProdFamilyDesc="3-10 Ton R-410A PKGD Unitary Gas/Electric Rooftop" ProdSeqNbr="401" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2004925" />
+  <Product ProdFamily="IMPACK" ProdFamilyDesc="2-5 ton Packaged Impack Rooftop" ProdSeqNbr="40" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006915" />
+  <Product ProdFamily="13YC" ProdFamilyDesc="2-5 ton Package Gas/Elec. Rooftop Convert" ProdSeqNbr="36" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2004935" />
+  <Product ProdFamily="13TC" ProdFamilyDesc="2–5 ton Package Cooling Rooftop Convert" ProdSeqNbr="35" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2005035" />
+  <Product ProdFamily="BPGDG" ProdFamilyDesc="3-25 Ton Pkgd Gas/Elec Rooftop - Foundation - (BPGDG)" ProdSeqNbr="29" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006426" />
+  <Product ProdFamily="BPGDE" ProdFamilyDesc="3-25 Ton  Pkgd Elec/Elec Rooftop - Foundation - (BPGDE)" ProdSeqNbr="28" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006425" />
+  <Product ProdFamily="PREC" ProdFamilyDesc="3 - 25 Ton Precedent Unitary Rooftops" ProdSeqNbr="26" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006773" />
+  <Product ProdFamily="VOYAGER3" ProdFamilyDesc="27 1/2-50 Ton Packaged Commercial Rooftop" ProdSeqNbr="23" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2000262">
+    <Translation LangID="18" LangConvStatus="C">27 1/2-50 Ton Unidad Tipo Paquete Comercial </Translation>
+  </Product>
+  <Product ProdFamily="LRGRTU" ProdFamilyDesc="IPAK 3 20-75 ton Packaged Rooftop" ProdSeqNbr="19" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006540" />
+  <Product ProdFamily="IP2" ProdFamilyDesc="IPAK 2 90-150T Packaged Rooftop" ProdSeqNbr="18" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006786" />
+  <Product ProdFamily="IP1LG" ProdFamilyDesc="IPAK 1 90-130T Packaged Rooftop" ProdSeqNbr="16" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006779" />
+  <Product ProdFamily="IP1SM" ProdFamilyDesc="IPAK 1 20-75T Packaged Rooftop" ProdSeqNbr="13" ProdClass="UN" ProdClassDesc="Unitary" Prod="RT" ProdDesc="Rooftop Air Conditioners" ID="2006770" />
+  <Product ProdFamily="ZWAVE" ProdFamilyDesc="Z Wave" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006339" />
+  <Product ProdFamily="MSTHWTK" ProdFamilyDesc="WTK Mini Split Condensing Unit " ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2005025" />
+  <Product ProdFamily="VRFSYS" ProdFamilyDesc="Variable Refrigerant Flow System - 8 to  48 HP (Tica)" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006235" />
+  <Product ProdFamily="VRF_IR" ProdFamilyDesc="VRF Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006208" />
+  <Product ProdFamily="UMATCH" ProdFamilyDesc="U-Match Heat Pump Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006334" />
+  <Product ProdFamily="UMATCHGO" ProdFamilyDesc="U-MATCH R410 GOOD - LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006529" />
+  <Product ProdFamily="UMATCH16" ProdFamilyDesc="U-MATCH 16 INVERTER - LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006530" />
+  <Product ProdFamily="UMATCH20" ProdFamilyDesc="U Match 20 Series LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006527" />
+  <Product ProdFamily="VWF" ProdFamilyDesc="Trane Variable Water Flow System Mini Split Indoor Units" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006205" />
+  <Product ProdFamily="TVR" ProdFamilyDesc="Trane Variable Refrigerant Flow System - TVR II (Asia)" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006350" />
+  <Product ProdFamily="TYKBTHA" ProdFamilyDesc="TYKB - Inverter Ducted PAC for Thailand" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006736" />
+  <Product ProdFamily="MSTHTYK" ProdFamilyDesc="TYK Outdoor Mini Split - STD Eff Inverter" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006755" />
+  <Product ProdFamily="MSTHTYH" ProdFamilyDesc="TYH - Odyssey Split System Light Commercial AHU Inverter" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006743" />
+  <Product ProdFamily="TYATHA" ProdFamilyDesc="TYA - Inverter Ducted PAC for Thailand" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006735" />
+  <Product ProdFamily="TVRC_OD" ProdFamilyDesc="TVR Outdoor Units" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006737" />
+  <Product ProdFamily="MSTHTTX" ProdFamilyDesc="TTX Mini Split Condensing Unit ~ Configurable" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2005005" />
+  <Product ProdFamily="MSTHTTV" ProdFamilyDesc="TTV Large Commercial Split System Condensing Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006709" />
+  <Product ProdFamily="MSTHTTT" ProdFamilyDesc="TTT Multisplit System CDU with Triple Compressor" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006706" />
+  <Product ProdFamily="MSTHTTK" ProdFamilyDesc="TTK Mini Split Condensing Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2004995" />
+  <Product ProdFamily="MSTHTTA" ProdFamilyDesc="TTA Light Commercial Split System Condensing Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006675" />
+  <Product ProdFamily="SCENIC2" ProdFamilyDesc="Scenic - Multi-VRV Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2005255" />
+  <Product ProdFamily="TRSS-2" ProdFamilyDesc="Residential Split Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2005165" />
+  <Product ProdFamily="TRSS" ProdFamilyDesc="Residental Split Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2003321" />
+  <Product ProdFamily="MSTHRTUT" ProdFamilyDesc="RTUT - Outdoor Air-Cooled Remote Condensing Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006957" />
+  <Product ProdFamily="MSTHRAUT" ProdFamilyDesc="Outdoor Air-Cooled Remote Condensing Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006758" />
+  <Product ProdFamily="MSTHTWE" ProdFamilyDesc="Odyssey Split System Light Commercial AHU Heatpump" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006710" />
+  <Product ProdFamily="MSTHTTH" ProdFamilyDesc="Odyssey Split System Light Commercial AHU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006705" />
+  <Product ProdFamily="C_SSC2" ProdFamilyDesc="Odyssey Split System - China" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2005185">
+    <Translation LangID="23" LangConvStatus="C">分体风管机组-中国</Translation>
+  </Product>
+  <Product ProdFamily="MSTHTYA" ProdFamilyDesc="Odyssey Inverter Light Commercial Split System AHU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006711" />
+  <Product ProdFamily="MSTHTTD" ProdFamilyDesc="Multisplit System Condensing Unit with Dual Compressor" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006704" />
+  <Product ProdFamily="MSPLIT16" ProdFamilyDesc="Multi Split 16 SEER - LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006528" />
+  <Product ProdFamily="MISCUNIT" ProdFamilyDesc="Miscellaneous Unitary Models" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2004735" />
+  <Product ProdFamily="MSTHMWX" ProdFamilyDesc="Minisplit Convertible Heat Pump ID Units" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006701" />
+  <Product ProdFamily="MSTHMWD" ProdFamilyDesc="Minisplit Ceiling Concealed Heat Pump ID Units" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006700" />
+  <Product ProdFamily="MSGOOD" ProdFamilyDesc="Mini Split Good R410a - LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006547" />
+  <Product ProdFamily="MSPLT16I" ProdFamilyDesc="Mini Split 16 SEER Inverter - LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006543" />
+  <Product ProdFamily="MSTHMYX" ProdFamilyDesc="MYX - Minisplit Indoor Ceiling convertible Inverter " ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006882" />
+  <Product ProdFamily="MSTHMYV" ProdFamilyDesc="MYV - Minisplit Indoor Tall Floor Inverter Air Conditioner" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006780" />
+  <Product ProdFamily="MSTHMYD" ProdFamilyDesc="MYD - Minisplit Indoor Concealed Inverter Air Conditioner" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006813" />
+  <Product ProdFamily="MSTHMYC" ProdFamilyDesc="MYC - Minisplit Indoor Inverter Cassette Air Conditioner" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006894" />
+  <Product ProdFamily="MSTHMCX" ProdFamilyDesc="MCX Mini Split Fan Coil Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2004965" />
+  <Product ProdFamily="MSTHMCV" ProdFamilyDesc="MCV Mini Split Fan Coil Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2004985" />
+  <Product ProdFamily="MSTHMCF" ProdFamilyDesc="MCF Minisplit Floor Stand Concealed Air Conditioner" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006699" />
+  <Product ProdFamily="MSTHMCD" ProdFamilyDesc="MCD Mini Split Fan Coil Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2004975" />
+  <Product ProdFamily="MSTHMCC" ProdFamilyDesc="MCC - Minisplit 4-Ways Cassette Air Conditioner" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006698" />
+  <Product ProdFamily="MSTHMCAE" ProdFamilyDesc="MCAE - Minisplit 1-Way Cassette R32 Air Conditioner" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006697" />
+  <Product ProdFamily="MSTHTYE" ProdFamilyDesc="Inverter Odyssey Split System Air Handling Unit Cooling" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006790" />
+  <Product ProdFamily="RASPLIT" ProdFamilyDesc="IntelliCore 20-120T Air-Cooled Cond" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006885" />
+  <Product ProdFamily="HWCVL" ProdFamilyDesc="High Wall Cooling and Heat Pump Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006492" />
+  <Product ProdFamily="MDHIWALL" ProdFamilyDesc="High Wall Cooling and Heat Pump Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006242" />
+  <Product ProdFamily="CSSC2" ProdFamilyDesc="Duct splits heat pump - China Source" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2005055" />
+  <Product ProdFamily="PC333" ProdFamilyDesc="DPG Product with DSO Quote" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2001251" />
+  <Product ProdFamily="MSTHRAUP" ProdFamilyDesc="Cooling Only Split Type Condensing Unit (Large Commercial)" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006676" />
+  <Product ProdFamily="MSTHCWFA" ProdFamilyDesc="Chilled Water 4-Way Cassette Fan Coil Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006972" />
+  <Product ProdFamily="ILLUSION" ProdFamilyDesc="Ceiling Concealed Heat Pump Units" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2005576" />
+  <Product ProdFamily="INSIGHT" ProdFamilyDesc="Ceiling Concealed Heat Pump Units" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2005585" />
+  <Product ProdFamily="MSTHCWS" ProdFamilyDesc="CWS Ceiling Concealed Cassette Chilled Water Coil Type" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006687" />
+  <Product ProdFamily="MSTHCWAA" ProdFamilyDesc="CWAA One-Way Cassette Chilled Water Fan Coil" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006721" />
+  <Product ProdFamily="AMSTAR" ProdFamilyDesc="Ameristar Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006362" />
+  <Product ProdFamily="RAUC80" ProdFamilyDesc="80-120 Ton Air-Cooled Condensing Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="101">
+    <Translation LangID="18" LangConvStatus="C">Unidad Condensadora Enfriada por Aire 80-120 Ton</Translation>
+  </Product>
+  <Product ProdFamily="MS3G60HZ" ProdFamilyDesc="60 Hz Cooling &amp; Heat Pump High-Wall Single Split Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2002561" />
+  <Product ProdFamily="ODY_O" ProdFamilyDesc="6 - 25 Ton Unitary Split Systems Outdoor" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006549" />
+  <Product ProdFamily="ODY_I" ProdFamilyDesc="6 - 25 Ton Unitary Split Systems Indoor" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006548" />
+  <Product ProdFamily="TWE410" ProdFamilyDesc="6 - 20 Ton Split Systems Air Handlers R410- Taicang - TWE" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006415" />
+  <Product ProdFamily="TWE407" ProdFamilyDesc="6 - 20 Ton Split Systems Air Handlers - Taicang - TWE" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006318" />
+  <Product ProdFamily="TWA410" ProdFamilyDesc="6 - 20 Ton Split CO/HP Unitray R410C-Taicang-TTA/TWA" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006414" />
+  <Product ProdFamily="TWA407" ProdFamilyDesc="6 - 20 Ton Split CO/HP Unitray R407C-Taicang-TTA/TWA" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006317" />
+  <Product ProdFamily="MS3G50HZ" ProdFamilyDesc="50Hz Window Split &amp; High-Wall Cooling Single Split Systems " ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2002541" />
+  <Product ProdFamily="MS3G50HP" ProdFamilyDesc="50 Hz  High-Wall Heat Pump Single Split Systems " ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2002571" />
+  <Product ProdFamily="MS3GHPMS" ProdFamilyDesc="50 &amp; 60 Hz High-Wall Heat Pump Multi-Split Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2003371" />
+  <Product ProdFamily="MS3GCOMS" ProdFamilyDesc="50 &amp; 60 Hz High-Wall Cooling Only Multi-Split Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2002251" />
+  <Product ProdFamily="MS3GHPCC" ProdFamilyDesc="50 &amp; 60 Hz  Heat Pump Ceiling Cassette Systems " ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2003401" />
+  <Product ProdFamily="MS3GCOCC" ProdFamilyDesc="50 &amp; 60 Hz  Cooling Only Ceiling Cassette Systems " ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2003381" />
+  <Product ProdFamily="MLTSPLIT" ProdFamilyDesc="23 SEER MULTI SPLIT LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006714" />
+  <Product ProdFamily="RAUC20" ProdFamilyDesc="20-60 Ton Air-Cooled Condensing Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="102" />
+  <Product ProdFamily="SSC" ProdFamilyDesc="1.5 - 5 Ton Unitary Split Systems" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2000541" />
+  <Product ProdFamily="FFSS" ProdFamilyDesc="Split System Air Conditioners Customization" ProdSeqNbr="9999" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006930" />
+  <Product ProdFamily="UMATCH_I" ProdFamilyDesc="UMATCH Inverter LAR" ProdSeqNbr="10" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006713" />
+  <Product ProdFamily="BRA_TVR" ProdFamilyDesc="BRAZIL - TVR FROM STOCK" ProdSeqNbr="10" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006505" />
+  <Product ProdFamily="BRA_MS" ProdFamilyDesc="BRAZIL - MS FROM STOCK" ProdSeqNbr="10" ProdClass="UN" ProdClassDesc="Unitary" Prod="SS" ProdDesc="Split System Air Conditioners" ID="2006506" />
+  <Product ProdFamily="MSTHWCVS" ProdFamilyDesc="Water Cooled Self-Contain Air Conditioner" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKG" ProdDesc="Vertical Self-Contained Air Conditioners" ID="2006712" />
+  <Product ProdFamily="C_E-SWUT" ProdFamilyDesc="Separate Self-Contained Water Cooled" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKG" ProdDesc="Vertical Self-Contained Air Conditioners" ID="2006757" />
+  <Product ProdFamily="C_E-SRUB" ProdFamilyDesc="Separate Self-Contained Air Cooled" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKG" ProdDesc="Vertical Self-Contained Air Conditioners" ID="2006756" />
+  <Product ProdFamily="MSTHSWUT" ProdFamilyDesc="SWUT Self-Contained Water Cooled" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKG" ProdDesc="Vertical Self-Contained Air Conditioners" ID="2006703" />
+  <Product ProdFamily="MSTHSRUB" ProdFamilyDesc="SRUB Self-Contained Air Cooled" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKG" ProdDesc="Vertical Self-Contained Air Conditioners" ID="2006702" />
+  <Product ProdFamily="SAVEII" ProdFamilyDesc="Diamond Self Contained Unit" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKG" ProdDesc="Vertical Self-Contained Air Conditioners" ID="2005195">
+    <Translation LangID="23" LangConvStatus="C">水冷柜机</Translation>
+  </Product>
+  <Product ProdFamily="SCWS" ProdFamilyDesc="Commercial Self Contained - Single Piece SWUD" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKG" ProdDesc="Vertical Self-Contained Air Conditioners" ID="2006806" />
+  <Product ProdFamily="MSTHHPAT" ProdFamilyDesc="HPAT Sanitary Hot Water Heat Pump" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKGP" ProdDesc="Packaged Heat Pumps" ID="2006696" />
+  <Product ProdFamily="13WC" ProdFamilyDesc="2-5 Ton Package Heat Pump Rooftop" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKGP" ProdDesc="Packaged Heat Pumps" ID="2004945" />
+  <Product ProdFamily="W4V" ProdFamilyDesc="12 1/2-20 Ton Packaged Unitary Heat Pump Rooftop - CTO" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKGP" ProdDesc="Packaged Heat Pumps" ID="2006348" />
+  <Product ProdFamily="FFPKGP" ProdFamilyDesc="Packaged Heat Pump Customization" ProdSeqNbr="99" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKGP" ProdDesc="Packaged Heat Pumps" ID="2006927" />
+  <Product ProdFamily="W4C" ProdFamilyDesc="3-10Ton R-410 Packaged Heat Pump " ProdSeqNbr="10" ProdClass="UN" ProdClassDesc="Unitary" Prod="PKGP" ProdDesc="Packaged Heat Pumps" ID="2005045" />
+  <Product ProdFamily="TVR5G60H" ProdFamilyDesc="Trane Variable Refrigerant Flow System TVR5G 60 Hz" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006467" />
+  <Product ProdFamily="TVR5G" ProdFamilyDesc="Trane Variable Refrigerant Flow System TVR5G" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006464" />
+  <Product ProdFamily="TVRU_LAR" ProdFamilyDesc="TVR ULTRA - LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006669" />
+  <Product ProdFamily="TVR_SLCT" ProdFamilyDesc="TVR Select Systems for LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006368" />
+  <Product ProdFamily="TVRP_LAR" ProdFamilyDesc="TVR PRO LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006746" />
+  <Product ProdFamily="TVR_OD" ProdFamilyDesc="TVR Outdoor Units for LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006503" />
+  <Product ProdFamily="TVR_LX" ProdFamilyDesc="TVR LX Systems for LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006496" />
+  <Product ProdFamily="TVR_IND" ProdFamilyDesc="TVR Indoor Units for LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006502" />
+  <Product ProdFamily="TVR_ID" ProdFamilyDesc="TVR Indoor Units" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006752" />
+  <Product ProdFamily="TVR2_LAR" ProdFamilyDesc="TVR II Systems for LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006495" />
+  <Product ProdFamily="TVR_CNL" ProdFamilyDesc="TVR Controls" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006754" />
+  <Product ProdFamily="TVR_ACC" ProdFamilyDesc="TVR Accessory" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006753" />
+  <Product ProdFamily="TVR_ACCE" ProdFamilyDesc="TVR Accessories " ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006504" />
+  <Product ProdFamily="GEN5_OD" ProdFamilyDesc="GEN VRF Outdoor Unit-China-GEN_ODU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006708" />
+  <Product ProdFamily="GEN5_ID" ProdFamilyDesc="GEN VRF Indoor Unit-China-GEN_IDU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006707" />
+  <Product ProdFamily="GEN5_ACC" ProdFamilyDesc="GEN VRF Accessories-China-GEN_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006454" />
+  <Product ProdFamily="GENR_OD" ProdFamilyDesc="GEN Reacool VRF Outdoor Unit- GEN_ODU-GEN Reacool" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006723" />
+  <Product ProdFamily="CTRL_D" ProdFamilyDesc="Controller" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="TVR" ProdDesc="Variable Refrigerant Flow" ID="2006524" />
+  <Product ProdFamily="HWWD" ProdFamilyDesc="Water Source Heat Pumps" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2006784" />
+  <Product ProdFamily="FFWSHP" ProdFamilyDesc="Water Source Heat Pump Customization" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2006950" />
+  <Product ProdFamily="GESA" ProdFamilyDesc="Split water source heat pump" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2005595" />
+  <Product ProdFamily="WACO" ProdFamilyDesc="Residential Products &amp; Accessories" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2000931" />
+  <Product ProdFamily="HAYS" ProdFamilyDesc="Hays Fluid Controls" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2001561" />
+  <Product ProdFamily="EXWE" ProdFamilyDesc="Copy of WPWD" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2006244" />
+  <Product ProdFamily="WSACCY" ProdFamilyDesc="Accessory Only Orders for Water Source Heat Pumps" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2000498" />
+  <Product ProdFamily="GEHC" ProdFamilyDesc="1-5 Ton Pkgd Water-Cool / Water Source HP" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2006411" />
+  <Product ProdFamily="RTUWSHP" ProdFamilyDesc="Rooftop WSHP (GS)" ProdSeqNbr="99999" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2006789" />
+  <Product ProdFamily="EXW" ProdFamilyDesc="Water to water WSHP" ProdSeqNbr="60" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2003122" />
+  <Product ProdFamily="GEC" ProdFamilyDesc="Console WSHP" ProdSeqNbr="50" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2006202" />
+  <Product ProdFamily="GET" ProdFamilyDesc="Vertical stack WSHP" ProdSeqNbr="40" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2003455" />
+  <Product ProdFamily="VSHV" ProdFamilyDesc="Variable Speed WSHP" ProdSeqNbr="30" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2006323" />
+  <Product ProdFamily="EXHV" ProdFamilyDesc="High Efficiency WSHP [EXHV - DXHV]" ProdSeqNbr="20" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2006201" />
+  <Product ProdFamily="GEHV" ProdFamilyDesc="Standard Efficiency WSHP " ProdSeqNbr="14" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2000831">
+    <Translation LangID="18" LangConvStatus="C">Sistemas de Confort Axiom Enfriados por Agua</Translation>
+  </Product>
+  <Product ProdFamily="WACMIAMI" ProdFamilyDesc="Miami WSHP Stocking Program" ProdSeqNbr="10" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2004225" />
+  <Product ProdFamily="EXX" ProdFamilyDesc="Hi Efficiency WSHP" ProdSeqNbr="6" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2006739" />
+  <Product ProdFamily="GEX" ProdFamilyDesc="Standard Efficiency WSHP" ProdSeqNbr="4" ProdClass="UN" ProdClassDesc="Unitary" Prod="WSHP" ProdDesc="Water Source Heat Pumps" ID="2006738">
+    <Translation LangID="18" LangConvStatus="C">Sistemas de Confort Axiom Enfriados por Agua</Translation>
+  </Product>
+  <Product ProdFamily="CXAU" ProdFamilyDesc="Air Cooled Model Chillers" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="MC" ProdDesc="Mini Chillers" ID="2006783" />
+  <Product ProdFamily="CWPWE_AC" ProdFamilyDesc="WSHP_WPWE_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006847">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_WPWE_配件</Translation>
+  </Product>
+  <Product ProdFamily="CWPWE" ProdFamilyDesc="WSHP_WPWE" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006846">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_WPWE</Translation>
+  </Product>
+  <Product ProdFamily="CHWWD_AC" ProdFamilyDesc="WSHP_HWWD_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006849">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_HWWD_配件</Translation>
+  </Product>
+  <Product ProdFamily="CHWWD" ProdFamilyDesc="WSHP_HWWD" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006848">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_HWWD</Translation>
+  </Product>
+  <Product ProdFamily="CGESB" ProdFamilyDesc="WSHP_GESB_ODU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006874">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_GESB_外机</Translation>
+  </Product>
+  <Product ProdFamily="CMCE" ProdFamilyDesc="WSHP_GESB_IDU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006875">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_GESB_内机</Translation>
+  </Product>
+  <Product ProdFamily="CGESB_AC" ProdFamilyDesc="WSHP_GESB_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006867">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_GESB_配件</Translation>
+  </Product>
+  <Product ProdFamily="CGEHC" ProdFamilyDesc="WSHP_GEHC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006861">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_GEHC</Translation>
+  </Product>
+  <Product ProdFamily="CGEFA" ProdFamilyDesc="WSHP_GEFA" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006866">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_GEFA</Translation>
+  </Product>
+  <Product ProdFamily="CGWE_CP" ProdFamilyDesc="WSHP_AquaECO_CP" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006898">
+    <Translation LangID="23" LangConvStatus="P">水地源热泵_AquaECO_组件</Translation>
+  </Product>
+  <Product ProdFamily="CGWE_AC" ProdFamilyDesc="WSHP_AquaECO_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006839">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_AquaECO_配件</Translation>
+  </Product>
+  <Product ProdFamily="CGWE" ProdFamilyDesc="WSHP_AquaECO" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006832">
+    <Translation LangID="23" LangConvStatus="C">水地源热泵_AquaECO</Translation>
+  </Product>
+  <Product ProdFamily="HRV" ProdFamilyDesc="Total Heat Exchanger_THRV" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006824">
+    <Translation LangID="23" LangConvStatus="C">全热交换器_THRV</Translation>
+  </Product>
+  <Product ProdFamily="CCXAU_CP" ProdFamilyDesc="Module Chiller_CXAU_CP" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006900">
+    <Translation LangID="23" LangConvStatus="C">模块机_CXAU_组件</Translation>
+  </Product>
+  <Product ProdFamily="CCXAU_AC" ProdFamilyDesc="Module Chiller_CXAU_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006818">
+    <Translation LangID="23" LangConvStatus="C">模块机_CXAU_配件</Translation>
+  </Product>
+  <Product ProdFamily="CCXAU" ProdFamilyDesc="Module Chiller_CXAU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006815">
+    <Translation LangID="23" LangConvStatus="C">模块机_CXAU</Translation>
+  </Product>
+  <Product ProdFamily="CCXAJ_AC" ProdFamilyDesc="Module Chiller_CXAJ_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006834">
+    <Translation LangID="23" LangConvStatus="C">模块机_CXAJ_配件</Translation>
+  </Product>
+  <Product ProdFamily="CCXAJ" ProdFamilyDesc="Module Chiller_CXAJ" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006830">
+    <Translation LangID="23" LangConvStatus="C">模块机_CXAJ</Translation>
+  </Product>
+  <Product ProdFamily="CCXAG_AC" ProdFamilyDesc="Module Chiller_CXAG_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006852">
+    <Translation LangID="23" LangConvStatus="C">模块机_CXAG_配件</Translation>
+  </Product>
+  <Product ProdFamily="CCXAG" ProdFamilyDesc="Module Chiller_CXAG" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006829">
+    <Translation LangID="23" LangConvStatus="C">模块机_CXAG</Translation>
+  </Product>
+  <Product ProdFamily="CCGWU_CP" ProdFamilyDesc="Module Chiller_CGWU_CP" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006899">
+    <Translation LangID="23" LangConvStatus="C">模块机_CGWU_组件</Translation>
+  </Product>
+  <Product ProdFamily="CCGWU_AC" ProdFamilyDesc="Module Chiller_CGWU_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006864">
+    <Translation LangID="23" LangConvStatus="C">模块机_CGWU_配件</Translation>
+  </Product>
+  <Product ProdFamily="CCGWU" ProdFamilyDesc="Module Chiller_CGWU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006863">
+    <Translation LangID="23" LangConvStatus="C">模块机_CGWU</Translation>
+  </Product>
+  <Product ProdFamily="GRE_ODU" ProdFamilyDesc="Mini-VRF_Greenest+_ODU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006817">
+    <Translation LangID="23" LangConvStatus="C">小多联_Greenest+室外机</Translation>
+  </Product>
+  <Product ProdFamily="GRE_IDU" ProdFamilyDesc="Mini-VRF_Greenest+_IDU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006819">
+    <Translation LangID="23" LangConvStatus="C">小多联_Greenest+室内机</Translation>
+  </Product>
+  <Product ProdFamily="GRE_CP" ProdFamilyDesc="Mini-VRF_Greenest+_CP" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006902">
+    <Translation LangID="23" LangConvStatus="P">小多联_Greenest+组件</Translation>
+  </Product>
+  <Product ProdFamily="GRE_ACC" ProdFamilyDesc="Mini-VRF_Greenest+_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006820">
+    <Translation LangID="23" LangConvStatus="C">小多联_Greenest+配件</Translation>
+  </Product>
+  <Product ProdFamily="CCGHRH_A" ProdFamilyDesc="Mini Chiller_AquaTrine_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006841">
+    <Translation LangID="23" LangConvStatus="C">户式水机_AquaTrine_配件</Translation>
+  </Product>
+  <Product ProdFamily="CCGHRH" ProdFamilyDesc="Mini Chiller_AquaTrine" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006838">
+    <Translation LangID="23" LangConvStatus="C">户式水机_AquaTrine</Translation>
+  </Product>
+  <Product ProdFamily="CCGHR_CP" ProdFamilyDesc="Mini Chiller_AquaKool_CP" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006897">
+    <Translation LangID="23" LangConvStatus="P">户式水机_AquaKool_组件</Translation>
+  </Product>
+  <Product ProdFamily="CCGHR_AC" ProdFamilyDesc="Mini Chiller_AquaKool_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006845">
+    <Translation LangID="23" LangConvStatus="C">户式水机_AquaKool_配件</Translation>
+  </Product>
+  <Product ProdFamily="CCGKA_AC" ProdFamilyDesc="Mini Chiller_AquaKool KA_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006843">
+    <Translation LangID="23" LangConvStatus="C">户式水机_AquaKool KA_配件</Translation>
+  </Product>
+  <Product ProdFamily="CCGKA" ProdFamilyDesc="Mini Chiller_AquaKool KA" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006842">
+    <Translation LangID="23" LangConvStatus="C">户式水机_AquaKool KA</Translation>
+  </Product>
+  <Product ProdFamily="CCGHR" ProdFamilyDesc="Mini Chiller_AquaKool" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006844">
+    <Translation LangID="23" LangConvStatus="C">户式水机_AquaKool</Translation>
+  </Product>
+  <Product ProdFamily="GEL_ODU" ProdFamilyDesc="Large VRF_GEN Elite L_ODU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006835">
+    <Translation LangID="23" LangConvStatus="C">大多联_GEN Elite L室外机</Translation>
+  </Product>
+  <Product ProdFamily="GEL_IDU" ProdFamilyDesc="Large VRF_GEN Elite L_IDU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006836">
+    <Translation LangID="23" LangConvStatus="C">大多联_GEN Elite L室内机</Translation>
+  </Product>
+  <Product ProdFamily="GEL_CP" ProdFamilyDesc="Large VRF_GEN Elite L_CP" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006903">
+    <Translation LangID="23" LangConvStatus="C">大多联_GEN Elite L_组件</Translation>
+  </Product>
+  <Product ProdFamily="GEL_ACC" ProdFamilyDesc="Large VRF_GEN Elite L_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006837">
+    <Translation LangID="23" LangConvStatus="C">大多联_GEN Elite L_配件</Translation>
+  </Product>
+  <Product ProdFamily="CHSCP_AC" ProdFamilyDesc="Fresh Air Unit_HSCP_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006856">
+    <Translation LangID="23" LangConvStatus="C">吊顶式新风室内机_HSCP_配件</Translation>
+  </Product>
+  <Product ProdFamily="CHSCP" ProdFamilyDesc="Fresh Air Unit_HSCP" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006855">
+    <Translation LangID="23" LangConvStatus="C">吊顶式新风室内机_HSCP</Translation>
+  </Product>
+  <Product ProdFamily="CHVCP_AC" ProdFamilyDesc="Fresh Air Heat Recovery_HVCP_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006851">
+    <Translation LangID="23" LangConvStatus="C">净化型新风热回收机组_HVCP_配件</Translation>
+  </Product>
+  <Product ProdFamily="CHVCP" ProdFamilyDesc="Fresh Air Heat Recovery_HVCP" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006850">
+    <Translation LangID="23" LangConvStatus="C">净化型新风热回收机组_HVCP</Translation>
+  </Product>
+  <Product ProdFamily="INSP-ODU" ProdFamilyDesc="Ductless PAC Light Commercial_Inspire S_ODU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006873">
+    <Translation LangID="23" LangConvStatus="C">轻商_Inspire S室外机</Translation>
+  </Product>
+  <Product ProdFamily="INSPIRES" ProdFamilyDesc="Ductless PAC Light Commercial_Inspire S_IDU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006825">
+    <Translation LangID="23" LangConvStatus="C">轻商_Inspire S室内机</Translation>
+  </Product>
+  <Product ProdFamily="ODY_ODU" ProdFamilyDesc="Ducted PAC_Odyssey_ODU_R410A" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006826">
+    <Translation LangID="23" LangConvStatus="C">风管式分体机组_Odyssey_外机_R410A</Translation>
+  </Product>
+  <Product ProdFamily="ODY407C" ProdFamilyDesc="Ducted PAC_Odyssey_ODU_R407C" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006883">
+    <Translation LangID="23" LangConvStatus="C">风管式分体机组_Odyssey_外机_R407C</Translation>
+  </Product>
+  <Product ProdFamily="ODY_IDU" ProdFamilyDesc="Ducted PAC_Odyssey_IDU_R410A" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006827">
+    <Translation LangID="23" LangConvStatus="C">风管式分体机组_Odyssey_内机_R410A</Translation>
+  </Product>
+  <Product ProdFamily="ODY_ACC" ProdFamilyDesc="Ducted PAC_Odyssey_ACC_R410A" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006828">
+    <Translation LangID="23" LangConvStatus="C">风管式分体机组_Odyssey_配件_R410A</Translation>
+  </Product>
+  <Product ProdFamily="FWA_AC" ProdFamilyDesc="Chilled Water Kitchen Indoor Unit_FWA_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006858">
+    <Translation LangID="23" LangConvStatus="C">嵌入式厨房专用室内机_FWA_配件</Translation>
+  </Product>
+  <Product ProdFamily="CFWA" ProdFamilyDesc="Chilled Water Kitchen Indoor Unit_FWA" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006857">
+    <Translation LangID="23" LangConvStatus="C">嵌入式厨房专用室内机_FWA</Translation>
+  </Product>
+  <Product ProdFamily="CHFCS_AC" ProdFamilyDesc="Chilled Water Fan Coil_HFCS_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006854">
+    <Translation LangID="23" LangConvStatus="C">风机盘管机组_HFCS_配件</Translation>
+  </Product>
+  <Product ProdFamily="CHFCS" ProdFamilyDesc="Chilled Water Fan Coil_HFCS" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006853">
+    <Translation LangID="23" LangConvStatus="C">风机盘管机组_HFCS</Translation>
+  </Product>
+  <Product ProdFamily="CFWB_ACC" ProdFamilyDesc="Chilled Water Bathroom Indoor Unit_FWB_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006860">
+    <Translation LangID="23" LangConvStatus="C">嵌入式卫浴专用室内机_FWB_配件</Translation>
+  </Product>
+  <Product ProdFamily="CFWB" ProdFamilyDesc="Chilled Water Bathroom Indoor Unit_FWB" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006859">
+    <Translation LangID="23" LangConvStatus="C">嵌入式卫浴专用室内机_FWB</Translation>
+  </Product>
+  <Product ProdFamily="CCXAH" ProdFamilyDesc="Aquassey Heat Pump_CXAH" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006865">
+    <Translation LangID="23" LangConvStatus="C">风冷涡旋热泵机_CXAH</Translation>
+  </Product>
+  <Product ProdFamily="CCGAHNEW" ProdFamilyDesc="Aquassey Cooling Only_CGAH" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006877">
+    <Translation LangID="23" LangConvStatus="C">风冷涡旋单冷机_CGAH</Translation>
+  </Product>
+  <Product ProdFamily="AAS_TAA" ProdFamilyDesc="All Air Residential System_ODU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006821">
+    <Translation LangID="23" LangConvStatus="C">全空气系统_TAA/TAE室外机</Translation>
+  </Product>
+  <Product ProdFamily="AAS_TAE" ProdFamilyDesc="All Air Residential System_IDU" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006822">
+    <Translation LangID="23" LangConvStatus="C">全空气系统_TAA/TAE室内机</Translation>
+  </Product>
+  <Product ProdFamily="AAS_ACC" ProdFamilyDesc="All Air Residential System_ACC" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="CHUN" ProdDesc="Unitary Products Only For China Market" ID="2006823">
+    <Translation LangID="23" LangConvStatus="C">全空气系统_配件</Translation>
+  </Product>
+  <Product ProdFamily="ACC" ProdFamilyDesc="UPG Rooftop, Packaged Heat Pump, Split System  Accessories" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="ACC" ProdDesc="Unitary Accessories" ID="2000841" />
+  <Product ProdFamily="AIRFI" ProdFamilyDesc="Trane AirFi Home - LAR" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="ACC" ProdDesc="Unitary Accessories" ID="2006561" />
+  <Product ProdFamily="SACCY" ProdFamilyDesc="Sourced Accessories" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="ACC" ProdDesc="Unitary Accessories" ID="2006515" />
+  <Product ProdFamily="NGACCY" ProdFamilyDesc="New Generation Accessories" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="ACC" ProdDesc="Unitary Accessories" ID="2006805" />
+  <Product ProdFamily="DIRECT" ProdFamilyDesc="Direct Order product" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="ACC" ProdDesc="Unitary Accessories" ID="2006787" />
+  <Product ProdFamily="IWDSTAT" ProdFamilyDesc="Statistics Orders " ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="IWD" ProdDesc="Statistics Orders" ID="2001491" />
+  <Product ProdFamily="IWDSTATS" ProdFamilyDesc="Statistics Orders" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="IWD" ProdDesc="Statistics Orders" ID="2001482" />
+  <Product ProdFamily="MS3GWDW" ProdFamilyDesc="50 &amp; 60 Hz Cooling &amp; Heat Pump Window Units" ProdSeqNbr="1" ProdClass="UN" ProdClassDesc="Unitary" Prod="WIN" ProdDesc="Window Air Conditioners" ID="2003453" />
+  <Product ProdFamily="MSCVL" ProdFamilyDesc="Mini Split R410a Inverter" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="MINI" ProdDesc="Mini-Split" ID="2006635" />
+  <Product ProdFamily="MSGCVL" ProdFamilyDesc="Mini Split Good R410a EEF" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="MINI" ProdDesc="Mini-Split" ID="2006644" />
+  <Product ProdFamily="MS23SWF" ProdFamilyDesc="MINI SPLIT 23 SEER WIFI LAR" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="MINI" ProdDesc="Mini-Split" ID="2006636" />
+  <Product ProdFamily="R-SERIES" ProdFamilyDesc="Ductless Mini-Splits Systems" ProdSeqNbr="40" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="MINI" ProdDesc="Mini-Split" ID="2006477" />
+  <Product ProdFamily="C-SERIES" ProdFamilyDesc="Universal Match Ductless System" ProdSeqNbr="30" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="MINI" ProdDesc="Mini-Split" ID="2006478" />
+  <Product ProdFamily="JV_P" ProdFamilyDesc="Ductless Split (P Series)" ProdSeqNbr="20" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="MINI" ProdDesc="Mini-Split" ID="2006600" />
+  <Product ProdFamily="ZZJV_S" ProdFamilyDesc="JV-Mitsubishi Ductless Split (PUMY)" ProdSeqNbr="15" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="MINI" ProdDesc="Mini-Split" ID="2006660" />
+  <Product ProdFamily="JV_M" ProdFamilyDesc="Ductless Split (M Series)" ProdSeqNbr="11" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="MINI" ProdDesc="Mini-Split" ID="2006589" />
+  <Product ProdFamily="MZSERIES" ProdFamilyDesc="Multisplit Ductless Systems" ProdSeqNbr="50" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="MZS" ProdDesc="Multi-Zone Split" ID="2006479" />
+  <Product ProdFamily="JV_MZ_OD" ProdFamilyDesc="Ductless Split (MXZ) ODU" ProdSeqNbr="21" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="MZS" ProdDesc="Multi-Zone Split" ID="2006590" />
+  <Product ProdFamily="MSTHTUC" ProdFamilyDesc="TUC-VRF Minisplit Outdoor unit Air Conditioner" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006890" />
+  <Product ProdFamily="MSTHMUZ" ProdFamilyDesc="MUZ - Indoor Mini-Split, VRF Ceiling cooling" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006893" />
+  <Product ProdFamily="MSTHMUW" ProdFamilyDesc="MUW - VRF Indoor Wall Type Air Conditioner" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006904" />
+  <Product ProdFamily="MSTHMUV" ProdFamilyDesc="MUV - VRF Indoor Floor standing Air Conditioner" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006895" />
+  <Product ProdFamily="MSTHMUR" ProdFamilyDesc="MUR - Air handling unit electronic expansion valve kit" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006909" />
+  <Product ProdFamily="MSTHMUF" ProdFamilyDesc="MUF-VRF Indoor Fresh Air Unit" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006916" />
+  <Product ProdFamily="MSTHMUE" ProdFamilyDesc="MUE - VRF Air Handling Unit Cooling" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006906" />
+  <Product ProdFamily="MSTHMUD" ProdFamilyDesc="MUD - Indoor Mini-Split, VRF Ceiling cooling" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006892" />
+  <Product ProdFamily="MSTHMUC" ProdFamilyDesc="MUC - Indoor Mini-Split, VRF Ceiling cooling" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006891" />
+  <Product ProdFamily="MSTHMUA" ProdFamilyDesc="MUA - VRF Indoor One way Cassette Type Air Conditioner" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006905" />
+  <Product ProdFamily="JV_HWHP" ProdFamilyDesc="Hot Water Heat Pump" ProdSeqNbr="111" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006776" />
+  <Product ProdFamily="VRF_ACC" ProdFamilyDesc="Variable Refrigerant Flow System - Accessory" ProdSeqNbr="110" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006536" />
+  <Product ProdFamily="VRF_MCU" ProdFamilyDesc="Variable Refrigerant Flow System - MCU" ProdSeqNbr="100" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006542" />
+  <Product ProdFamily="VRF_ID" ProdFamilyDesc="Variable Refrigerant Flow System - Indoor Units" ProdSeqNbr="90" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006535" />
+  <Product ProdFamily="VRF_OD" ProdFamilyDesc="Variable Refrigerant Flow System - Outdoor Unit" ProdSeqNbr="80" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006534" />
+  <Product ProdFamily="JV_ERV" ProdFamilyDesc="Lossnay" ProdSeqNbr="70" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006603" />
+  <Product ProdFamily="JV_LEV" ProdFamilyDesc="Linear Expansion Valve Kit" ProdSeqNbr="60" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006602" />
+  <Product ProdFamily="JV_ACC" ProdFamilyDesc="VRF Accessory" ProdSeqNbr="49" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006587" />
+  <Product ProdFamily="JV_CTRL" ProdFamilyDesc="VRF Controls" ProdSeqNbr="42" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006591" />
+  <Product ProdFamily="JV_HVRF" ProdFamilyDesc="HVRF Units" ProdSeqNbr="33" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006811" />
+  <Product ProdFamily="JV_BCU" ProdFamilyDesc="VRF Branch Controller" ProdSeqNbr="32" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006593" />
+  <Product ProdFamily="JV_IDU" ProdFamilyDesc="VRF Indoor Unit" ProdSeqNbr="22" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006586" />
+  <Product ProdFamily="JV_S" ProdFamilyDesc="VRF ODU - Smart Multi" ProdSeqNbr="5" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006661" />
+  <Product ProdFamily="JV_ODU" ProdFamilyDesc="VRF Outdoor Unit" ProdSeqNbr="4" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="VRV" ProdDesc="Variable Refrigerant Flow" ID="2006585" />
+  <Product ProdFamily="PDNCSO" ProdFamilyDesc="PTAC Orders - Non CSO" ProdSeqNbr="1" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="PTAC" ProdDesc="Packaged Terminal Air Conditioner and Heat Pumps" ID="2003131" />
+  <Product ProdFamily="PTAC-PRO" ProdFamilyDesc="ProSpace" ProdSeqNbr="10" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="PTAC" ProdDesc="Packaged Terminal Air Conditioner and Heat Pumps" ID="2006519" />
+  <Product ProdFamily="ZPBU_LIT" ProdFamilyDesc="Extra Literature for Zone Products" ProdSeqNbr="10" ProdClass="DS" ProdClassDesc="Ductless Systems" Prod="PTAC" ProdDesc="Packaged Terminal Air Conditioner and Heat Pumps" ID="2003151" />
+  <Product ProdFamily="ZZZZZZZZ" ProdFamilyDesc="Test product for CRAH" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006933" />
+  <Product ProdFamily="AHCA" ProdFamilyDesc="Ship loose Electrical" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006421" />
+  <Product ProdFamily="LPCQ" ProdFamilyDesc="Pearl Air Handling Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006580">
+    <Translation LangID="23" LangConvStatus="C">LPCQ空气处理机组</Translation>
+    <Translation LangID="27" LangConvStatus="C">LPCQ空氣處理機組</Translation>
+  </Product>
+  <Product ProdFamily="LPCP" ProdFamilyDesc="Pearl Air Handling Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2002381" />
+  <Product ProdFamily="CLWHA" ProdFamilyDesc="Lower Height Blower Coil Air Handler Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2005638" />
+  <Product ProdFamily="T-LPCQ" ProdFamilyDesc="Low Pressure Air Handler Units" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006796" />
+  <Product ProdFamily="LWHA" ProdFamilyDesc="Low Height Air Handler" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2001301" />
+  <Product ProdFamily="LWHA_MET" ProdFamilyDesc="LWHA_ME - New Selection Program" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006808" />
+  <Product ProdFamily="LWHA_ME" ProdFamilyDesc="LWHA_ME" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006574" />
+  <Product ProdFamily="T-LWHMEC" ProdFamilyDesc="LWHA Marvel _ EC" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006798" />
+  <Product ProdFamily="LWHM_EC" ProdFamilyDesc="LWHA Marvel _ EC" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006764" />
+  <Product ProdFamily="T-LWHM" ProdFamilyDesc="LWHA Marvel" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006797" />
+  <Product ProdFamily="LWHM" ProdFamilyDesc="LWHA Marvel" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2005876">
+    <Translation LangID="23" LangConvStatus="C">LWHA水平吊顶式空气处理机组</Translation>
+  </Product>
+  <Product ProdFamily="CLCPB" ProdFamilyDesc="LPCQ (Penang)" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2005927" />
+  <Product ProdFamily="T-DFWA" ProdFamilyDesc="Fan Wall Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006919" />
+  <Product ProdFamily="FEC_APR" ProdFamilyDesc="Factory Mounted Control - Airside Asia" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006212" />
+  <Product ProdFamily="FWDP" ProdFamilyDesc="Direct Drive Blower Coil, Cooling Only" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2005415" />
+  <Product ProdFamily="MSTHDWVA" ProdFamilyDesc="DWHA Double Wall Chilled Water Vertical Discharge AHU" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006726" />
+  <Product ProdFamily="MSTHDWHA" ProdFamilyDesc="DWHA Double Wall Chilled Water Horizontal Discharge AHU" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006725" />
+  <Product ProdFamily="MSTHDDHA" ProdFamilyDesc="DDHA Direct Drive Air Handling Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006719" />
+  <Product ProdFamily="CLCP_MET" ProdFamilyDesc="Climate Changer_ME _New Selection Program" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006807" />
+  <Product ProdFamily="CLCP_ME" ProdFamilyDesc="Climate Changer_ME" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006573">
+    <Translation LangID="23" LangConvStatus="C">CLCP</Translation>
+    <Translation LangID="27" LangConvStatus="C">CLCP</Translation>
+  </Product>
+  <Product ProdFamily="CLCC" ProdFamilyDesc="Climate Changer Version China" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006733">
+    <Translation LangID="27" LangConvStatus="C">CLCA Climate Changer Advanced</Translation>
+    <Translation LangID="23" LangConvStatus="C">CLCC Climate Changer Version China</Translation>
+  </Product>
+  <Product ProdFamily="T-CLSP" ProdFamilyDesc="Climate Changer Superior" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006799" />
+  <Product ProdFamily="CLCM" ProdFamilyDesc="Climate Changer Magicube" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006888" />
+  <Product ProdFamily="T-CLCBK" ProdFamilyDesc="Climate Changer Bangkok" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006879" />
+  <Product ProdFamily="CLCAP" ProdFamilyDesc="Climate Changer Asia Pacific" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006674">
+    <Translation LangID="27" LangConvStatus="C">CLCA Climate Changer Advanced</Translation>
+    <Translation LangID="23" LangConvStatus="C">CLCAP Climate Changer Asia Pacific</Translation>
+  </Product>
+  <Product ProdFamily="T-CLCAP" ProdFamilyDesc="Climate Changer Asia Pacific" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006791" />
+  <Product ProdFamily="CLCA" ProdFamilyDesc="Climate Changer Advanced" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006458">
+    <Translation LangID="27" LangConvStatus="C">CLCA Climate Changer Advanced</Translation>
+    <Translation LangID="23" LangConvStatus="C">CLCA Climate Changer Advanced</Translation>
+  </Product>
+  <Product ProdFamily="CLCP_XP" ProdFamilyDesc="CLCP XP" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006233">
+    <Translation LangID="23" LangConvStatus="C">CLCP XP</Translation>
+  </Product>
+  <Product ProdFamily="CLCP" ProdFamilyDesc="CLCP" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2002421">
+    <Translation LangID="27" LangConvStatus="C">CLCP</Translation>
+    <Translation LangID="23" LangConvStatus="C">CLCP</Translation>
+  </Product>
+  <Product ProdFamily="CLCF" ProdFamilyDesc="CLCF Air Handler" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006399" />
+  <Product ProdFamily="CCTA" ProdFamilyDesc="CCTA_B Air Handler" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006400" />
+  <Product ProdFamily="BDH-VB" ProdFamilyDesc="Blower Coil - Malaysia" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2005465" />
+  <Product ProdFamily="MSTHBDVA" ProdFamilyDesc="BDVA Chilled Water Air Handling Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006683" />
+  <Product ProdFamily="MSTHBDHA" ProdFamilyDesc="BDHA Chilled Water Air Handling Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006666" />
+  <Product ProdFamily="MSTHBDCB" ProdFamilyDesc="BDCB Chilled Water Air Handling Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006665" />
+  <Product ProdFamily="FSMSUPER" ProdFamilyDesc="Trane Custom Fort Smith Field Supervision" ProdSeqNbr="1005" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006640" />
+  <Product ProdFamily="CMPNTS" ProdFamilyDesc="Trane Custom Fort Smith direct-ship components" ProdSeqNbr="999" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2001631" />
+  <Product ProdFamily="TSCX218" ProdFamilyDesc="Outdoor T-Series starter/VFD-only billing" ProdSeqNbr="560" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2003636" />
+  <Product ProdFamily="TSCX200" ProdFamilyDesc="Outdoor T-Series controls-only billing" ProdSeqNbr="550" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2003605" />
+  <Product ProdFamily="MCCB218" ProdFamilyDesc="Indoor M-Series starter/VFD-only billing" ProdSeqNbr="510" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2003635" />
+  <Product ProdFamily="MCCB200" ProdFamilyDesc="Indoor M-Series controls-only billing " ProdSeqNbr="500" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2003595" />
+  <Product ProdFamily="CSAA200" ProdFamilyDesc="Performance controls-only billing" ProdSeqNbr="105" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006316" />
+  <Product ProdFamily="UCCA" ProdFamilyDesc="Performance Climate Changer" ProdSeqNbr="99" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006433">
+    <Translation LangID="18" LangConvStatus="C">Manejadora de Aire de Baja Presión (LPCA)</Translation>
+  </Product>
+  <Product ProdFamily="CSAA" ProdFamilyDesc="Performance Climate Changer" ProdSeqNbr="98" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006015" />
+  <Product ProdFamily="FFAHU" ProdFamilyDesc="Air Handling Customization" ProdSeqNbr="98" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006918" />
+  <Product ProdFamily="PSCA" ProdFamilyDesc="Performance Climate Changer" ProdSeqNbr="97" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006494" />
+  <Product ProdFamily="TCPA" ProdFamilyDesc="Trane Custom Fort Smith" ProdSeqNbr="90" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2005245" />
+  <Product ProdFamily="TCFS" ProdFamilyDesc="Performance Climate Changer" ProdSeqNbr="80" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006444" />
+  <Product ProdFamily="DCRA" ProdFamilyDesc="Computer Room Air Handler" ProdSeqNbr="18" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006967" />
+  <Product ProdFamily="BRA_UNT" ProdFamilyDesc="FANCOLETE UNITRANE - BRAZIL" ProdSeqNbr="10" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006500" />
+  <Product ProdFamily="VCDC" ProdFamilyDesc="Computer Room Air Handler" ProdSeqNbr="8" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006938" />
+  <Product ProdFamily="TCDC" ProdFamilyDesc="Trane Custom Data Center" ProdSeqNbr="5" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CLCH" ProdDesc="Central Station Air Handlers" ID="2006914" />
+  <Product ProdFamily="AS" ProdFamilyDesc="Aire Systems - Please use TCPA under CLCH product" ProdSeqNbr="10" ProdClass="AH" ProdClassDesc="Air Handling" Prod="CAH" ProdDesc="Custom Air Handlers" ID="2000415" />
+  <Product ProdFamily="PRCTEST" ProdFamilyDesc="Price Data C&amp;M Test Product" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="PCC" ProdDesc="Outdoor Air Handlers" ID="2000258" />
+  <Product ProdFamily="PRCTESTX" ProdFamilyDesc="Price Data C&amp;M Test Product" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="PCC" ProdDesc="Outdoor Air Handlers" ID="2000473" />
+  <Product ProdFamily="GXAA" ProdFamilyDesc="Separated Combustion Makeup Air Handler - Gas Heating" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="MUA" ProdDesc="Makeup Air Handlers" ID="2003021" />
+  <Product ProdFamily="AHOA" ProdFamilyDesc="Packaged Air Handling Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="MUA" ProdDesc="Makeup Air Handlers" ID="2000305" />
+  <Product ProdFamily="GRAA" ProdFamilyDesc="Outdoor Gas Heating Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="MUA" ProdDesc="Makeup Air Handlers" ID="2000306" />
+  <Product ProdFamily="GSAA" ProdFamilyDesc="Indoor Makeup Air Handler - Gas Heating" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="MUA" ProdDesc="Makeup Air Handlers" ID="2000370" />
+  <Product ProdFamily="DFUA" ProdFamilyDesc="Commercial Direct-Fired Make-Up Unit" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="MUA" ProdDesc="Makeup Air Handlers" ID="2003111" />
+  <Product ProdFamily="STAFANS" ProdFamilyDesc="Standalone Fans  PC 0020" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="FAN" ProdDesc="Fans" ID="2006234" />
+  <Product ProdFamily="HRCL" ProdFamilyDesc="Refrigerant Heat Recovery Coil" ProdSeqNbr="3" ProdClass="AH" ProdClassDesc="Air Handling" Prod="COIL" ProdDesc="Coils" ID="2000532" />
+  <Product ProdFamily="HTCL" ProdFamilyDesc="Heating coil" ProdSeqNbr="2" ProdClass="AH" ProdClassDesc="Air Handling" Prod="COIL" ProdDesc="Coils" ID="2000439" />
+  <Product ProdFamily="CLCL" ProdFamilyDesc="Cooling coil" ProdSeqNbr="1" ProdClass="AH" ProdClassDesc="Air Handling" Prod="COIL" ProdDesc="Coils" ID="2000438" />
+  <Product ProdFamily="293LH" ProdFamilyDesc="Controls only billing for low height" ProdSeqNbr="120" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2003545" />
+  <Product ProdFamily="293FP" ProdFamilyDesc="Controls only billing for fanpowered " ProdSeqNbr="110" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2003525" />
+  <Product ProdFamily="283DUAL" ProdFamilyDesc="Controls only billing for dual duct " ProdSeqNbr="100" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2003535" />
+  <Product ProdFamily="283SNGLE" ProdFamilyDesc="Controls only billing for single duct " ProdSeqNbr="90" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2003515" />
+  <Product ProdFamily="VXXXACCY" ProdFamilyDesc="Variable Air Volume - Accessories Only" ProdSeqNbr="80" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2000394" />
+  <Product ProdFamily="VPXG" ProdFamilyDesc="VAV Parallel Fan Powered Terminal Units" ProdSeqNbr="56" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2006939" />
+  <Product ProdFamily="VSXG" ProdFamilyDesc="VAV Series Fan Powered Terminal Units" ProdSeqNbr="55" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2006814" />
+  <Product ProdFamily="DOAS-LH" ProdFamilyDesc="Chilled Water Sensible Cooling Terminal Unit" ProdSeqNbr="50" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2006526">
+    <Translation LangID="9" LangConvStatus="C">Unités VAV à hauteur limitée assistées par ventilateur</Translation>
+  </Product>
+  <Product ProdFamily="LH" ProdFamilyDesc="Low Height VAV Fan Powered Terminal Units " ProdSeqNbr="40" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2001871">
+    <Translation LangID="9" LangConvStatus="C">Unités VAV à hauteur limitée assistées par ventilateur</Translation>
+  </Product>
+  <Product ProdFamily="FP" ProdFamilyDesc="VAV Fan Powered Terminal Units" ProdSeqNbr="30" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2001831">
+    <Translation LangID="18" LangConvStatus="C">Unidades Terminales VAV Accionadas por Ventilador</Translation>
+    <Translation LangID="11" LangConvStatus="C">Τερματικές Μονάδες Μεταβλητής Παροχής Αέρα Με Ανεμιστήρα</Translation>
+    <Translation LangID="9" LangConvStatus="C">VAV assistés par ventilateurs</Translation>
+    <Translation LangID="14" LangConvStatus="C">Unità terminali VAV con ventilatore</Translation>
+    <Translation LangID="10" LangConvStatus="C">VAV Volumenstromregler mit eingebautem Ventilator</Translation>
+  </Product>
+  <Product ProdFamily="RIRO" ProdFamilyDesc="VAV Round (Retrofit) Terminal Units" ProdSeqNbr="25" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2005455">
+    <Translation LangID="9" LangConvStatus="C">VAV Round (Retrofit) Terminal Units</Translation>
+  </Product>
+  <Product ProdFamily="DUAL" ProdFamilyDesc="Variable Air Volume Dual Duct Terminal Units" ProdSeqNbr="2" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2001971">
+    <Translation LangID="9" LangConvStatus="C">Unités terminales VAV double gaine</Translation>
+  </Product>
+  <Product ProdFamily="VCCT" ProdFamilyDesc="ZhongSan Variable Air Volume Single-Duct" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2004385">
+    <Translation LangID="23" LangConvStatus="C">变风量单风道型（中山）</Translation>
+  </Product>
+  <Product ProdFamily="VSCT" ProdFamilyDesc="ZhongSan Variable Air Volume Fan-Powered" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2005955">
+    <Translation LangID="23" LangConvStatus="C">风机动力型变风量机组（中山）</Translation>
+  </Product>
+  <Product ProdFamily="SINGLE" ProdFamilyDesc="Variable Air Volume Single Duct Terminal Units " ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="VAV" ProdDesc="Variable Air Volume Units" ID="2001861">
+    <Translation LangID="18" LangConvStatus="C">Unidades Terminales de Volumen de Aire Variable de Un Solo Ducto</Translation>
+    <Translation LangID="9" LangConvStatus="C">Unité VAV simple gaine</Translation>
+  </Product>
+  <Product ProdFamily="CONDUCTR" ProdFamilyDesc="Hydronic Branch Conductor" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="HSA" ProdDesc="Hydronic System Accessory" ID="2006910" />
+  <Product ProdFamily="VC_DSGNS" ProdFamilyDesc="Ventcoil - Design Specials" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006582" />
+  <Product ProdFamily="UTRANE_S" ProdFamilyDesc="Unitrane Sourced - W-line/ B-Line / D-Line" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006533" />
+  <Product ProdFamily="TVWFHFCF" ProdFamilyDesc="Trane VWF System Fan Coil Concealed Unit" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006294" />
+  <Product ProdFamily="T-HFCF" ProdFamilyDesc="PEAK Chilled Water Fan Coil" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006794" />
+  <Product ProdFamily="T-HFCFTH" ProdFamilyDesc="PEAK Chilled Water Fan Coil" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006925" />
+  <Product ProdFamily="LOWBOY" ProdFamilyDesc="Low Height Vertical Fan Coil" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2000292" />
+  <Product ProdFamily="T-DCHCTH" ProdFamilyDesc="Horizontal Concealed Fan Coil with DCBL Motor  " ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006926" />
+  <Product ProdFamily="T-DCHC" ProdFamilyDesc="Horizontal Concealed Fan Coil with DCBL Motor" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006792" />
+  <Product ProdFamily="MSTHDCHC" ProdFamilyDesc="Horizontal Concealed Chilled Water Fan Coil with DCBL Motor" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006745" />
+  <Product ProdFamily="MSTHHFWB" ProdFamilyDesc="HFWB Chilled Water FCU Tall Stand Type" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006695" />
+  <Product ProdFamily="MSTHHFCH" ProdFamilyDesc="HFCH Chilled Water FCU 4 Blowers Concealed Type" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006694" />
+  <Product ProdFamily="MSTHHFCF" ProdFamilyDesc="HFCF - Horizontal Concealed Chilled Water Fan Coil Unit" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006744" />
+  <Product ProdFamily="MSTHHFCE" ProdFamilyDesc="HFCE Chilled Water FCU Concealed Type" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006693" />
+  <Product ProdFamily="MSTHHFCD" ProdFamilyDesc="HFCD Chilled Water FCU Concealed Type" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006692" />
+  <Product ProdFamily="MSTHHFCC" ProdFamilyDesc="HFCC Chilled Water FCU Concealed Type" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006691" />
+  <Product ProdFamily="MSTHHFCA" ProdFamilyDesc="HFCA Chilled Water FCU Concealed Type" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006690" />
+  <Product ProdFamily="FCU_LAR" ProdFamilyDesc="Fan Coil Units and Cassettes - LAR" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006386" />
+  <Product ProdFamily="FANCOIL" ProdFamilyDesc="Fan Coil Air Conditioners (UniTrane)" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="61">
+    <Translation LangID="18" LangConvStatus="C">Unidades Tipo Fan Coil (UniTrane)</Translation>
+  </Product>
+  <Product ProdFamily="MSTHFWDP" ProdFamilyDesc="FWDP Blower Coil Direct Drive Cooling Only" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006689" />
+  <Product ProdFamily="MSTHFCDA" ProdFamilyDesc="FCDA Chilled Water Fan Coil Units DC Motor Concealed Type" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006688" />
+  <Product ProdFamily="DDHA" ProdFamilyDesc="Direct Drive Chilled Water Fan Coil Unit" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2001991" />
+  <Product ProdFamily="BCCNTL" ProdFamilyDesc="Control Billing for PC 0292" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2003586" />
+  <Product ProdFamily="FCCNTL" ProdFamilyDesc="Control Billing for FC 0223" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2003587" />
+  <Product ProdFamily="CWHW" ProdFamilyDesc="Chilled Water Hi-Wall Unit" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2003454" />
+  <Product ProdFamily="T-DCHCV" ProdFamilyDesc="Chilled Water Fan Coil Unit with EC Motor" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006965" />
+  <Product ProdFamily="T-HFCFV" ProdFamilyDesc="Chilled Water Fan Coil Unit" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006966" />
+  <Product ProdFamily="HFCF_MET" ProdFamilyDesc="Chilled Water Fan Coil - HFCF_MET - New Selection Program" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006809" />
+  <Product ProdFamily="T-HFCJ" ProdFamilyDesc="Chilled Water Fan Coil" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006795" />
+  <Product ProdFamily="CWCS" ProdFamilyDesc="Chilled Water Cassette - Taiwan" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2003031" />
+  <Product ProdFamily="MSTHCFEB" ProdFamilyDesc="CFEB Convertible Chilled Water Indoor Coil" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006684" />
+  <Product ProdFamily="BCACCY" ProdFamilyDesc="BCXC Accessories" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006115" />
+  <Product ProdFamily="BCHD" ProdFamilyDesc="BCHD Blower Coil ahu" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2000701" />
+  <Product ProdFamily="HXCA" ProdFamilyDesc="Chilled Water Fancoil - Taiwan" ProdSeqNbr="300" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2000751">
+    <Translation LangID="27" LangConvStatus="C">冰水送風機 - 台灣</Translation>
+  </Product>
+  <Product ProdFamily="HCCA" ProdFamilyDesc="Blow Thru High Static Fan Coil" ProdSeqNbr="30" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2005985" />
+  <Product ProdFamily="HFCF" ProdFamilyDesc="Chilled Water Fan Coil Unit" ProdSeqNbr="20" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2005837">
+    <Translation LangID="23" LangConvStatus="C">风机盘管机组</Translation>
+    <Translation LangID="18" LangConvStatus="C">Unidad Fan Coil de Agua Helada</Translation>
+  </Product>
+  <Product ProdFamily="T-HCCB" ProdFamilyDesc="High Capacity Concealed Fan Coil Unit" ProdSeqNbr="15" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006793" />
+  <Product ProdFamily="DCHC" ProdFamilyDesc="Horizontal Concealed Fan Coil with DCBL Motor" ProdSeqNbr="10" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006468">
+    <Translation LangID="23" LangConvStatus="C">卧式暗装直流无刷风机盘管机组</Translation>
+    <Translation LangID="18" LangConvStatus="C">Unidad Fan Coil de Agua Helada</Translation>
+  </Product>
+  <Product ProdFamily="HCCB" ProdFamilyDesc="High Capacity Concealed Fan Coil Unit" ProdSeqNbr="10" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006651">
+    <Translation LangID="23" LangConvStatus="C">卧式暗装直流无刷风机盘管机组</Translation>
+    <Translation LangID="18" LangConvStatus="C">Unidad Fan Coil de Agua Helada</Translation>
+  </Product>
+  <Product ProdFamily="HFCJ" ProdFamilyDesc="Chilled Water Fan Coil" ProdSeqNbr="10" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006734">
+    <Translation LangID="18" LangConvStatus="C">Unidad Fan Coil de Agua Helada</Translation>
+    <Translation LangID="23" LangConvStatus="C">水冷风机盘管机组</Translation>
+  </Product>
+  <Product ProdFamily="HFCF_ME" ProdFamilyDesc="CRQ Chilled Water Fan Coil" ProdSeqNbr="10" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UNT" ProdDesc="Fan-Coil Air Conditioners" ID="2006563">
+    <Translation LangID="23" LangConvStatus="C">风机盘管机组</Translation>
+    <Translation LangID="18" LangConvStatus="C">Unidad Fan Coil de Agua Helada</Translation>
+  </Product>
+  <Product ProdFamily="FFBC" ProdFamilyDesc="Blower Coil Customization" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="BC" ProdDesc="Blower-Coils" ID="2006962" />
+  <Product ProdFamily="BCXXACCY" ProdFamilyDesc="Blower Coil - Accessories Only" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="BC" ProdDesc="Blower-Coils" ID="2006949" />
+  <Product ProdFamily="BCXE" ProdFamilyDesc="BCXE Blower Coil" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="BC" ProdDesc="Blower-Coils" ID="2006760">
+    <Translation LangID="18" LangConvStatus="C">BCXC Manejadora de Aire Tipo Fan Coil de Alta Capacidad</Translation>
+  </Product>
+  <Product ProdFamily="UV" ProdFamilyDesc="VUVE Unit Ventilator" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UV" ProdDesc="Unit Ventilators" ID="2004335" />
+  <Product ProdFamily="HUVA" ProdFamilyDesc="Horizontal Unit Ventilator" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UV" ProdDesc="Unit Ventilators" ID="2000132" />
+  <Product ProdFamily="UVCNTL" ProdFamilyDesc="Control Billing for PC 0242" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UV" ProdDesc="Unit Ventilators" ID="2003191" />
+  <Product ProdFamily="SHLA" ProdFamilyDesc="Classroom Shelving" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UV" ProdDesc="Unit Ventilators" ID="2000158" />
+  <Product ProdFamily="UVACCY" ProdFamilyDesc="Accessory Only Orders for Unit Ventilators" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UV" ProdDesc="Unit Ventilators" ID="2000449" />
+  <Product ProdFamily="FORCFLO" ProdFamilyDesc="Unit Cabinet Heater (Force-Flo)" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="CAB" ProdDesc="Cabinet Heaters" ID="2000411" />
+  <Product ProdFamily="FFCNTL" ProdFamilyDesc="Control Billing for FF 0223" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="CAB" ProdDesc="Cabinet Heaters" ID="2004175" />
+  <Product ProdFamily="INFRARED" ProdFamilyDesc="Infra-Red Gas Heaters" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="2003181" />
+  <Product ProdFamily="GIXC" ProdFamilyDesc="Indoor Gas Heating Products" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="70" />
+  <Product ProdFamily="UHSB" ProdFamilyDesc="Hydronic Unit Heaters" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="2005665" />
+  <Product ProdFamily="HBAC" ProdFamilyDesc="Horizontal Blower Assembly" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="67" />
+  <Product ProdFamily="HEGH" ProdFamilyDesc="High Efficiency Gas-Fired Unit Heater" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="2006637" />
+  <Product ProdFamily="UHWA" ProdFamilyDesc="Electric Wall Mounted Unit Heaters" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="71" />
+  <Product ProdFamily="UHEC" ProdFamilyDesc="Electric Unit Heaters" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="73" />
+  <Product ProdFamily="UHXA" ProdFamilyDesc="Electric Explosion Proof Unit Heaters" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="72" />
+  <Product ProdFamily="UHCA" ProdFamilyDesc="Electric Ceiling Mounted Heaters" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="69" />
+  <Product ProdFamily="UHAA" ProdFamilyDesc="Architectural Wall Heaters" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="68" />
+  <Product ProdFamily="ARHA" ProdFamilyDesc="Air Turnover - Gas Heating" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="UH" ProdDesc="Unit Heaters" ID="2003061" />
+  <Product ProdFamily="S_F" ProdFamilyDesc="Security Wall Fin" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="FIN" ProdDesc="Finned-Tube Radiation/Convectors" ID="2000383" />
+  <Product ProdFamily="O11S" ProdFamilyDesc="Light Commercial Slope Top Wall Fin (11S)" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="FIN" ProdDesc="Finned-Tube Radiation/Convectors" ID="2000053" />
+  <Product ProdFamily="CONV_" ProdFamilyDesc="Convectors" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="FIN" ProdDesc="Finned-Tube Radiation/Convectors" ID="2000052" />
+  <Product ProdFamily="WFIN" ProdFamilyDesc="Architectural Wall-Fin" ProdSeqNbr="1" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="FIN" ProdDesc="Finned-Tube Radiation/Convectors" ID="2000054" />
+  <Product ProdFamily="WALLFIN" ProdFamilyDesc="Architectural Wall-Fin 1" ProdSeqNbr="2" ProdClass="TD" ProdClassDesc="Air Terminal Devices &amp; Heating Products" Prod="FIN" ProdDesc="Finned-Tube Radiation/Convectors" ID="2004155" />
+  <Product ProdFamily="TCDU" ProdFamilyDesc="Coolant Distribution Unit" ProdSeqNbr="1" ProdClass="MCC" ProdClassDesc="Mission Critical Cooling" Prod="CDU" ProdDesc="Coolant Distribution Unit" ID="2006913" />
+  <Product ProdFamily="DCDA" ProdFamilyDesc="Cabinet Coolant Distribution Unit" ProdSeqNbr="1" ProdClass="MCC" ProdClassDesc="Mission Critical Cooling" Prod="CDU" ProdDesc="Coolant Distribution Unit" ID="2006932" />
+  <Product ProdFamily="PROMO" ProdFamilyDesc="Promotional" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="GEN" ProdDesc="General" ID="2002082" />
+  <Product ProdFamily="SHEAVE" ProdFamilyDesc="Sheaves and Belts" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="AHC" ProdDesc="Air Handling Components" ID="2002101" />
+  <Product ProdFamily="FANS" ProdFamilyDesc="Fans" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="AHC" ProdDesc="Air Handling Components" ID="2002072" />
+  <Product ProdFamily="BUSHINGS" ProdFamilyDesc="Bushings and Bearings" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="AHC" ProdDesc="Air Handling Components" ID="2002071" />
+  <Product ProdFamily="WHEEL" ProdFamilyDesc="Blower Wheels" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="AHC" ProdDesc="Air Handling Components" ID="2002102" />
+  <Product ProdFamily="SOLVENT" ProdFamilyDesc="Solvents and sealants" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CHEM" ProdDesc="Chemicals" ID="2002103" />
+  <Product ProdFamily="CHEM-OIL" ProdFamilyDesc="Oil" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CHEM" ProdDesc="Chemicals" ID="2002074" />
+  <Product ProdFamily="CHEMHVAC" ProdFamilyDesc="HVAC Maintenance, Cleaners and Treatments" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CHEM" ProdDesc="Chemicals" ID="2002073" />
+  <Product ProdFamily="SEMIHERM" ProdFamilyDesc="Semi-Hermetic" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="COMP" ProdDesc="Compressors" ID="2002076" />
+  <Product ProdFamily="CSHNTNDM" ProdFamilyDesc="OEM - CSHN TANDEM SETS" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="COMP" ProdDesc="Compressors" ID="2006255" />
+  <Product ProdFamily="HERMETIC" ProdFamilyDesc="Hermetic" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="COMP" ProdDesc="Compressors" ID="2002075" />
+  <Product ProdFamily="COMPACCY" ProdFamilyDesc="Compressor Accessories" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="COMP" ProdDesc="Compressors" ID="2002104" />
+  <Product ProdFamily="TRANSFOR" ProdFamilyDesc="Transformers" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CONT" ProdDesc="Controls" ID="2002107" />
+  <Product ProdFamily="THERMOST" ProdFamilyDesc="Thermostats and Temperature" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CONT" ProdDesc="Controls" ID="2002077" />
+  <Product ProdFamily="RELAY" ProdFamilyDesc="Relays" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CONT" ProdDesc="Controls" ID="2002080" />
+  <Product ProdFamily="PRESSURE" ProdFamilyDesc="Pressure" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CONT" ProdDesc="Controls" ID="2002078" />
+  <Product ProdFamily="IGNIT" ProdFamilyDesc="Ignition Controls" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CONT" ProdDesc="Controls" ID="2002081" />
+  <Product ProdFamily="GASVALVE" ProdFamilyDesc="Gas Valves" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CONT" ProdDesc="Controls" ID="2002108" />
+  <Product ProdFamily="FUSE" ProdFamilyDesc="Fuses" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CONT" ProdDesc="Controls" ID="2002106" />
+  <Product ProdFamily="CONTACT" ProdFamilyDesc="Contactors and Starters" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CONT" ProdDesc="Controls" ID="2002079" />
+  <Product ProdFamily="CAPACIT" ProdFamilyDesc="Capacitors" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CONT" ProdDesc="Controls" ID="2002105" />
+  <Product ProdFamily="CONTACCY" ProdFamilyDesc="Accessories" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="CONT" ProdDesc="Controls" ID="2002109" />
+  <Product ProdFamily="PORTABLE" ProdFamilyDesc="Portable Air Conditioners" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="HVACEQ" ProdDesc="HVAC Equipment" ID="2002083" />
+  <Product ProdFamily="PUMPS" ProdFamilyDesc="Pumps" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="ACCES" ProdDesc="HVAC Services and Accessories" ID="2002084" />
+  <Product ProdFamily="FILTR" ProdFamilyDesc="Filtration" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="ACCES" ProdDesc="HVAC Services and Accessories" ID="2002085" />
+  <Product ProdFamily="DRAIN" ProdFamilyDesc="Drain Pans" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="ACCES" ProdDesc="HVAC Services and Accessories" ID="2002110" />
+  <Product ProdFamily="BATTERY" ProdFamilyDesc="Batteries" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="ACCES" ProdDesc="HVAC Services and Accessories" ID="2002111" />
+  <Product ProdFamily="SYNEXIS" ProdFamilyDesc="Trane Synexis" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="IAQ" ProdDesc="Indoor Air Quality" ID="2006749" />
+  <Product ProdFamily="IAQ-HVAC" ProdFamilyDesc="HVAC Maintainance, Cleaners and Treatments" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="IAQ" ProdDesc="Indoor Air Quality" ID="2002086" />
+  <Product ProdFamily="AIR-FILT" ProdFamilyDesc="Air Filtration" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="IAQ" ProdDesc="Indoor Air Quality" ID="2002112" />
+  <Product ProdFamily="MTR-ACCY" ProdFamilyDesc="Motor Accessories" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="MOTR" ProdDesc="Motors" ID="2002088" />
+  <Product ProdFamily="MTR-INTR" ProdFamilyDesc="Integral Horsepower" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="MOTR" ProdDesc="Motors" ID="2002115" />
+  <Product ProdFamily="MTR-FAN" ProdFamilyDesc="Fan Coil Motors" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="MOTR" ProdDesc="Motors" ID="2002113" />
+  <Product ProdFamily="MTR-CNDS" ProdFamilyDesc="Condenser Motors" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="MOTR" ProdDesc="Motors" ID="2002114" />
+  <Product ProdFamily="BLOWER" ProdFamilyDesc="Blower Motors" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="MOTR" ProdDesc="Motors" ID="2002087" />
+  <Product ProdFamily="REFCOMP2" ProdFamilyDesc="Refrigeration Valves" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="REFC" ProdDesc="Refrigeration Components" ID="2002090" />
+  <Product ProdFamily="REFCOMP1" ProdFamilyDesc="Filter Driers and Sight Glasses" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="REFC" ProdDesc="Refrigeration Components" ID="2002089" />
+  <Product ProdFamily="REFCOMP3" ProdFamilyDesc="Evaporators and Condensers" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="REFC" ProdDesc="Refrigeration Components" ID="2002091" />
+  <Product ProdFamily="TOOL2" ProdFamilyDesc="Welding and Brazing Products" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="TOOL" ProdDesc="Tools and Test Equipment" ID="2002093" />
+  <Product ProdFamily="TOOL1" ProdFamilyDesc="Test Instruments" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="TOOL" ProdDesc="Tools and Test Equipment" ID="2002092" />
+  <Product ProdFamily="TOOL3" ProdFamilyDesc="Refrigerant Handling" ProdSeqNbr="1" ProdClass="SP" ProdClassDesc="Service Products" Prod="TOOL" ProdDesc="Tools and Test Equipment" ID="2002094" />
+  <Product ProdFamily="CONCIERG" ProdFamilyDesc="Tracer Concierge" ProdSeqNbr="1" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2006445" />
+  <Product ProdFamily="SYM500" ProdFamilyDesc="Symbio 500 Controller" ProdSeqNbr="1" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2006810" />
+  <Product ProdFamily="SYM210" ProdFamilyDesc="Symbio 210" ProdSeqNbr="1" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2006774" />
+  <Product ProdFamily="SYMBIO" ProdFamilyDesc="SYMBIO 800" ProdSeqNbr="1" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2006762" />
+  <Product ProdFamily="PIVOT" ProdFamilyDesc="PIVOT THERMOSTATS" ProdSeqNbr="1" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2006646" />
+  <Product ProdFamily="INTEGRAT" ProdFamilyDesc="Integration and Connectivity" ProdSeqNbr="1" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2006311" />
+  <Product ProdFamily="METERS" ProdFamilyDesc="METERS" ProdSeqNbr="114" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2002851" />
+  <Product ProdFamily="GSA" ProdFamilyDesc="GSA Industrial Funding Fee" ProdSeqNbr="22" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2001432" />
+  <Product ProdFamily="TRACERES" ProdFamilyDesc="Tracer Ensemble" ProdSeqNbr="18" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2005225" />
+  <Product ProdFamily="ENDDVIC" ProdFamilyDesc="End Devices and Sensors" ProdSeqNbr="9" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2000550">
+    <Translation LangID="18" LangConvStatus="C">Dispositivos Terminales y Sensores</Translation>
+  </Product>
+  <Product ProdFamily="ROVER" ProdFamilyDesc="Service Tools (Rover &amp; Tracer TU)" ProdSeqNbr="6" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2003211" />
+  <Product ProdFamily="TRACERSC" ProdFamilyDesc="Tracer SC+" ProdSeqNbr="1" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BAS" ProdDesc="Building Automation Systems" ID="2005905" />
+  <Product ProdFamily="DANFOSS" ProdFamilyDesc="Buy Resell Products from Danfoss" ProdSeqNbr="1" ProdClass="ES" ProdClassDesc="Building Automation Systems" Prod="BUYRS" ProdDesc="Buy - Resell Products" ID="2006364" />
+  <Product ProdFamily="RTRYSPL" ProdFamilyDesc="Series R R'newal - Custom" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="AM" ProdDesc="Engineered Conversion Packages" ID="2006943" />
+  <Product ProdFamily="CONVSPL" ProdFamilyDesc="Refrigerant Conversion - Custom" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="AM" ProdDesc="Engineered Conversion Packages" ID="2006942" />
+  <Product ProdFamily="ENSO" ProdFamilyDesc="Engineered Solutions - CAP policy does not apply" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="AM" ProdDesc="Engineered Conversion Packages" ID="2006568" />
+  <Product ProdFamily="ENSL" ProdFamilyDesc="Engineered Solutions - CAP policy applicable" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="AM" ProdDesc="Engineered Conversion Packages" ID="2006565" />
+  <Product ProdFamily="VSOR" ProdFamilyDesc="Vibration Sensor" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006964" />
+  <Product ProdFamily="SCROLSPL" ProdFamilyDesc="Scroll Chiller R'newal - Custom" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006945" />
+  <Product ProdFamily="RTWD_RF" ProdFamilyDesc="RTWD/RTUD RNEWAL FAILED COMPRESSOR" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006451" />
+  <Product ProdFamily="RTWD_R" ProdFamilyDesc="RTWD/RTUD RNEWAL " ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006450" />
+  <Product ProdFamily="RT_A_F" ProdFamilyDesc="RTWA-RTUA R'newal Failed Compressor" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006305" />
+  <Product ProdFamily="RT_A" ProdFamilyDesc="RTWA-RTUA R'newal" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006200" />
+  <Product ProdFamily="RENEWAL" ProdFamilyDesc="RTHC/D Rnewal" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2004435" />
+  <Product ProdFamily="RTHC-D_R" ProdFamilyDesc="RTHC/D R'newal" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006971" />
+  <Product ProdFamily="RNEWAL_F" ProdFamilyDesc="RTHA/B/C/D Rnewal Failed Compressor" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006304" />
+  <Product ProdFamily="RTAF_R" ProdFamilyDesc="RTAF RENEWAL" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006881" />
+  <Product ProdFamily="RTAE_R" ProdFamilyDesc="RTAE RNEWAL" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006968" />
+  <Product ProdFamily="RTAC_R_F" ProdFamilyDesc="RTAC Rnewal Failed Compressor" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006333" />
+  <Product ProdFamily="RTAC_R" ProdFamilyDesc="RTAC Rnewal" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006332" />
+  <Product ProdFamily="RTACRNEW" ProdFamilyDesc="RTAC RNEWAL" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006562" />
+  <Product ProdFamily="RTAA_R_F" ProdFamilyDesc="RTAA R'newal Failed Compressor" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006303" />
+  <Product ProdFamily="RTAA_R" ProdFamilyDesc="RTAA R'newal" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2004905" />
+  <Product ProdFamily="IPAKSPL" ProdFamilyDesc="Intellipak Refresh - Custom" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006941" />
+  <Product ProdFamily="S_HL_A" ProdFamilyDesc="IntelliPak Refresh Dev Seq L" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006955" />
+  <Product ProdFamily="S_HL_B" ProdFamilyDesc="IntelliPak Refresh Dev Seq L" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006956" />
+  <Product ProdFamily="S_HK_A" ProdFamilyDesc="IntelliPak Refresh Dev Seq K" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006954" />
+  <Product ProdFamily="S_HG_F" ProdFamilyDesc="IntelliPak Refresh Dev Seq G" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006385" />
+  <Product ProdFamily="S_HG_A" ProdFamilyDesc="IntelliPak Refresh Dev Seq G" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006953" />
+  <Product ProdFamily="S_HF_A" ProdFamilyDesc="IntelliPak Refresh Dev Seq F" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006952" />
+  <Product ProdFamily="S_HF_F" ProdFamilyDesc="IntelliPak Refresh Dev Seq F" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006384" />
+  <Product ProdFamily="CSCSPL" ProdFamilyDesc="Commercial Self-Contained R'newal - Custom" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006940" />
+  <Product ProdFamily="SWUD_R" ProdFamilyDesc="Comm. Self Contained R'newal SWUD" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006394" />
+  <Product ProdFamily="SCWF_R" ProdFamilyDesc="Comm. Self Contained R'newal SCWF" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006395" />
+  <Product ProdFamily="SCWD_R" ProdFamilyDesc="Comm. Self Contained R'newal SCWD" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006396" />
+  <Product ProdFamily="SCRF_R" ProdFamilyDesc="Comm. Self Contained R'newal SCRF" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006401" />
+  <Product ProdFamily="SCRD_R" ProdFamilyDesc="Comm. Self Contained R'newal SCRD" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006397" />
+  <Product ProdFamily="CTVSPL" ProdFamilyDesc="CenTraVac R'newal - Custom" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006944" />
+  <Product ProdFamily="CVHF_R" ProdFamilyDesc="CVHF CenTraVac R'newal" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006371" />
+  <Product ProdFamily="CVHE_R" ProdFamilyDesc="CVHE CenTraVac R'newal" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006370" />
+  <Product ProdFamily="RCGAM" ProdFamilyDesc="CGAM R'newal" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006761" />
+  <Product ProdFamily="CDHF_R" ProdFamilyDesc="CDHF CenTraVac R'newal" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006432" />
+  <Product ProdFamily="ACRB_R" ProdFamilyDesc="ACRB RENEWAL" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006970" />
+  <Product ProdFamily="ACRA_R" ProdFamilyDesc="ACRA RENEWAL" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RNC" ProdDesc="Renewal Products" ID="2006969" />
+  <Product ProdFamily="TR200" ProdFamilyDesc="TR200 - Variable Frequency Drives" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="MSCM" ProdDesc="Miscellaneous (Aftermarket Products)" ID="2006240" />
+  <Product ProdFamily="TR12800" ProdFamilyDesc="TR1 2800 - Variable Frequency Drives" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="MSCM" ProdDesc="Miscellaneous (Aftermarket Products)" ID="2004095" />
+  <Product ProdFamily="ACC-PER" ProdFamilyDesc="Accessories for Variable Frequency Drive" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="MSCM" ProdDesc="Miscellaneous (Aftermarket Products)" ID="2005375" />
+  <Product ProdFamily="SERV-WAR" ProdFamilyDesc="Service Warranties" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="EW" ProdDesc="Extended Warranties" ID="2001961" />
+  <Product ProdFamily="WARRANTY" ProdFamilyDesc="Extended Warranties" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="EW" ProdDesc="Extended Warranties" ID="2000891" />
+  <Product ProdFamily="RCDB" ProdFamilyDesc="SYMBIO 800 CONTROL UPGRADE" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RLCU" ProdDesc="Rotary Liquid Chiller Products" ID="2006802" />
+  <Product ProdFamily="RCRB" ProdFamilyDesc="SYMBIO 800 CONTROL UPGRADE" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RLCU" ProdDesc="Rotary Liquid Chiller Products" ID="2006868" />
+  <Product ProdFamily="STRA" ProdFamilyDesc="STARTER REFRESH" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RLCU" ProdDesc="Rotary Liquid Chiller Products" ID="2006596" />
+  <Product ProdFamily="AFDW" ProdFamilyDesc="Air Cooled Adaptive Frequency Drive for RTAC" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RLCU" ProdDesc="Rotary Liquid Chiller Products" ID="2006569" />
+  <Product ProdFamily="AFDR" ProdFamilyDesc="Air Cooled AFD upgrade for RTHD" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RLCU" ProdDesc="Rotary Liquid Chiller Products" ID="2006512" />
+  <Product ProdFamily="RCRA" ProdFamilyDesc="AdaptiView upgrade for RTHA/B" ProdSeqNbr="1" ProdClass="CAP" ProdClassDesc="Aftermarket Products" Prod="RLCU" ProdDesc="Rotary Liquid Chiller Products" ID="2006465" />
+  <Product ProdFamily="CAR55" ProdFamilyDesc="Submittal test CAR55 for data base" ProdSeqNbr="1" ProdClass="TRAN" ProdClassDesc="Transportation - Submittal Test Only" Prod="AUTO" ProdDesc="Auto's - Submittal Test Only" ID="2000252" />
+  <Product ProdFamily="CAR54" ProdFamilyDesc="Submittal Test Car54" ProdSeqNbr="1" ProdClass="TRAN" ProdClassDesc="Transportation - Submittal Test Only" Prod="AUTO" ProdDesc="Auto's - Submittal Test Only" ID="2000214" />
+  <Product ProdFamily="XPTAC" ProdFamilyDesc="TRG-Packaged Terminal Air Conditioner " ProdSeqNbr="1" ProdClass="XX" ProdClassDesc="Training Products" Prod="XPTAC" ProdDesc="Packaged Terminal Air Conditioners" ID="2000479" />
+  <Product ProdFamily="SHIPTEST" ProdFamilyDesc="Ship Cycle test" ProdSeqNbr="1" ProdClass="XX" ProdClassDesc="Training Products" Prod="XPTAC" ProdDesc="Packaged Terminal Air Conditioners" ID="2004265" />
+  <Product ProdFamily="XRTAA" ProdFamilyDesc="TRG-130-400 Ton Air-Cooled Chiller - Series R" ProdSeqNbr="1" ProdClass="XX" ProdClassDesc="Training Products" Prod="XRLC" ProdDesc="Rotary Liquid Chillers" ID="2000476" />
+  <Product ProdFamily="XVCXE" ProdFamilyDesc="TRG-Variable Air Volume Single Duct Terminal Units " ProdSeqNbr="1" ProdClass="XX" ProdClassDesc="Training Products" Prod="XVAV" ProdDesc="Variable Air Volume Units" ID="2000480" />
+  <Product ProdFamily="XVFXE" ProdFamilyDesc="TRG-Variable Air Volume Fan Powered Terminal Units" ProdSeqNbr="1" ProdClass="XX" ProdClassDesc="Training Products" Prod="XVAV" ProdDesc="Variable Air Volume Units" ID="2000481" />
+  <Product ProdFamily="LYNXTEST" ProdFamilyDesc="Product family to test miscellaneous issues" ProdSeqNbr="1" ProdClass="XX" ProdClassDesc="Training Products" Prod="XVAV" ProdDesc="Variable Air Volume Units" ID="2001721" />
+  <Product ProdFamily="MUSIC" ProdFamilyDesc="Data testing product family" ProdSeqNbr="1" ProdClass="XX" ProdClassDesc="Training Products" Prod="XVAV" ProdDesc="Variable Air Volume Units" ID="2004105" />
+  <Product ProdFamily="XSCXD" ProdFamilyDesc="TRG - 20-80 Ton Vertical Self-Contained" ProdSeqNbr="1" ProdClass="XX" ProdClassDesc="Training Products" Prod="XPKG" ProdDesc="Verlical Self Contained Air Conditioner" ID="2000477" />
+  <Product ProdFamily="XW_HD" ProdFamilyDesc="TRG-Horizontal Water Source Heat Pump" ProdSeqNbr="1" ProdClass="XX" ProdClassDesc="Training Products" Prod="XWSHP" ProdDesc="Water Source Heat Pump" ID="2000478" />
+  <Product ProdFamily="LABLBR" ProdFamilyDesc="Quoted Labor and Material Installed" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ABU" ProdDesc="Aftermarket" ID="2001903" />
+  <Product ProdFamily="CONTMATL" ProdFamilyDesc="Quoted Contracting Material" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ABU" ProdDesc="Aftermarket" ID="2002922" />
+  <Product ProdFamily="CONTLBR" ProdFamilyDesc="Quoted Contracting Labor" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ABU" ProdDesc="Aftermarket" ID="2002923" />
+  <Product ProdFamily="OEM_INT" ProdFamilyDesc="Intermediate compressors for OEM business" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ABU" ProdDesc="Aftermarket" ID="2001154" />
+  <Product ProdFamily="EPL_INT" ProdFamilyDesc="Intermediate compressors for Epinal business" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ABU" ProdDesc="Aftermarket" ID="2001162" />
+  <Product ProdFamily="OEM_GP" ProdFamilyDesc="GP compressors for OEM business" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ABU" ProdDesc="Aftermarket" ID="2001153" />
+  <Product ProdFamily="EPL_GP" ProdFamilyDesc="GP compressors for Epinal business" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ABU" ProdDesc="Aftermarket" ID="2001161" />
+  <Product ProdFamily="BRAZ_GP" ProdFamilyDesc="GP compressors for Brazil business" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ABU" ProdDesc="Aftermarket" ID="2001891" />
+  <Product ProdFamily="MATLBR" ProdFamilyDesc="Material Supplied" ProdSeqNbr="10" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ABU" ProdDesc="Aftermarket" ID="2001902" />
+  <Product ProdFamily="CHR_TKRP" ProdFamilyDesc="Remanufactured Parts for TK" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ABU" ProdDesc="Aftermarket" ID="2006273" />
+  <Product ProdFamily="BASOEM" ProdFamilyDesc="OEM Controllers" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="BAS_" ProdDesc="Building Automation Systems" ID="2001441" />
+  <Product ProdFamily="PARTSSDC" ProdFamilyDesc="Parts Stocked at Singapore Distribution Center" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="INT" ProdDesc="International" ID="2006324" />
+  <Product ProdFamily="INTL_PRD" ProdFamilyDesc="International Accessories - Sourced from US Vendors" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="INT" ProdDesc="International" ID="2001211" />
+  <Product ProdFamily="PBLE" ProdFamilyDesc="Pueblo Evaporators" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="LBU" ProdDesc="La Crosse" ID="2006728" />
+  <Product ProdFamily="OEM" ProdFamilyDesc="OEM Compressors" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="LBU" ProdDesc="La Crosse" ID="2000861" />
+  <Product ProdFamily="CSHDTNDM" ProdFamilyDesc="OEM - CSHD TANDEM SETS" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="LBU" ProdDesc="La Crosse" ID="2006254" />
+  <Product ProdFamily="MISC" ProdFamilyDesc="Miscellaneous Parts" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="LBU" ProdDesc="La Crosse" ID="2001322" />
+  <Product ProdFamily="INTL" ProdFamilyDesc="International Production Parts" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="LBU" ProdDesc="La Crosse" ID="2001321" />
+  <Product ProdFamily="INTC" ProdFamilyDesc="International Centravac Compressors - Direct Drive" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="LBU" ProdDesc="La Crosse" ID="2001371" />
+  <Product ProdFamily="INCS" ProdFamilyDesc="International CVHS Compressors" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="LBU" ProdDesc="La Crosse" ID="2006472" />
+  <Product ProdFamily="INST" ProdFamilyDesc="International  Starter Interface" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="LBU" ProdDesc="La Crosse" ID="2003342" />
+  <Product ProdFamily="INVM" ProdFamilyDesc="Agility Compressor Only" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="LBU" ProdDesc="La Crosse" ID="2006668" />
+  <Product ProdFamily="INTL-PTS" ProdFamilyDesc="International Parts Orders" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="LEX" ProdDesc="Lexington" ID="2001512" />
+  <Product ProdFamily="ZPB-MACN" ProdFamilyDesc="Components maufactured by Macon" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="MCN" ProdDesc="Macon" ID="2003281" />
+  <Product ProdFamily="ISM1" ProdFamilyDesc="ISM Custom Air Handler Reps" ProdSeqNbr="40" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="ROC" ProdDesc="Rockingham - ISM" ID="2000957" />
+  <Product ProdFamily="STOCK" ProdFamilyDesc="Redesign Finished Goods" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="RUS" ProdDesc="Rushville" ID="2002991" />
+  <Product ProdFamily="IT_SS" ProdFamilyDesc="International Trane Split Systems" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="UPG" ProdDesc="Unitary Products Group" ID="2000911" />
+  <Product ProdFamily="INTL_COM" ProdFamilyDesc="International Components " ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="UPG" ProdDesc="Unitary Products Group" ID="2002501" />
+  <Product ProdFamily="PC090" ProdFamilyDesc="Field Specials " ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="UPG" ProdDesc="Unitary Products Group" ID="2001312" />
+  <Product ProdFamily="EPL_RTHD" ProdFamilyDesc="RTHD compressors for Epinal business" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="MTY" ProdDesc="Monterrey" ID="2004635" />
+  <Product ProdFamily="CHN_RTHD" ProdFamilyDesc="RTHD Compressors for China" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="MTY" ProdDesc="Monterrey" ID="2004485" />
+  <Product ProdFamily="BRAZ_GP2" ProdFamilyDesc="GP2 compressors for Brazil business" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="MTY" ProdDesc="Monterrey" ID="2003291" />
+  <Product ProdFamily="EPL_GP2" ProdFamilyDesc="GP2 Compressors for Epinal business" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="MTY" ProdDesc="Monterrey" ID="2001641" />
+  <Product ProdFamily="CHN_GP2" ProdFamilyDesc="GP2 Compressors for China" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="MTY" ProdDesc="Monterrey" ID="2004895" />
+  <Product ProdFamily="TKCL" ProdFamilyDesc="Columbia coils for Thermo King" ProdSeqNbr="1" ProdClass="BU" ProdClassDesc="Business Unit Only" Prod="CLB" ProdDesc="Columbia" ID="2006270" />
+  <Product ProdFamily="CFAS" ProdFamilyDesc="Fan Coil Cassette" ProdSeqNbr="1" ProdClass="IRIS" ProdClassDesc="Iris Products (EUR)" Prod="AP_E" ProdDesc="Applied Products" ID="2006325" />
+  <Product ProdFamily="FCA" ProdFamilyDesc="Cabinet Fancoil FCA-FVA-FKA" ProdSeqNbr="1" ProdClass="IRIS" ProdClassDesc="Iris Products (EUR)" Prod="AP_E" ProdDesc="Applied Products" ID="2006420" />
+  <Product ProdFamily="HRM" ProdFamilyDesc="PHE/HRW Heat recovery module for TK/YK/WK" ProdSeqNbr="1" ProdClass="IRIS" ProdClassDesc="Iris Products (EUR)" Prod="UN_E" ProdDesc="Unitary Products" ID="2006267" />
+  <Product ProdFamily="ETRACKER" ProdFamilyDesc="ICS" ProdSeqNbr="1" ProdClass="IRIS" ProdClassDesc="Iris Products (EUR)" Prod="ICSE" ProdDesc="ICS Product" ID="2006046" />
+  <Product ProdFamily="SSR" ProdFamilyDesc="1.5 - 5 Ton Residential Split Systems" ProdSeqNbr="1" ProdClass="RS" ProdClassDesc="Residential" Prod="RS" ProdDesc="Residential" ID="20160201" />
+</ProductFamilyInfo>
