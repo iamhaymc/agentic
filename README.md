@@ -7,7 +7,17 @@
 </tbody>
 </table>
 
-_Yet another agent harness_
+Yet another harness packed with features:
+- Python Library
+- Context Monitor
+- Persistent Memory
+- Pluggable Tools
+- Durable Sessions
+- Sandbox Workspaces
+- Workspace Git SCM
+- A2A Orchestration
+- REPL Interface
+- Web Interface
 
 - [EXAMPLE](EXAMPLE.ipynb) — Notebook of examples
 - [OPTIONS](OPTIONS.md) — Configuration properties
