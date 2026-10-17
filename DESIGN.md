@@ -12,20 +12,20 @@ is what has been built and why, and [`TODO.md`](TODO.md) is what is left.
 
 ## 1. Layout
 
-| File                  | Contents                                         |
-| --------------------- | ------------------------------------------------ |
-| `app/agentic.py`      | The library: every subsystem and the CLI         |
-| `app/agentic_sandbox.py` | Stdlib-only Windows AppContainer setup and child launcher |
-| `test/agentic_bdd.py` | Unit tests                                       |
-| `test/agentic_e2e.py` | Browser capture of the page, scripted end to end |
-| `test/agentic_eval.py`| Evals of long tasks: success, peak context, time |
-| `app/agentic_ui.html` | Chat page markup                                 |
-| `app/agentic_ui.css`  | Mobile first, theme driven styles                |
-| `app/agentic_ui.js`   | Client: blocks, markdown, editor, commands, hub  |
-| `test/assets/`        | The screenshots this guide shows                 |
-| `util/caveman_data.py`| Caveman SFT data: fetch, shrink, replay, stats   |
-| `util/caveman_data_bdd.py` | Its unit tests                              |
-| `pyproject.toml`      | Package metadata, dependencies, `agentic` script |
+| File                       | Contents                                                  |
+| -------------------------- | --------------------------------------------------------- |
+| `app/agentic.py`           | The library: every subsystem and the CLI                  |
+| `app/agentic_sandbox.py`   | Stdlib-only Windows AppContainer setup and child launcher |
+| `test/agentic_bdd.py`      | Unit tests                                                |
+| `test/agentic_e2e.py`      | Browser capture of the page, scripted end to end          |
+| `test/agentic_eval.py`     | Evals of long tasks: success, peak context, time          |
+| `app/agentic_ui.html`      | Chat page markup                                          |
+| `app/agentic_ui.css`       | Mobile first, theme driven styles                         |
+| `app/agentic_ui.js`        | Client: blocks, markdown, editor, commands, hub           |
+| `test/assets/`             | The screenshots this guide shows                          |
+| `util/caveman_data.py`     | Caveman SFT data: fetch, shrink, replay, stats            |
+| `util/caveman_data_bdd.py` | Its unit tests                                            |
+| `pyproject.toml`           | Package metadata, dependencies, `agentic` script          |
 
 `agentic.py` is a single flat module divided by commented section banners, in this
 order: **config, events, prompt, storage, sessions, memory, repository,
@@ -138,7 +138,7 @@ exists wins; there is no merging between them.
   interpolations resolve at read time. Without it JSON still works and YAML
   falls back to `pyyaml`.
 - `flatten_config()` flattens a nested group onto field names — `inference: {vlm:
-  v}` becomes `inference_vlm` — but only when every key of the group names a real
+v}` becomes `inference_vlm` — but only when every key of the group names a real
   field. Anything else stays as it is and becomes an extra, and a nested
   `extras:` mapping is folded in as is.
 - A `null` value leaves the default in place, an empty file is harmless and a
@@ -158,16 +158,16 @@ before the config file is read, so `${oc.env:VAR}` interpolations and the
 `AGENTIC_*` layer both see its values.
 
 - [x] Parsed with `python-dotenv` (quoting, `export`, comments, `${VAR}`
-  expansion); a key without a value is dropped.
+      expansion); a key without a value is dropped.
 - [x] The file wins over variables already set in the process environment
-  (`override=True`), so editing it always takes effect.
+      (`override=True`), so editing it always takes effect.
 - [x] `env_candidates()` is every path looked at, `read_env_file(path)` the
-  side-effect-free reader, `load_env_file(path, environ, override=False)` the
-  writer, returning what it applied.
+      side-effect-free reader, `load_env_file(path, environ, override=False)` the
+      writer, returning what it applied.
 - [x] `Engine(env_file=...)` mirrors `config_file`: `True` searches, `False` or
-  `None` skips, a missing named path raises. `env=False` skips it too.
+      `None` skips, a missing named path raises. `env=False` skips it too.
 - [x] The resolved path stays on the instance as `engine.env_file`, and the
-  repl banner reports it as `Env`.
+      repl banner reports it as `Env`.
 
 ```mermaid
 flowchart LR
@@ -184,7 +184,7 @@ flowchart LR
 name: scribe
 inference:
   url: ${oc.env:AGENTIC_INFERENCE_URL}
-  key: ${oc.env:AGENTIC_INFERENCE_KEY}   # omit it entirely for keyless endpoints
+  key: ${oc.env:AGENTIC_INFERENCE_KEY} # omit it entirely for keyless endpoints
   llm: some/leader-model
   vlm: some/vision-model
 vision:
@@ -197,60 +197,60 @@ genre: noir
 
 ### Configuration reference
 
-| Variable / field                                                              | Meaning                                     |
-| ----------------------------------------------------------------------------- | ------------------------------------------- |
-| `AGENTIC_NAME`, `AGENTIC_INSTRUCTIONS`                                        | Agent name and system instructions          |
-| `AGENTIC_INFERENCE_LLM`, `_URL`, `_KEY`                                       | Leader model, endpoint and credential       |
-| `AGENTIC_INFERENCE_CTX`                                                       | `num_ctx` sent per request (`0`: look up)   |
-| `AGENTIC_MAX_TURNS`                                                           | Maximum agentic turns per run               |
-| `AGENTIC_REQUEST_TIMEOUT`                                                     | Timeout per specialist call and connect     |
-| `AGENTIC_STREAM_TIMEOUT`                                                      | Leader stall guard; transport read timeout  |
-| `AGENTIC_STREAM_HEARTBEAT`                                                    | Seconds between `model.wait` (`0` off)      |
-| `AGENTIC_RETRY_ATTEMPTS`                                                      | Attempts per model call (`1` never retries) |
-| `AGENTIC_RETRY_BACKOFF`, `AGENTIC_RETRY_MAX_BACKOFF`                          | First wait between attempts, and its cap    |
-| `AGENTIC_RETRY_JITTER`                                                        | Fraction of a wait that is randomized       |
-| `AGENTIC_COST_INPUT`, `AGENTIC_COST_OUTPUT`                                   | Price of a million input / output tokens    |
-| `AGENTIC_INFERENCE_VLM`                                                       | Vision specialist (unset: the leader sees)  |
-| `AGENTIC_VISION_API_URL`, `AGENTIC_VISION_API_KEY`                            | Vision endpoint (defaults to the leader's)  |
-| `AGENTIC_VISION_INSTRUCTIONS`, `AGENTIC_VISION_MAX_TOKENS`                    | Vision system prompt and answer budget      |
-| `AGENTIC_INFERENCE_LDM`                                                       | Decision model (unset: role off)            |
-| `AGENTIC_DECISION_URL`, `AGENTIC_DECISION_KEY`                                | Decision endpoint (defaults to the leader's)|
-| `AGENTIC_MEMORY_ENABLED`                                                      | Remember the conversation of a session      |
-| `AGENTIC_MEMORY_TOOLS`                                                        | Replay journaled tool calls to the model    |
-| `AGENTIC_CONTEXT_WINDOW`, `AGENTIC_CONTEXT_RESERVE`                           | Window (`0` asks) and room for the reply    |
-| `AGENTIC_CONTEXT_TRIGGER`, `AGENTIC_CONTEXT_TARGET`                           | Compact past / down to (share of budget)    |
-| `AGENTIC_CONTEXT_KEEP`, `AGENTIC_CONTEXT_SUMMARY`                             | Outputs never cleared; summarise or drop    |
-| `AGENTIC_CONTEXT_TOKENIZER`                                                   | tiktoken encoding (empty: byte estimate)    |
-| `AGENTIC_PLAN_ENABLED`, `AGENTIC_SLICE_SHARE`, `AGENTIC_SLICE_STALL`          | Plan tool + note; slice; read-time cap      |
-| `AGENTIC_FOLD_ENABLED`                                                        | `branch` / `return` (context folding)       |
-| `AGENTIC_PLAN_ASK_SLICES`, `AGENTIC_PLAN_ASK_MINUTES`, `AGENTIC_PLAN_ASK_COST` | Sizing question thresholds (`0` off)        |
-| `AGENTIC_DELEGATE_ENABLED`                                                    | `delegate` tool (workers)                   |
-| `AGENTIC_WORKER_MODEL`, `AGENTIC_WORKER_API_URL`, `AGENTIC_WORKER_API_KEY`    | Worker role (defaults to the leader)        |
-| `AGENTIC_WORKER_INSTRUCTIONS`, `AGENTIC_WORKER_MAX_TURNS`                     | Worker system prompt and turn limit         |
-| `AGENTIC_WORKER_MAX_TOKENS`                                                   | Worker answer cap (`0` uncapped)            |
-| `AGENTIC_MAP_PARALLEL`                                                        | `map` workers at once                       |
-| `AGENTIC_RULES_ENABLED`, `AGENTIC_RULES_MAX_CHARS`                            | Learned rules; size that raises a warning   |
-| `AGENTIC_RULES_INSTRUCTIONS`, `AGENTIC_RULES_MAX_TOKENS`                      | Rule distiller prompt and answer budget     |
-| `AGENTIC_SUMMARY_MODEL`, `AGENTIC_SUMMARY_API_URL`, `AGENTIC_SUMMARY_API_KEY` | Summary role (defaults to the leader)       |
-| `AGENTIC_SUMMARY_INSTRUCTIONS`, `AGENTIC_SUMMARY_MAX_TOKENS`                  | Summary system prompt and its size          |
-| `AGENTIC_INPUT_SOURCE`                                                        | Input path or text (also `--input`)         |
-| `AGENTIC_TEMPLATE`                                                            | Template path or raw template for `main()`  |
-| `AGENTIC_STATE_DIR`                                                           | Home of the database and the workspaces     |
-| `AGENTIC_WORKSPACE_ROOT`, `AGENTIC_WORKSPACE_SEED`                            | Parent of workspaces; directory copied in   |
-| `AGENTIC_SESSION_TTL`, `AGENTIC_KEEP_WORKSPACE`                               | Session lifetime; keep the directory        |
-| `AGENTIC_SESSION_DURABLE`, `AGENTIC_SESSION_SWEEP_INTERVAL`                   | Survive a restart; expiry sweep period      |
-| `AGENTIC_REPO_URL`, `AGENTIC_REPO_BRANCH`, `AGENTIC_REPO_TOKEN`               | Default repository, base branch, credential |
-| `AGENTIC_REPO_REMOTE`, `AGENTIC_REPO_BRANCH_PREFIX`, `AGENTIC_REPO_DIR`       | Remote name, branch prefix, clone dir       |
-| `AGENTIC_REPO_AUTHOR_NAME`, `AGENTIC_REPO_AUTHOR_EMAIL`                       | Identity the harness commits with           |
-| `AGENTIC_REPO_DEPTH`, `AGENTIC_REPO_CLONE`, `AGENTIC_REPO_TIMEOUT`            | Clone depth, auto clone, git timeout        |
-| `AGENTIC_DB_PATH`, `AGENTIC_CACHE_SIZE`                                       | SQLite file and LRU capacity                |
-| `AGENTIC_SHELL_TIMEOUT`, `AGENTIC_SHELL_ENABLED`                              | Shell tool limits                           |
-| `AGENTIC_SHELL_HEARTBEAT`                                                     | Seconds between shell heartbeats (`0` off)  |
-| `AGENTIC_READ_OUTPUT_LIMIT`                                                   | Chars per `read_text_file` page (`0` auto)  |
-| `AGENTIC_OUTSIDE_READ`, `AGENTIC_OUTSIDE_WRITE`                               | Reads / writes beyond the workspace         |
-| `AGENTIC_SHELL_SANDBOX`, `AGENTIC_ASK_ENABLED`                                | Shell confinement backend; `ask_user` tool  |
-| `AGENTIC_HOST`, `AGENTIC_PORT`, `AGENTIC_THEME`                               | Web bind address and UI theme file          |
-| `AGENTIC_QUIET`, `AGENTIC_COLOR`                                              | Console output                              |
+| Variable / field                                                               | Meaning                                      |
+| ------------------------------------------------------------------------------ | -------------------------------------------- |
+| `AGENTIC_NAME`, `AGENTIC_INSTRUCTIONS`                                         | Agent name and system instructions           |
+| `AGENTIC_INFERENCE_LLM`, `_URL`, `_KEY`                                        | Leader model, endpoint and credential        |
+| `AGENTIC_INFERENCE_CTX`                                                        | `num_ctx` sent per request (`0`: look up)    |
+| `AGENTIC_MAX_TURNS`                                                            | Maximum agentic turns per run                |
+| `AGENTIC_REQUEST_TIMEOUT`                                                      | Timeout per specialist call and connect      |
+| `AGENTIC_STREAM_TIMEOUT`                                                       | Leader stall guard; transport read timeout   |
+| `AGENTIC_STREAM_HEARTBEAT`                                                     | Seconds between `model.wait` (`0` off)       |
+| `AGENTIC_RETRY_ATTEMPTS`                                                       | Attempts per model call (`1` never retries)  |
+| `AGENTIC_RETRY_BACKOFF`, `AGENTIC_RETRY_MAX_BACKOFF`                           | First wait between attempts, and its cap     |
+| `AGENTIC_RETRY_JITTER`                                                         | Fraction of a wait that is randomized        |
+| `AGENTIC_COST_INPUT`, `AGENTIC_COST_OUTPUT`                                    | Price of a million input / output tokens     |
+| `AGENTIC_INFERENCE_VLM`                                                        | Vision specialist (unset: the leader sees)   |
+| `AGENTIC_VISION_API_URL`, `AGENTIC_VISION_API_KEY`                             | Vision endpoint (defaults to the leader's)   |
+| `AGENTIC_VISION_INSTRUCTIONS`, `AGENTIC_VISION_MAX_TOKENS`                     | Vision system prompt and answer budget       |
+| `AGENTIC_INFERENCE_LDM`                                                        | Decision model (unset: role off)             |
+| `AGENTIC_DECISION_URL`, `AGENTIC_DECISION_KEY`                                 | Decision endpoint (defaults to the leader's) |
+| `AGENTIC_MEMORY_ENABLED`                                                       | Remember the conversation of a session       |
+| `AGENTIC_MEMORY_TOOLS`                                                         | Replay journaled tool calls to the model     |
+| `AGENTIC_CONTEXT_WINDOW`, `AGENTIC_CONTEXT_RESERVE`                            | Window (`0` asks) and room for the reply     |
+| `AGENTIC_CONTEXT_TRIGGER`, `AGENTIC_CONTEXT_TARGET`                            | Compact past / down to (share of budget)     |
+| `AGENTIC_CONTEXT_KEEP`, `AGENTIC_CONTEXT_SUMMARY`                              | Outputs never cleared; summarise or drop     |
+| `AGENTIC_CONTEXT_TOKENIZER`                                                    | tiktoken encoding (empty: byte estimate)     |
+| `AGENTIC_PLAN_ENABLED`, `AGENTIC_SLICE_SHARE`, `AGENTIC_SLICE_STALL`           | Plan tool + note; slice; read-time cap       |
+| `AGENTIC_FOLD_ENABLED`                                                         | `branch` / `return` (context folding)        |
+| `AGENTIC_PLAN_ASK_SLICES`, `AGENTIC_PLAN_ASK_MINUTES`, `AGENTIC_PLAN_ASK_COST` | Sizing question thresholds (`0` off)         |
+| `AGENTIC_DELEGATE_ENABLED`                                                     | `delegate` tool (workers)                    |
+| `AGENTIC_WORKER_MODEL`, `AGENTIC_WORKER_API_URL`, `AGENTIC_WORKER_API_KEY`     | Worker role (defaults to the leader)         |
+| `AGENTIC_WORKER_INSTRUCTIONS`, `AGENTIC_WORKER_MAX_TURNS`                      | Worker system prompt and turn limit          |
+| `AGENTIC_WORKER_MAX_TOKENS`                                                    | Worker answer cap (`0` uncapped)             |
+| `AGENTIC_MAP_PARALLEL`                                                         | `map` workers at once                        |
+| `AGENTIC_RULES_ENABLED`, `AGENTIC_RULES_MAX_CHARS`                             | Learned rules; size that raises a warning    |
+| `AGENTIC_RULES_INSTRUCTIONS`, `AGENTIC_RULES_MAX_TOKENS`                       | Rule distiller prompt and answer budget      |
+| `AGENTIC_SUMMARY_MODEL`, `AGENTIC_SUMMARY_API_URL`, `AGENTIC_SUMMARY_API_KEY`  | Summary role (defaults to the leader)        |
+| `AGENTIC_SUMMARY_INSTRUCTIONS`, `AGENTIC_SUMMARY_MAX_TOKENS`                   | Summary system prompt and its size           |
+| `AGENTIC_INPUT_SOURCE`                                                         | Input path or text (also `--input`)          |
+| `AGENTIC_TEMPLATE`                                                             | Template path or raw template for `main()`   |
+| `AGENTIC_STATE_DIR`                                                            | Home of the database and the workspaces      |
+| `AGENTIC_WORKSPACE_ROOT`, `AGENTIC_WORKSPACE_SEED`                             | Parent of workspaces; directory copied in    |
+| `AGENTIC_SESSION_TTL`, `AGENTIC_KEEP_WORKSPACE`                                | Session lifetime; keep the directory         |
+| `AGENTIC_SESSION_DURABLE`, `AGENTIC_SESSION_SWEEP_INTERVAL`                    | Survive a restart; expiry sweep period       |
+| `AGENTIC_REPO_URL`, `AGENTIC_REPO_BRANCH`, `AGENTIC_REPO_TOKEN`                | Default repository, base branch, credential  |
+| `AGENTIC_REPO_REMOTE`, `AGENTIC_REPO_BRANCH_PREFIX`, `AGENTIC_REPO_DIR`        | Remote name, branch prefix, clone dir        |
+| `AGENTIC_REPO_AUTHOR_NAME`, `AGENTIC_REPO_AUTHOR_EMAIL`                        | Identity the harness commits with            |
+| `AGENTIC_REPO_DEPTH`, `AGENTIC_REPO_CLONE`, `AGENTIC_REPO_TIMEOUT`             | Clone depth, auto clone, git timeout         |
+| `AGENTIC_DB_PATH`, `AGENTIC_CACHE_SIZE`                                        | SQLite file and LRU capacity                 |
+| `AGENTIC_SHELL_TIMEOUT`, `AGENTIC_SHELL_ENABLED`                               | Shell tool limits                            |
+| `AGENTIC_SHELL_HEARTBEAT`                                                      | Seconds between shell heartbeats (`0` off)   |
+| `AGENTIC_READ_OUTPUT_LIMIT`                                                    | Chars per `read_text_file` page (`0` auto)   |
+| `AGENTIC_OUTSIDE_READ`, `AGENTIC_OUTSIDE_WRITE`                                | Reads / writes beyond the workspace          |
+| `AGENTIC_SHELL_SANDBOX`, `AGENTIC_ASK_ENABLED`                                 | Shell confinement backend; `ask_user` tool   |
+| `AGENTIC_HOST`, `AGENTIC_PORT`, `AGENTIC_THEME`                                | Web bind address and UI theme file           |
+| `AGENTIC_QUIET`, `AGENTIC_COLOR`                                               | Console output                               |
 
 Anything not listed is an extra: pass it as a constructor override and read it in
 the template as `config.<name>`.
@@ -273,28 +273,28 @@ it to the subscribers of that type plus the subscribers of `EventType.ALL`.
 Handlers may be sync or async; exceptions are printed to stderr and swallowed.
 `on()` returns an unsubscriber.
 
-| Event                          | Payload                                    |
-| ------------------------------ | ------------------------------------------ |
-| `agent.start`                  | `config` (never forwarded to the web)      |
-| `agent.end`                    | `output`, `error`, `error_kind`, `usage`, `config` |
-| `agent.error`                  | `error`, `error_kind`                      |
-| `block.start`                  | `id`, `kind`, `role`; a prompt adds `text`, `attachments`, `complete` |
-| `block.delta`                  | `id`, `kind`, `text` (the delta)           |
-| `block.end`                    | `id`, `kind`, `text` (the full block)      |
-| `tool.start`                   | `id`, `kind`, `name`, `call_id`, `arguments`, `text` |
-| `tool.progress`                | `id`, `kind`, `name`, `call_id`, `text` (output, empty for a heartbeat), `duration` |
-| `tool.end`                     | the above plus `ok`, `result`, `duration`  |
-| `block.*`, `tool.*`, `context.compact` of a worker | as above plus `parent` (the block of the call that started it) and `depth` |
-| `model.retry`                  | `role`, `error_kind`, `attempt`, `attempts`, `delay`, `error` |
-| `model.wait`                   | `role`, `elapsed` (seconds silent), `timeout` (the stall budget, `0` unbounded) |
-| `context.usage`                | `tokens`, `window`, `usable`, `high`, `low`, `fill` (tokens / usable), `estimated` (false when the provider counted), `slice`, `prefill` / `decode` once measured |
-| `context.compact`              | `id` (its marker block), `reason`, `tokens_before`, `tokens_after`, `thoughts`, `cleared`, `clipped`, `summarized`, `message` |
-| `plan.update`                  | `plan`: steps, `done`, `total`, `current`, `left`, `slices`, `seconds` (`null` when cleared) |
-| `question.start`               | `id`, `kind`, `call_id`, `question`, `options` |
-| `question.end`                 | `id`, `kind`, `call_id`, `answer`, `ok` (false when cancelled) |
-| `feedback`                     | `ok`, `id` (the answer), `vote`, `message`, plus `action`, `rule`, `warning` when learned |
-| `session.open`, `session.close`| `kind`, `repo`                             |
-| `log`                          | `kind`, `message`                          |
+| Event                                              | Payload                                                                                                                                                           |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent.start`                                      | `config` (never forwarded to the web)                                                                                                                             |
+| `agent.end`                                        | `output`, `error`, `error_kind`, `usage`, `config`                                                                                                                |
+| `agent.error`                                      | `error`, `error_kind`                                                                                                                                             |
+| `block.start`                                      | `id`, `kind`, `role`; a prompt adds `text`, `attachments`, `complete`                                                                                             |
+| `block.delta`                                      | `id`, `kind`, `text` (the delta)                                                                                                                                  |
+| `block.end`                                        | `id`, `kind`, `text` (the full block)                                                                                                                             |
+| `tool.start`                                       | `id`, `kind`, `name`, `call_id`, `arguments`, `text`                                                                                                              |
+| `tool.progress`                                    | `id`, `kind`, `name`, `call_id`, `text` (output, empty for a heartbeat), `duration`                                                                               |
+| `tool.end`                                         | the above plus `ok`, `result`, `duration`                                                                                                                         |
+| `block.*`, `tool.*`, `context.compact` of a worker | as above plus `parent` (the block of the call that started it) and `depth`                                                                                        |
+| `model.retry`                                      | `role`, `error_kind`, `attempt`, `attempts`, `delay`, `error`                                                                                                     |
+| `model.wait`                                       | `role`, `elapsed` (seconds silent), `timeout` (the stall budget, `0` unbounded)                                                                                   |
+| `context.usage`                                    | `tokens`, `window`, `usable`, `high`, `low`, `fill` (tokens / usable), `estimated` (false when the provider counted), `slice`, `prefill` / `decode` once measured |
+| `context.compact`                                  | `id` (its marker block), `reason`, `tokens_before`, `tokens_after`, `thoughts`, `cleared`, `clipped`, `summarized`, `message`                                     |
+| `plan.update`                                      | `plan`: steps, `done`, `total`, `current`, `left`, `slices`, `seconds` (`null` when cleared)                                                                      |
+| `question.start`                                   | `id`, `kind`, `call_id`, `question`, `options`                                                                                                                    |
+| `question.end`                                     | `id`, `kind`, `call_id`, `answer`, `ok` (false when cancelled)                                                                                                    |
+| `feedback`                                         | `ok`, `id` (the answer), `vote`, `message`, plus `action`, `rule`, `warning` when learned                                                                         |
+| `session.open`, `session.close`                    | `kind`, `repo`                                                                                                                                                    |
+| `log`                                              | `kind`, `message`                                                                                                                                                 |
 
 ## 6. Prompt
 
@@ -587,7 +587,7 @@ Workers (`delegate`, `Engine.build_delegate()`, `run_worker()`):
 - `WorkerRelay` relays the private bus: the worker's blocks, calls and compactions (`NESTED`) are published on the leader's bus by `nest()` with `parent` (the `delegate` block) and `depth` (1), and the call gets a heartbeat (`tool.progress`, empty) at most once a second; each keeps the leader's stall guard satisfied; the worker's `agent.*`, `context.usage`, waits and retries never reach the leader's bus (without a parent block it falls back to `-> call(...)`, `!! name failed: …`, `~~ compacted …` lines)
 - answer: `worker.output`, clipped to `worker_max_tokens` (head and tail), then `[worker: N tool calls in Ss]`; a failure is `Error: the worker failed (kind) after N tool calls: …`, never raised
 - tokens: the worker's calls are recorded on the run's `Usage` through `current_usage()`, so `agent.end` prices them
-- shown: the page nests the worker's blocks in the `delegate` block (a thread down the left edge, each step folded to its head once done, no votes on its answer); the console indents its calls, outcomes, compactions and answer under the call (`  | `, two spaces a level), leaving out what it streams so parallel workers never interleave within a line; journaled on the call (below), so a reload shows them again
+- shown: the page nests the worker's blocks in the `delegate` block (a thread down the left edge, each step folded to its head once done, no votes on its answer); the console indents its calls, outcomes, compactions and answer under the call (` |`, two spaces a level), leaving out what it streams so parallel workers never interleave within a line; journaled on the call (below), so a reload shows them again
 
 Worker steps (`StepLog`, `RunResult.steps`, `Engine.publish_step()`):
 
@@ -715,7 +715,7 @@ one, which is re-raised untouched so a defect here is never dressed up as a
 provider fault.
 
 `RetryPolicy` is how a call is made: `attempts` in total, `timeout` per attempt,
-`stall` as the longest silence between two events of a stream, and a wait of `backoff * 2 ** (n - 1)` after failure *n*, capped at
+`stall` as the longest silence between two events of a stream, and a wait of `backoff * 2 ** (n - 1)` after failure _n_, capped at
 `max_backoff` and multiplied by a random factor in `[1 - jitter, 1]` so clients
 a provider failed together do not return together. `RetryPolicy.from_config()`
 reads `request_timeout`, `stream_timeout` and the `retry_*` fields; `Engine.build_policy()` is the
@@ -739,7 +739,7 @@ differently. A specialist completion is one request, so `ModelPool.complete()`
 wraps the whole call in the timeout. The leader's stream is a long lived read
 whose duration is legitimately unbounded, so it is bound by `stall`
 (`stream_timeout`, default 600s) as a **stall guard** instead:
-`Engine.next_event()` bounds the wait for the *next* event, and
+`Engine.next_event()` bounds the wait for the _next_ event, and
 `Engine.stall_timeout()` extends that budget by `shell_timeout` while a tool
 call is outstanding, since the SDK runs tools inside the same stream and a slow
 shell command must not look like a stalled provider. The budget runs from the
@@ -935,18 +935,18 @@ whose sizing question goes through the same `ask` on the block of its call;
 adds `delegate`. `Engine.build_run_tools(workspace, config, result)` wires all
 of them to one run, for the leader and for each worker alike.
 
-| Tool                | Present when                | Effect                                    |
-| ------------------- | --------------------------- | ----------------------------------------- |
-| `list_directory`    | always                      | List a workspace directory                |
-| `read_text_file`    | always                      | Read a UTF-8 file, a page at a time       |
-| `write_text_file`   | always                      | Write a file, creating parents            |
-| `apply_patch`       | always                      | Apply a unified diff                      |
-| `view_image`        | no vision model             | Return the image as a data URL            |
-| `describe_image`    | vision model configured     | Ask the specialist about the image        |
-| `run_shell_command` | `shell_enabled`, unconfined or sandboxed | Run a command in the workspace |
-| `ask_user`          | `ask_enabled` (repl, web)   | Ask the user, wait for the answer         |
-| `plan`              | `plan_enabled`              | Plan steps, each measured against a slice |
-| `delegate`          | `delegate_enabled`          | Run one step in a fresh context (a worker) |
+| Tool                | Present when                             | Effect                                     |
+| ------------------- | ---------------------------------------- | ------------------------------------------ |
+| `list_directory`    | always                                   | List a workspace directory                 |
+| `read_text_file`    | always                                   | Read a UTF-8 file, a page at a time        |
+| `write_text_file`   | always                                   | Write a file, creating parents             |
+| `apply_patch`       | always                                   | Apply a unified diff                       |
+| `view_image`        | no vision model                          | Return the image as a data URL             |
+| `describe_image`    | vision model configured                  | Ask the specialist about the image         |
+| `run_shell_command` | `shell_enabled`, unconfined or sandboxed | Run a command in the workspace             |
+| `ask_user`          | `ask_enabled` (repl, web)                | Ask the user, wait for the answer          |
+| `plan`              | `plan_enabled`                           | Plan steps, each measured against a slice  |
+| `delegate`          | `delegate_enabled`                       | Run one step in a fresh context (a worker) |
 
 Paged reads (`read_text_file(path, offset=1, limit=0)`):
 
@@ -954,11 +954,11 @@ Paged reads (`read_text_file(path, offset=1, limit=0)`):
 - `TextPage.render()` — the file as is when whole, else the lines + `[lines A-B of N of path; continue with offset=B+1]`
 - `max_chars` is `Engine.page_limit()`: `read_output_limit`, else a quarter of the run's usable budget at each read, time cap included (× 4 chars/token, ≥ 2,000, at most `Engine.read_limit(config)`); `-1` reads whole
 - `ReadRepeats` — per tool build: a cut read repeated back to back with the same arguments returns an error naming the next range instead of the same page; `write_text_file`, `apply_patch` and `run_shell_command` forget it
-| `git_status`        | the session has a checkout  | Branch and working tree                   |
-| `git_commit`        | the session has a checkout  | Stage everything and commit               |
-| `git_push`          | the session has a checkout  | Push the session branch                   |
-| `open_pull_request` | the session has a checkout  | Open a pull request, return its URL       |
-| `publish_work`      | the session has a checkout  | Commit, push and open the pull request    |
+  | `git_status` | the session has a checkout | Branch and working tree |
+  | `git_commit` | the session has a checkout | Stage everything and commit |
+  | `git_push` | the session has a checkout | Push the session branch |
+  | `open_pull_request` | the session has a checkout | Open a pull request, return its URL |
+  | `publish_work` | the session has a checkout | Commit, push and open the pull request |
 
 Registered factories (`registry.register(name, factory)`) are appended last and
 receive the `Workspace`. `ToolRegistry.guard` wraps every tool so `WorkspaceError`,
@@ -996,29 +996,29 @@ caller supplies (`session_id`, `connection`) and return a dict with at least
 `ok`; `session`, `sessions`, `commands` and `message` are understood by the
 client.
 
-| Command             | Effect                                            |
-| ------------------- | ------------------------------------------------- |
-| `/help`             | List the available commands                       |
-| `/new`              | Start a new session (cloning the repo if set)     |
-| `/end [id]`         | End a session and wipe its workspace              |
-| `/sessions`         | List live sessions                                |
-| `/use <id>`         | Switch to an existing session                     |
-| `/forget`           | Forget the conversation of the current session    |
-| `/resume`           | Continue the run that did not finish              |
-| `/compact [focus]`  | Summarise the conversation now (optional focus)   |
-| `/plan`             | The plan as a checklist, what is left, the speeds |
-| `/good [why]`       | Rate the last answer good: learn a rule           |
-| `/bad [why]`        | Rate the last answer bad: learn a rule            |
-| `/rules [drop <id>\|clear]` | List or prune the learned rules           |
-| `/model [name]`     | Show or set the leader model                      |
-| `/vision [name\|none]` | Show or set the vision specialist              |
-| `/repo [url\|none]` | Show, set or clear the default repository         |
-| `/clone`            | Clone the repository into the current session     |
-| `/status`           | Branch and working tree of the checkout           |
-| `/commit <message>` | Stage everything and commit                       |
-| `/push`             | Push the session branch                           |
-| `/pr <title>`       | Open a pull request (body on the following lines) |
-| `/publish <title>`  | Commit, push and open the pull request            |
+| Command                     | Effect                                            |
+| --------------------------- | ------------------------------------------------- |
+| `/help`                     | List the available commands                       |
+| `/new`                      | Start a new session (cloning the repo if set)     |
+| `/end [id]`                 | End a session and wipe its workspace              |
+| `/sessions`                 | List live sessions                                |
+| `/use <id>`                 | Switch to an existing session                     |
+| `/forget`                   | Forget the conversation of the current session    |
+| `/resume`                   | Continue the run that did not finish              |
+| `/compact [focus]`          | Summarise the conversation now (optional focus)   |
+| `/plan`                     | The plan as a checklist, what is left, the speeds |
+| `/good [why]`               | Rate the last answer good: learn a rule           |
+| `/bad [why]`                | Rate the last answer bad: learn a rule            |
+| `/rules [drop <id>\|clear]` | List or prune the learned rules                   |
+| `/model [name]`             | Show or set the leader model                      |
+| `/vision [name\|none]`      | Show or set the vision specialist                 |
+| `/repo [url\|none]`         | Show, set or clear the default repository         |
+| `/clone`                    | Clone the repository into the current session     |
+| `/status`                   | Branch and working tree of the checkout           |
+| `/commit <message>`         | Stage everything and commit                       |
+| `/push`                     | Push the session branch                           |
+| `/pr <title>`               | Open a pull request (body on the following lines) |
+| `/publish <title>`          | Commit, push and open the pull request            |
 
 `/clear` and `/theme` are client-side only and never reach the server, and
 `/exit` (with `/quit`) is answered by the repl rather than the registry. A
@@ -1084,25 +1084,25 @@ The model asks the person behind a run through `ask_user`, and the core only
 brokers the question; a front end shows it and answers it:
 
 - [x] `Engine.build_asker(config, result)` is the `Asker` of a run, or `None`
-  unless `ask_enabled` — tri-state like `outside_read`, settled by the mode
-  (`Repl` and `WebServer` set `True`, an embedded engine or a one shot run stay
-  off, since a question nobody can answer would hang the run).
+      unless `ask_enabled` — tri-state like `outside_read`, settled by the mode
+      (`Repl` and `WebServer` set `True`, an embedded engine or a one shot run stay
+      off, since a question nobody can answer would hang the run).
 - [x] A question takes the id of its tool call's block, so a client turns that
-  block into the card; a question without a known call gets
-  `{session}-{run}-q{random}`. It is published as `question.start`, kept in
-  `Engine.questions` (`id -> (session, future)`) and ends with `question.end`
-  carrying the answer and `ok` — `ok` is false when the run was cancelled under
-  it, which is published too.
+      block into the card; a question without a known call gets
+      `{session}-{run}-q{random}`. It is published as `question.start`, kept in
+      `Engine.questions` (`id -> (session, future)`) and ends with `question.end`
+      carrying the answer and `ok` — `ok` is false when the run was cancelled under
+      it, which is published too.
 - [x] `Engine.answer(id, text, session_id=…)` resolves it and returns whether
-  there was such a question; with a `session_id` the question must belong to
-  that session.
+      there was such a question; with a `session_id` the question must belong to
+      that session.
 - [x] `Engine.pending_questions(session)` returns the open questions of a
-  session as `question.start` published them (`Engine.asking`), which is how a
-  client that (re)connects shows the card again.
+      session as `question.start` published them (`Engine.asking`), which is how a
+      client that (re)connects shows the card again.
 - [x] While it waits the call is marked `ToolCall.asking`, and `alive_at()`
-  reports such a call as alive now: the stall guard bounds silent models, not
-  people who are thinking. Stop (web) or Ctrl-C (repl) cancels the run and the
-  question with it.
+      reports such a call as alive now: the stall guard bounds silent models, not
+      people who are thinking. Stop (web) or Ctrl-C (repl) cancels the run and the
+      question with it.
 
 ```mermaid
 sequenceDiagram
@@ -1203,39 +1203,39 @@ blocks of the run in flight the journal does not hold yet, which `hello`
 replays. A vote (`feedback`) learns on a task of its own (`WebServer.tasks`),
 since it calls a model, and its outcome reaches the session as `feedback`.
 
-| Endpoint            | Response                                    |
-| ------------------- | ------------------------------------------- |
-| `GET /`             | `app/agentic_ui.html` (plus `.css`, `.js`)  |
-| `GET /api/health`   | `{ok, name}`                                |
-| `GET /api/config`   | The resolved config, secrets masked         |
-| `GET /api/commands` | The command list                            |
-| `GET /api/sessions` | Live sessions                               |
-| `GET /api/theme`    | The server default theme variables          |
+| Endpoint            | Response                                   |
+| ------------------- | ------------------------------------------ |
+| `GET /`             | `app/agentic_ui.html` (plus `.css`, `.js`) |
+| `GET /api/health`   | `{ok, name}`                               |
+| `GET /api/config`   | The resolved config, secrets masked        |
+| `GET /api/commands` | The command list                           |
+| `GET /api/sessions` | Live sessions                              |
+| `GET /api/theme`    | The server default theme variables         |
 
-| Message      | Direction | Fields                                      |
-| ------------ | --------- | ------------------------------------------- |
-| `ready`      | server    | `connection`                                |
-| `hello`      | both      | client: `session`; server: `session`, `config`, `commands`, `theme`, `history`, `live`, `questions`, `busy`, `unfinished`, `warning` |
-| `prompt`     | client    | `text`, `attachments[{name, type, data}]`   |
-| `command`    | client    | `text`                                      |
-| `cancel`     | client    | —                                           |
-| `answer`     | client    | `id`, `text`                                |
-| `feedback`   | both      | client: `id`, `vote` (`up`/`down`), `note?`; server: the `feedback` event |
-| `ping`/`pong`| both      | —                                           |
-| `block.start`| server    | `id`, `kind`, `role`, `text`, `attachments`, `complete` |
-| `block.delta`| server    | `id`, `kind`, `text`                        |
-| `block.end`  | server    | `id`, `kind`                                |
-| `tool.start` | server    | `id`, `kind`, `name`, `call_id`, `arguments`, `text` |
-| `tool.progress` | server | `id`, `kind`, `name`, `call_id`, `text`, `duration` |
-| `tool.end`   | server    | the above plus `ok`, `result`, `duration`   |
-| `model.wait` | server    | `role`, `elapsed`, `timeout`                |
-| `question.start` | server | `id`, `kind`, `call_id`, `question`, `options` |
-| `question.end` | server  | `id`, `kind`, `call_id`, `answer`, `ok`     |
-| `agent.end`  | server    | `error?`                                    |
-| `agent.error`| server    | `error`                                     |
-| `command`    | server    | `command`, `result`                         |
-| `cancelled`  | server    | `ok`                                        |
-| `error`      | server    | `message`                                   |
+| Message          | Direction | Fields                                                                                                                               |
+| ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `ready`          | server    | `connection`                                                                                                                         |
+| `hello`          | both      | client: `session`; server: `session`, `config`, `commands`, `theme`, `history`, `live`, `questions`, `busy`, `unfinished`, `warning` |
+| `prompt`         | client    | `text`, `attachments[{name, type, data}]`                                                                                            |
+| `command`        | client    | `text`                                                                                                                               |
+| `cancel`         | client    | —                                                                                                                                    |
+| `answer`         | client    | `id`, `text`                                                                                                                         |
+| `feedback`       | both      | client: `id`, `vote` (`up`/`down`), `note?`; server: the `feedback` event                                                            |
+| `ping`/`pong`    | both      | —                                                                                                                                    |
+| `block.start`    | server    | `id`, `kind`, `role`, `text`, `attachments`, `complete`                                                                              |
+| `block.delta`    | server    | `id`, `kind`, `text`                                                                                                                 |
+| `block.end`      | server    | `id`, `kind`                                                                                                                         |
+| `tool.start`     | server    | `id`, `kind`, `name`, `call_id`, `arguments`, `text`                                                                                 |
+| `tool.progress`  | server    | `id`, `kind`, `name`, `call_id`, `text`, `duration`                                                                                  |
+| `tool.end`       | server    | the above plus `ok`, `result`, `duration`                                                                                            |
+| `model.wait`     | server    | `role`, `elapsed`, `timeout`                                                                                                         |
+| `question.start` | server    | `id`, `kind`, `call_id`, `question`, `options`                                                                                       |
+| `question.end`   | server    | `id`, `kind`, `call_id`, `answer`, `ok`                                                                                              |
+| `agent.end`      | server    | `error?`                                                                                                                             |
+| `agent.error`    | server    | `error`                                                                                                                              |
+| `command`        | server    | `command`, `result`                                                                                                                  |
+| `cancelled`      | server    | `ok`                                                                                                                                 |
+| `error`          | server    | `message`                                                                                                                            |
 
 Attachments are decoded from their data URLs, capped (8 MiB per prompt, 16 MiB
 per websocket message), written under `attachments/` in the session workspace
@@ -1539,7 +1539,6 @@ engine = Engine(inference_llm="some/model", inference_key=..., env=False)
 result = await engine.run(my_messages, tools=my_tools, session_id=my_id)
 ```
 
-
 ```python
 class MyAgent(Agent):
     def resolve_config(self, config=None, **overrides):
@@ -1678,357 +1677,6 @@ Baseline (2026-10-14, `--runs 3`, scale 1, seeds 0–2; per task: median peak (w
 template that injects `config.input`, and `story.py`, which subclasses `Agent` to
 set the model, the instructions, story specific config values and an exporter
 that copies the finished story out of the session workspace.
-
-## 24. Caveman SFT data
-
-`util/caveman_data.py` turns agent traces into SFT data that teaches a small agentic model (Qwen3.5 4B/9B, LFM2.5 class) to reason in fewer tokens. A standalone script: it never imports `agentic.py`.
-
-**trace → shrink think / analysis / plan → gates → replay → mix → LoRA SFT → eval**
-
-```mermaid
-flowchart LR
-  F[fetch] --> S[source.jsonl]
-  S --> C[compressor LLM]
-  C --> G{gates + replay}
-  G -- fail, first try --> C
-  G -- pass --> K[shrunk turn]
-  G -- fail twice --> O[original turn]
-  K --> T["level/train.jsonl"]
-  O --> T
-  T --> M["mix/train.jsonl"]
-  S -- held out --> V["mix/eval.jsonl"]
-  M --> L[LoRA SFT]
-  L --> E[eval]
-  V --> E
-```
-
-- Rules adapted from [caveman](https://github.com/JuliusBrussee/caveman) (Apache-2.0, `skills/caveman/SKILL.md`)
-- Caveman only shapes output voice (its `docs/HONEST-NUMBERS.md`: thinking not compressed); this pipeline applies the voice to reasoning
-- Every action stays: only prose is rewritten, and a turn that fails a gate keeps its original bytes
-
-### Source
-
-`open-thoughts/OpenThoughts-Agent-SFT-100K` (Apache-2.0, 94,334 rows), Terminus-2 harness:
-- `conversations`: alternating `user` (task, then terminal output) and `assistant`
-- assistant turn: `<think>…</think>{"analysis","plan","commands":[{"keystrokes","duration"}],"task_complete"}`; body sometimes in a ` ```json ` fence (~20% of turns)
-- per turn medians: think ~257 chars, analysis + plan ~430 chars, keystrokes ~66 chars; `think` often restates `analysis` (main redundancy)
-- `result`: `None` / `AgentTimeoutError` / `ContextLengthExceededError`; no pass / fail label
-- `trace_source`: `main`, `summarization-1-answers`, `summarization-1-summary`, or none
-- teacher `hosted_vllm/glm`; rows up to ~127 KB
-- rejected: `Roman1111111/claude-opus-4.6-10000x` (single turn GSM8K-style, no tools, median reasoning ~40 tokens, Anthropic ToS risk)
-
-### Fetch
-
-Two paths, one sample: the same seed gives the same offsets, and a larger `--limit` is a superset:
-- viewer (default): `/rows?offset=N&length=1` per offset, `--pace 0.5` s, 6 tries, `Retry-After` honoured, exponential cap 60 s; truncated rows skipped
-- parquet (`--parquet`): the viewer's own export, 10 shards / 1.75 GB into `data/caveman/parquet/` (`.part`, size checked, then renamed); only row groups holding a wanted offset are read; `--limit 0` takes every row
-- resumes: rows already in `source.jsonl` are skipped; needs `pyarrow` for parquet (in `.venv` via `lighteval`)
-
-### Shrink
-
-One compressor call per assistant turn, one retry:
-- sent for rewrite: `think`, `analysis`, `plan`, plus the level; `commands` clipped to 160 chars as read-only context
-- `commands`, `task_complete` and every other key are re-assembled from the original JSON, never from the model
-- failed turn keeps its content byte for byte; unparseable turn passes through (`reasons: ["unparsed"]`)
-- retry feedback names lost facts, lost negations, "shorter", or the replay miss
-- turns of a trace run concurrently (`--workers 2`, 4 on a hosted API)
-- `--traces N` shrinks N traces at once (N × workers calls in flight); rows are written in source order, so output order is deterministic; the log carries an ETA
-- the client retries a call 5 times (`Retry-After` honoured): 429s at high concurrency
-- temperature 0, seed 0, `response_format=json_object`, `reasoning_effort: "none"` (thinking on: 8× slower, and it invented a fact); `--ctx N` → `options.num_ctx` for Ollama only (off by default)
-- `RULES` (the system prompt) is the same for every turn and level, so a provider's prefix cache holds it
-
-### Levels
-
-**ultra → full → lite**, terse to gentle:
-- `lite`: keep articles and full sentences; cut filler, hedging, repetition
-- `full`: short words, fragments; drop articles where a sentence still reads in one pass
-- `ultra`: telegraphic; short forms (dir, config, env, repo, deps); `->` for cause or sequence
-- hard turn starts one level gentler: the terminal shows a failure, or its prose runs past 400 tokens (~p90)
-- failure: line-anchored signals only: `Traceback`, `KeyError: x` / pytest `E   KeyError` at line start, `error:` / `E:` / `fatal:` / `error[E0599]:`, `a.c:1:2: error`, `bash: syntax error`, `FAIL:` / `... FAIL` / `1 failed`, `command not found`, `No such file or directory`, `make: ***`, `npm ERR!`
-- read in terminal output only: text after `New Terminal Output:` / `Current terminal state:` (not the task), minus prompt lines with the typed command, heredoc `> ` lines and harness format warnings
-- v2 matched any `error` word (printed source, the task text, a `grep error` command): 40% of turns hard; v3: 21% (12% failure, 10% long)
-- a replay miss retries one level gentler; every other failure retries at the same level, its feedback naming what was lost (a gentler retry after a lost fact ran `longer` on short turns: 3 of 29 lost)
-- budget tag: a system message `Reasoning budget: <level>` heads each trace (`--no-tag` skips it), so one student can learn every level; `turn` in `turns.jsonl` stays the source index
-
-### Gates
-
-`check_turn`; empty `reasons` keeps the rewrite:
-- `actions`: a non-prose body key changed, or `<think>` appeared / vanished
-- `empty`: a non-empty field emptied
-- `tag`: `<think>` / `</think>` injected
-- `facts`: lost code span, path, flag, number, mixed alnum, snake / camel case, dotted name (enumerators, `Step N`, `e.g.` ignored; whole word match)
-- `negation`: a class lost: not (with n't, cannot, no, none, nothing, without, zero, missing, empty, silent…), never, only, except
-- `longer`: o200k tokens of the new prose ≥ the old
-- `replay`: see below
-
-> not and no are one class: "didn't find any" → "none found" changes form, not meaning (5 of 7 baseline negation failures were this swap)
-
-### Replay
-
-A verifier model must reach the same commands from the shrunk reasoning:
-- input: task (text after `Task Description:`, first 3,000 chars), the output before the turn (last 3,000 chars), the reasoning; never the commands
-- output: `{"commands": [{"keystrokes"}]}`; score = difflib ratio of whitespace-squashed keystrokes
-- pass at ≥ 0.8, else when no worse than the original reasoning's score − 0.1 (scored once per turn, only when needed): a plan that never named its heredoc is not the shrink's fault
-- a turn without commands skips the verifier; `--verifier` picks the model (default the compressor), `--no-replay` turns the gate off
-- `--verifier-url` + `--verifier-key` put the verifier on its own host, as a set (`--verifier` required there): the compressor's key never goes to it
-
-Student-sized check, `replay`: re-runs the gate on a level's shrunk turns with another verifier:
-- question: does a student-sized model still derive the commands from the terse text the student is trained on?
-- input: `<level>/turns.jsonl` (`ok` turns with commands) joined to `source.jsonl`; same pass rule as the gate
-- output: `<level>/replay-<model>.jsonl` per turn (`score`, `base`, `ok`, the recorded result) and `.json` (pass rate per level, score p50s)
-
-```bash
-uv run python util/caveman_data.py replay --level full --verifier qwen/qwen3.5-9b --workers 8
-```
-
-### Filter / weight
-
-Rules `FIELD=VALUE:W`, repeatable:
-
-```bash
-uv run python util/caveman_data.py shrink --weight result=ContextLengthExceededError:0 --weight trace_source=None:0.5
-```
-
-- matching rules multiply; `None` matches a null or missing field
-- weight 0 drops the row before any model call; the rest carry `caveman.weight` for the trainer
-
-### Mix
-
-One SFT set from every level; a seeded plan assigns each trace one slot:
-
-**holdout → original → one level**, per `row_idx`, from `seed`:
-- `eval` (`--holdout 0.05`): the source row, never trained on, into `mix/eval.jsonl`
-- `original` (`--original 0.1`): the source row, untagged, `caveman.level: null`: the student still acts without a tag
-- a level of `--levels` (uniform): that level's shrunk row, budget tag and shrink weight kept
-- `mix/plan.json` holds the plan; `shrink --planned` shrinks only the rows a level gets, so each trace is shrunk once, not once per level
-- missing: a row whose level has not shrunk it yet; `--weight` rules apply to original rows (shrunk rows keep their shrink weight)
-- rows stream in source order; level rows are read by byte offset (`line_offsets`), so 94k rows never sit in memory
-
-```bash
-uv run python util/caveman_data.py mix                              # writes the plan first
-uv run python util/caveman_data.py shrink --planned --level ultra --traces 8
-uv run python util/caveman_data.py mix                              # again once levels are shrunk
-```
-
-### Train
-
-`util/caveman_train.py`: LoRA SFT, one script, any CUDA box; PEP 723 header (`torch`, `transformers>=5`, `peft`), so `uv run` needs no project:
-- input: `mix/train.jsonl` (or any `{"messages"}` JSONL); `caveman.weight` scales a row's loss
-- ChatML rendered by hand (Qwen, LFM2): every assistant turn trained, `<think>` kept; Qwen templates drop history thinking, Terminus-2 replays whole turns
-- rows cut at `--max-len 16384` tokens; a task prompt past it leaves no trained token (row skipped, counted)
-- LoRA all-linear, r 32, alpha 64, dropout 0.05; AdamW, lr 1e-4, 3% warmup, cosine to 10%; batch 1 × `--accum 16`; 2 epochs; gradient checkpointing; bf16 on GPU
-- out: `adapter/` (every `--save-steps 200` and at the end), `train_log.jsonl` (loss, lr, tok/s), `train.json`; `--merge` adds `merged/` for serving without LoRA
-- students: `Qwen/Qwen3.5-4B` / `Qwen/Qwen3.5-9B` (image-text checkpoints; `AutoModelForCausalLM` loads the text model)
-
-```bash
-uv run util/caveman_train.py --model Qwen/Qwen3.5-4B --out runs/caveman-4b --merge  # one 80 GB GPU
-```
-
-> ❗ No TRL: one loop, per-row weights, no template magic; a smoke run (tiny Qwen2, CPU, 4 rows of 4,096 tokens) takes ~1.5 min
-
-### Eval
-
-Proxy, `eval`: held-out next action per budget tag, teacher history as context:
-- cases: `--turns 3` sampled assistant turns per held-out trace (`--limit 20`), prompt ≤ `--max-chars 48000`
-- per tag (`none` untagged, `lite` / `full` / `ultra` as the system tag): the student writes the next turn
-- scores: parsed, command similarity (as replay), exact, `task_complete` agreement, reasoning tokens (o200k, think + analysis + plan) vs the teacher's
-- endpoint: `--url` + `--model` (`CAVEMAN_EVAL_URL` / `_LLM` / `_KEY`), OpenAI-compatible; split `reasoning_content` is put back as `<think>`
-- out: `eval/<name>.jsonl` (resumable per case) and `.json`; baseline = the base model, `--tags none`
-
-```bash
-vllm serve Qwen/Qwen3.5-4B --enable-lora --lora-modules caveman=runs/caveman-4b/adapter --max-lora-rank 32
-uv run python util/caveman_data.py eval --url http://gpu:8000/v1 --model Qwen/Qwen3.5-4B --name base --tags none
-uv run python util/caveman_data.py eval --url http://gpu:8000/v1 --model caveman --name student
-```
-
-> ❗ History is the teacher's verbose turns; a deployed student sees its own terse ones
-
-Agentic benchmarks, against the served student (Docker, [Harbor](https://harborframework.com)):
-
-```bash
-harbor run --dataset openthoughts-tblite --agent terminus-2 --model hosted_vllm/caveman --ak api_base=http://gpu:8000/v1 --n-concurrent 4
-bfcl generate --model MODEL_NAME --backend vllm --enable-lora --lora-modules caveman=runs/caveman-4b/adapter  # then bfcl evaluate
-```
-
-- OpenThoughts-TBLite: 100 Terminal-Bench tasks that track TB2; `--dataset terminal-bench@2.0` for the full set
-- BFCL: a regression check (function calling not trained on); `MODEL_NAME` is the base's entry in BFCL's model list
-- these harnesses send no budget tag: they measure the untagged student
-
-### Outputs
-
-`data/caveman/` (gitignored):
-- `source.jsonl`: raw rows + `row_idx`, shared by every level
-- `parquet/`: the shards (full scale only)
-- `<level>/train.jsonl`: source schema, tagged conversation, `caveman` meta (`version`, `model`, `level`, `weight`, `turns`, `parsed`, `shrunk`, `hard`, `prose_tokens`, `content_tokens`)
-- `<level>/turns.jsonl`: per turn before / after / draft, `reasons`, `attempts` (reasons per try), `missing`, `level`, `hard`, `replay`, tokens, `secs` (the review file)
-- `<level>/stats.json`: shrink rate, reasons, levels, replay, token savings, prose ratio p10 / p50 / p90
-- `<level>/replay-<model>.jsonl` / `.json`: the student-sized re-check
-- `mix/plan.json`, `mix/train.jsonl`, `mix/eval.jsonl`, `mix/stats.json` (slots, levels, missing)
-- `eval/<name>.jsonl` / `.json`: next-action cases and per-tag summary
-- resume: a row in `train.jsonl` is done; turns are written before it; a half-written last line is trimmed on the next append; `stats` counts a turn once
-
-### Tests
-
-`util/caveman_data_bdd.py`, ~1 s, no network: a scripted fake model and verifier, a fake URL opener, tiny parquet shards written by `pyarrow` (skipped without it):
-
-```bash
-uv run python -m unittest discover -s util -p "caveman_data_bdd.py" -v
-```
-
-- covers: sampling, turn split / join (fences), facts, negations, gates, reply parsing, levels and hard turns (failures vs error words, echoed input), retries and their levels, replay (scoring, the base, hidden commands, clipping, the student re-check), the budget tag, weights, traces at once (order, peak), the plan and `--planned`, mix, eval (cases, scores, tags, resume), the trainer's data path (ChatML pieces, masks, weights, schedule), the CLI, crash-safe JSONL, parquet rows and downloads, resume
-- `test/` has no `__init__.py` and stdlib ships a `test` package: run by `discover`, the file puts the repo root on `sys.path`
-
-> ❗ PowerShell reports exit code 1 when retry warnings reach stderr: read the `OK` line
-
-### Results
-
-v3 (narrowed hard turns), same 50 traces, 2026-10-15, `--traces 4 --workers 4`, 2.9 min:
-- `full`: 496 of 588 parsed turns shrunk (84.4%); prose −22.2%, content −9.0%; prose ratio p50 0.69
-- 122 hard turns (21%, was 235): the 115 that moved to `full` saved 28.1% of their prose (16.3% at `lite` in v2)
-- total flat (−22.2% vs −22.8%): the long turns, still `lite`, saved 12.8% (18.6% in v2); 56 long turns hold 29% of all prose
-- kept: facts 39, longer 27, replay 16, negation 10, reply 8; 82 of 174 retries rescued
-
-Student-sized re-check (`replay`) of the v2 `full` shrunk turns, 48 traces, 419 turns with commands:
-- `qwen/qwen3.5-9b`: 91% pass (`lite` 95%, `full` 88%); score p50 0.34 (compressor's 0.55), original's p50 0.22; 4.4 min
-- `mistralai/ministral-3b-2512`: 76% pass (`lite` 76%, `full` 75%); score p50 0.31, original's p50 0.31; 3 min
-- 9B misses grow with compression; 3B misses do not: at 3B the gate measures the verifier, not the shrink
-
-Eval baseline (`eval`), untrained `qwen/qwen3.5-9b` on OpenRouter, 20 source traces × 3 turns, 1.4 min:
-- untagged: 100% parsed, similarity 0.68 (p50 0.77), 25% exact, `task_complete` 95%, 195 reasoning tokens (teacher 220)
-- `full` tag: 0.68 / 22% exact / 197 tokens: no effect before training
-
-v2, 50 traces (seed 0), 613 assistant turns, 2026-10-15, `deepseek/deepseek-v4.1-flash` on OpenRouter as compressor and verifier, `--workers 4`, 11 min:
-- `full`: 504 of 588 parsed turns shrunk (85.7%); prose tokens −22.8%, whole content −9.3%; prose ratio p10 / p50 / p90: 0.55 / 0.72 / 0.93
-- 235 hard turns (40%) ran at `lite` and saved 22.8%; the `full` turns saved 35.5%
-- kept: facts 36, replay 22, longer 19, reply 6 (the model answered `{"think":", "}` twice), negation 5; 73 of 157 retries rescued
-- replay: 526 checked, 22 failed; 192 passed at ≥ 0.8 (or had no commands), 334 needed the original's score; median similarity 0.65
-- unparsed: 25 turns (prose outside the JSON, broken JSON)
-
-Levels on the first 10 traces (176 parsed turns), prose saved / shrink rate / prose ratio p50:
-- `lite`: −14.4% / 86.5% / 0.87
-- `full`: −22.5% / 84.6% / 0.71
-- `ultra`: −27.2% / 79.8% / 0.62; more turns lost facts (19) and negations (9)
-
-Earlier runs:
-- LAN Ollama `huihui_ai/Qwen3.8-abliterated:27b`, v1 rules, no replay, 3 traces: 84% shrunk, prose −24.8%, ~5 s a turn; with replay ~18 s a turn
-- parquet vs viewer: 50 of 50 sampled rows identical; 50 rows read from the 10 shards in 4 s
-
-> ❗ Hosted models are not deterministic at temperature 0 / seed 0: the same trace shrank 26, then 25 of 29 turns
-
-> ❗ Compressor and verifier default to the `.env` inference config (OpenRouter); `CAVEMAN_URL` + `CAVEMAN_LLM` switch both to another host as a set, and `AGENTIC_INFERENCE_KEY` is never sent to it
-
-## 25. EC2 inference deployment
-
-### ▶️ Study (Source)
-
-Read-only inventory of `i-0664c0b49e2148ee6`, `us-east-1`, 2026-10-15, through EC2/IAM APIs and approved SSM shell commands:
-
-- Private Ubuntu 22.04.5, x86-64, `g6e.2xlarge`, one NVIDIA L40S, 64 GiB host RAM
-- Private account-owned AMI; encrypted 200 GiB gp3 root, 3,000 IOPS / 125 MiB/s; unused 450 GB ephemeral disk
-- IMDSv2 required, hop limit 1; no public IP; private-subnet outbound access through NAT
-- vLLM 0.29.0, Python 3.12.14, PyTorch 2.13.0+cu130, CUDA runtime 13.0, NVIDIA driver 595.91.07
-- Transformers 5.17.0, Triton 3.7.1, FlashInfer 0.6.18, Hugging Face Hub 1.31.0, uv 0.12.14
-- `Qwen/Qwen3.8-27B-FP8`, revision `017b9c7af6b5689d5dd426a76e0bc077eb5ca20a`, about 29 GB
-- Port 8000; aliases `qwen3.8-27b` / `qwen3.8`; 98,304-token context; FP8 KV cache; GPU utilization 0.92; 16 sequences; prefix caching
-- Thinking disabled by default; `qwen3` reasoning parser; automatic tool choice / `qwen3_coder`; two images, no video; image bounds 65,536–4,194,304 pixels
-
-Approved scope excludes dormant and account-owned integrations:
-
-- Ollama 0.34.0 disabled; cached `ornith-1.5:35b` about 22 GB; unused `ornith-ai/Ornith-1.5-35B-A3B` about 67 GB
-- Corporate Falcon, Qualys, Inspector/CloudWatch configuration, corporate SSM associations, application-specific S3/SQS/SNS/Secrets Manager permissions
-- Existing private AMI/snapshots, IAM roles, SSH keys, KMS keys, VPN/NAT/peering/routes and VPC endpoints are not cloned
-- Approved corporate controls belong in a target-account Ubuntu 22.04 GPU base AMI supplied with `--ami-id`
-
-Implementation phases:
-
-- [x] Minimum Scope — inspect source AWS resources, OS, active services, package versions and model provenance
-- [x] Complete Scope — portable create-only launcher, private networking, minimal SSM role, pinned bootstrap and usage guide
-- [x] Extended Scope — offline validation and failure-path tests; read-only AWS template/preflight checks; no live deployment
-
-### ▶️ Configure (Target)
-
-**Existing network → new stack → pinned OS bootstrap → verified inference**:
-
-- Launcher: `util/ec2_setup.py`; Python 3.12+, AWS CLI v2, authenticated target-account credentials; no Python packages required
-- Required arguments: `--vpc-id`, `--subnet-id`, and `--allow-cidr` for trusted inference clients
-- Always supply `--region`; `--profile` selects target credentials, otherwise AWS CLI's normal credential chain applies
-- Subnet must belong to the VPC, support the requested GPU type and provide DNS plus outbound HTTPS through existing NAT/egress infrastructure
-- Downloads require Ubuntu repositories, Astral/GitHub, PyPI, PyTorch and Hugging Face/CDN access; AWS access requires SSM endpoints and the CloudFormation wait-condition S3 URL
-- No VPC, subnet, VPN, routes, NAT gateways, DNS records or shared endpoints are created or modified
-- `--security-group-id` may repeat to reuse target groups instead of creating one; cannot combine with CIDR flags, existing ingress/egress must be configured by their owner
-- `--instance-profile` reuses a target IAM instance-profile **name** with EC2 trust and SSM permissions; otherwise creates a stack-owned role/profile with only `AmazonSSMManagedInstanceCore`
-- `--permissions-boundary` supplies an existing target policy ARN for the newly created role; cannot combine with a reused instance profile
-- `--ami-id` selects an accessible, clean Ubuntu 22.04 x86-64 GPU base AMI in the target region; default resolves AWS's public regional GPU AMI parameter, not the private source AMI
-- Base AMI must provide NVIDIA drivers compatible with CUDA 13.0; bootstrap checks actual CUDA availability, FP8-capable GPU architecture and at least 44 GiB GPU memory
-- `--instance-type` defaults to `g6e.2xlarge`; preflight requires one GPU with at least 45,000 MiB; regional GPU quotas, billing permission and zonal capacity remain prerequisites
-- `--volume-size` defaults to 200 GiB, gp3 / 3,000 IOPS / 125 MiB/s, encrypted; `--kms-key-id` optionally supplies a target EBS key ID/ARN/alias with appropriate grants
-- `--key-name` optionally supplies an existing target SSH key pair; port 22 is opened only with explicit `--ssh-cidr`
-- `--tag KEY=VALUE` may repeat for organizational tags, up to 50 including `Name`; `--timeout` defaults to 7,200 seconds for bootstrap
-- Caller needs CloudFormation create/describe/event access, target resource discovery, EC2 provisioning/tagging, `iam:PassRole`, SSM discovery and optional KMS discovery/use permissions; creating the default role/profile also requires IAM create/delete/attach-policy permissions
-
-> ❗ Inference has no API authentication or TLS, matching the source: restrict port 8000 to trusted clients and private connectivity; world-open CIDRs are rejected for new security groups.
-
-### ▶️ Run (Preview)
-
-Render a portable CloudFormation template without AWS calls or resource changes:
-
-```bash
-uv run --no-project python util/ec2_setup.py --region us-east-1 --vpc-id vpc-REPLACE --subnet-id subnet-REPLACE --allow-cidr 10.0.0.0/8 > /tmp/agentic-ec2.json
-```
-
-- Replace placeholders with resources belonging to the target account and region
-- `--check` performs read-only target discovery, validates subnet/GPU/image/shared resources, resolves the actual AMI/root device and emits the resolved template
-- Plain preview assumes the official AMI root name `/dev/sda1`; `--check` / `--apply` discover custom AMI root-device names
-- Credentials, source account IDs, source private keys, source model caches and local `.env` values are never embedded
-
-### ▶️ Run (Create)
-
-Create a new stack and wait for bootstrap, inference checks and SSM registration:
-
-```bash
-uv run --no-project python util/ec2_setup.py --apply --profile target --region us-east-1 --stack-name agentic-inference --vpc-id vpc-REPLACE --subnet-id subnet-REPLACE --allow-cidr 10.0.0.0/8
-```
-
-- Explicit `--apply` required; existing stack names are rejected by CloudFormation, never updated or replaced
-- Creates one private EC2 instance, encrypted root EBS, optional stack-owned security group and IAM role/profile, plus bootstrap wait-condition resources
-- No public IP even if the subnet normally assigns one; IMDSv2 required; hop limit 1
-- Installs uv 0.12.14, Python 3.12.14 and the source's pinned inference packages; downloads only the active model at the recorded commit
-- Writes `vllm.service` with the source's active parameters, runs as dedicated `vllm` user rather than root, enables restart on reboot
-- Source context is **98,304 tokens**, not the separate local Ollama model's 256K setting; increasing it on a 48 GB GPU is not assumed safe
-- Stack completion requires model aliases, exact context, text generation and tool-call smoke tests; launcher additionally waits for SSM `Online`
-- Outputs: `InstanceId`, `PrivateIp`, `InferenceUrl`; endpoint is `http://PRIVATE_IP:8000/v1` from an allowed private network
-
-> ❗ Deployment incurs EC2/EBS charges. Failure or interruption retains resources for diagnosis; inspect the printed stack ID/name before retrying. There is no automatic cleanup, rollback, source modification or live deployment during this script's development.
-
-### ▶️ Inspect (Failure)
-
-Use CloudFormation events and SSM for diagnostics:
-
-- Bootstrap log: `/var/log/agentic-ec2-setup.log`; cloud-init log: `/var/log/cloud-init-output.log`
-- Service log: `journalctl -u vllm.service --no-pager -n 100`
-- Failure signals contain a log location, not credentials; unreachable wait-condition URLs fail the stack by timeout
-- SSM offline after healthy bootstrap: check reused role permissions, VPC endpoints, DNS and outbound HTTPS
-- Missing public AMI parameter in another partition/region: supply `--ami-id`; no source-account AMI fallback
-- Stack deletion is a separate, deliberate AWS operation; deleting its EC2 instance also deletes the model-bearing root volume
-
-### ▶️ Test (Provisioner)
-
-Run fast offline tests without AWS credentials, network access or deployment:
-
-```bash
-uv run --no-project python -m unittest discover -s util -p ec2_setup_bdd.py -v
-```
-
-- Covers explicit deployment opt-in, trusted ingress, shared-resource arguments, private networking, encryption, portable IAM, bootstrap Bash syntax/size, pinned model/context, AWS failures and stack failure reporting
-- AWS template validation and `--check` are read-only; live GPU launch and full bootstrap remain an explicit operator action
-
-Verified on 2026-10-15:
-
-- 31 offline tests pass in under 0.1 seconds; generated Bash and embedded Python compile; provisioner Python compiles
-- Read-only preflight passes against source VPC/subnet; AWS accepts generated CloudFormation template; current EC2 resource schema supports generated properties
-- Pinned Linux/CUDA package set resolves without installation
-- Generated readiness checks pass against the existing source service: both model aliases, exact 98,304-token context, text output and structured tool call
-- No new GPU instance launched; clean-machine bootstrap and deployment in a second account remain untested
 
 ## 26. A2A peer coordination
 

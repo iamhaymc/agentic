@@ -7,43 +7,44 @@
 </tbody>
 </table>
 
-Yet another harness packed with features:
-- Python Library
+An agent that is easy to use for many things.
+
+### Highlights
+
+- Embedding Library
 - Context Monitor
 - Persistent Memory
 - Pluggable Tools
 - Durable Sessions
 - Sandbox Workspaces
-- Workspace Git SCM
+- Workspace SCM
 - A2A Orchestration
-- REPL Interface
-- Web Interface
+- Console App + REPL
+- Browser App + Host
 
+### Documents
+
+- [DESIGN](DESIGN.md) — Overview and reference
 - [EXAMPLE](EXAMPLE.ipynb) — Notebook of examples
 - [OPTIONS](OPTIONS.md) — Configuration properties
-- [DESIGN](DESIGN.md) — Complete overview and reference
-- [CHANGES](CHANGES.md) — Closed development tasks (with rationale)
-- [TODO](TODO.md) — Open development tasks (sorted by impact)
+- [TODO](TODO.md) — Open development task
 
-## ▶️ Package (Dev)
-
-Clone repository and setup environment:
-
-```bash
-git clone https://github.com/iamhaymc/hayhay
-cd ./hayhay
-./setup # or run VS Code task "init"
-```
-
-> Setup also installs `agentic` command to PATH (`uv tool install --editable .`); source edits apply without reinstall.
-
-## ▶️ Package (Use)
+## ▶️ Consume
 
 Add repository as project dependency:
 
 ```bash
-uv add "agentic @ git+https://github.com/iamhaymc/hayhay"
+uv add "agentic @ git+https://github.com/iamhaymc/agentic"
 ```
+
+or clone repository and setup environment:
+
+```bash
+git clone https://github.com/iamhaymc/agentic
+cd ./agentic && ./util/setup.sh
+```
+
+> `agentic` command added to PATH (source edits apply automatically).
 
 ## ▶️ Configure
 
@@ -73,9 +74,9 @@ inference: # a group flattens onto inference_*
   ldm: clef-flash # decision model (System One API)
 ```
 
-## ▶️ Use (Agent)
+## ▶️ Embed Agent
 
-> ❗ For applications that want to embed an agentic engine.
+> ❗ For applications that want a capable harness
 
 ```python
 import asyncio
@@ -90,9 +91,9 @@ RESULT = asyncio.run(Agent().run(PROMPT, input="notes.md"))
 `input` is a file path or raw text. When it is a path the file is read and the
 text is assigned to `config.input`, which is what the template injects.
 
-## ▶️ Use (Inference)
+## ▶️ Enbed Engine
 
-> ❗ For applications that want to embed an inference engine.
+> ❗ For applications that want a minimal harness
 
 `Engine` is the inference and tool call loop without: store, sessions, memory, checkouts, console, web layer.
 
@@ -118,26 +119,27 @@ print(result.output, result.ok)
 `Agent` is this same class with the batteries bolted on, so anything overridden
 or injected below works in both.
 
-## ▶️ Run (Tool)
+## ▶️ Run (Tool mode)
+
+Interact with REPL by omitting input
 
 ```bash
-python app/agentic.py                     # no argument -> REPL (or run VS Code task "repl")
-python app/agentic.py --input notes.md    # input -> one-shot
-python app/agentic.py --input notes.md --effort high
+python app/agentic.py                   # REPL
+python app/agentic.py --repl            # REPL
+python app/agentic.py --input notes.md  # One-shot
 ```
 
-Arguments: `--input`, `--repl`, `--serve`, `--config`, `--effort`, `--a2a`, `--a2a-port`, `--peer` and `--repo`.
-`--effort` sets model reasoning effort in any mode; omission keeps the configured value or provider default. Supported levels and provider limits: [OPTIONS](OPTIONS.md#effort).
+Arguments: `--input`, `--repl`, `--serve`, `--config`, `--effort`, `--a2a`, `--a2a-port`, `--peer`, `--repo`, `--effort`
 
-## ▶️ Run (Page)
+## ▶️ Run (Host mode)
 
 ```bash
-python app/agentic.py --serve # or run VS Code task "serve"
+python app/agentic.py --serve
 ```
 
 > Default URL: `http://127.0.0.1:8765/`
 
-## ▶️ Run (Peers)
+## ▶️ Run (Peer mode)
 
 **One integrator, isolated checkouts, one shared Git origin.** Both machines need Git access to the same origin; only session/base branches are pushed automatically, never the origin's main branch.
 
@@ -170,50 +172,7 @@ Open `http://127.0.0.1:8765/` and give it a coordinated task:
 - For another machine: expose only its A2A port, use its LAN URL, TLS and the same bearer; keep the web UI on localhost. [DESIGN](DESIGN.md#26-a2a-peer-coordination) — LAN Setup, Trust Boundaries And Recovery; [OPTIONS](OPTIONS.md#a2a-peers) — Peer Settings.
 - Windows uses AppContainer for fully confined shells; partial outside access remains withheld. [DESIGN](DESIGN.md#sandbox) — Platform Limits And Executable Quoting.
 
-## ▶️ Run (Data)
-
-Shrink agent reasoning into SFT data, caveman voice, every action kept:
-
-```bash
-uv run python util/caveman_data.py fetch --limit 50    # seeded sample -> data/caveman/source.jsonl
-uv run python util/caveman_data.py shrink --level full # -> data/caveman/full/train.jsonl
-uv run python util/caveman_data.py stats --level full  # re-summarize turns.jsonl
-```
-
-- levels `lite` / `full` / `ultra`; hard turns get one level gentler; each trace tagged `Reasoning budget: <level>`
-- a turn that loses a fact, a negation or its commands (replay check) keeps its original text
-- `fetch --parquet --limit 0` downloads the whole dataset (1.75 GB) instead of sampling the viewer
-
-> Compressor: the `.env` inference config (OpenRouter), or `CAVEMAN_URL` + `CAVEMAN_LLM` ([OPTIONS](OPTIONS.md#caveman-data)); depth in [DESIGN](DESIGN.md#24-caveman-sft-data)
-
-## ▶️ Run (Student)
-
-Mix levels into one SFT set, train a student remotely, eval it:
-
-```bash
-uv run python util/caveman_data.py mix                                          # plan + mix/train.jsonl + mix/eval.jsonl
-uv run python util/caveman_data.py shrink --planned --level ultra --traces 8    # each trace once, at its planned level
-uv run util/caveman_train.py --model Qwen/Qwen3.5-4B --out runs/caveman-4b      # LoRA, any CUDA box (80 GB)
-uv run python util/caveman_data.py eval --url http://gpu:8000/v1 --model caveman  # similarity vs reasoning tokens per tag
-```
-
-- plan: 5% held out, 10% original and untagged, the rest one level each (`lite` / `full` / `ultra`)
-- `replay --verifier qwen/qwen3.5-9b` re-checks shrunk turns with a student-sized verifier
-- Terminal-Bench (Harbor) and BFCL runs against the served student: [DESIGN](DESIGN.md#eval)
-
-## ▶️ Run (GPU)
-
-Preview a private AWS GPU inference stack; no resources created without `--apply`:
-
-```bash
-uv run --no-project python util/ec2_setup.py --region us-east-1 --vpc-id vpc-REPLACE --subnet-id subnet-REPLACE --allow-cidr 10.0.0.0/8
-```
-
-- Existing target VPC/subnet required; Ubuntu 22.04 GPU AMI, encrypted EBS, minimal SSM role, vLLM and pinned Qwen3.8 FP8 model configured automatically
-- `--check` validates target resources read-only; `--apply` creates a new billed stack and waits for inference readiness
-- [DESIGN](DESIGN.md#25-ec2-inference-deployment) — Shared Resource Arguments, Source Inventory And Operations
-
-## ▶️ Write (Editor)
+## ▶️ Prompt Editing
 
 Long prompts get a markdown editor with highlighting:
 
@@ -222,7 +181,7 @@ Long prompts get a markdown editor with highlighting:
 - the unsent text is kept in `localStorage` across reloads and cleared on send
 - copy (top left) puts the whole draft on the clipboard
 
-## ▶️ Resume (Session)
+## ▶️ Session Recovery
 
 Interactive state survives a crash:
 
@@ -233,7 +192,7 @@ Interactive state survives a crash:
 - a dropped socket leaves the run going; reconnecting picks it up mid-stream
 - `/resume` (or ▶ on the prompt) continues a run that crashed, failed or was stopped
 
-## ▶️ Teach (Rules)
+## ▶️ Context Training
 
 Votes become rules the agent keeps:
 
@@ -246,39 +205,39 @@ Votes become rules the agent keeps:
 - the model distils one do / avoid rule from the run behind the answer, editing a related rule instead of adding a twin
 - rules join the instructions of every run; past `rules_max_chars` a warning shows
 
-## ▶️ Compact (Context)
+## ▶️ Context Handling
 
 Chat without end; the context is compacted as it fills:
 
 ```yaml
 context: # a group flattens onto context_*
-  window: 0      # 0 asks the provider
-  trigger: 0.85  # compact past this share of the budget
-  target: 0.5    # ... down to this share
+  window: 0 # 0 asks the provider
+  trigger: 0.85 # compact past this share of the budget
+  target: 0.5 # ... down to this share
 ```
 
 - **old reasoning → old tool outputs → summary of the oldest turns**, cheapest first, before every model call
 - the journal keeps every turn; the page shows a folded marker where a compaction happened
 - `/compact [focus]` summarises now; the mark's core fills with the context in use
 
-## ▶️ Slice (Work)
+## ▶️ Work Slicing
 
 Work too large for one pass is planned in steps that fit:
 
 ```yaml
 plan:
-  enabled: true  # the plan tool and the budget note
+  enabled: true # the plan tool and the budget note
 fold:
-  enabled: true  # branch / return fold a finished sub-task into its summary
-  ask_slices: 8  # a larger plan asks the user once (also ask_minutes, ask_cost)
+  enabled: true # branch / return fold a finished sub-task into its summary
+  ask_slices: 8 # a larger plan asks the user once (also ask_minutes, ask_cost)
 slice:
-  share: 0.25    # one step reads at most this share of the budget
-  stall: 0.5     # a cold read of the context fits this share of stream_timeout
+  share: 0.25 # one step reads at most this share of the budget
+  stall: 0.5 # a cold read of the context fits this share of stream_timeout
 worker:
-  model: ""      # delegate runs on this model (empty: the leader)
-  max_tokens: 1000  # a worker's answer is clipped to this
+  model: "" # delegate runs on this model (empty: the leader)
+  max_tokens: 1000 # a worker's answer is clipped to this
 map:
-  parallel: 1    # map workers at once (raise for a hosted model)
+  parallel: 1 # map workers at once (raise for a hosted model)
 ```
 
 - **measure → cap → plan → ask → delegate → recite**, enforced by the harness, not left to the model
@@ -293,7 +252,7 @@ map:
 - the plan is written through to the store: `/resume` and a restart continue it
 - the plan rings the mark (one arc per step) and sits in the bar; `/plan` lists it with the speeds
 
-## ▶️ Test
+## ▶️ Testing
 
 BDD Test(s):
 
