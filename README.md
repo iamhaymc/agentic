@@ -7,7 +7,20 @@
 </tbody>
 </table>
 
-_Yet another agent harness_
+An embeddable harness packed with features
+and designed to maximize capability of SLMs.
+
+Supports optional features such as:
+- Python Library
+- Context Monitor
+- Persistent Memory
+- Pluggable Tools
+- Durable Sessions
+- Sandbox Workspaces
+- Workspace Git SCM
+- A2A Orchestration
+- REPL Interface
+- Web Interface
 
 - [EXAMPLE](EXAMPLE.ipynb) — Notebook of examples
 - [OPTIONS](OPTIONS.md) — Configuration properties
