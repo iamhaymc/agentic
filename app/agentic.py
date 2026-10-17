@@ -69,6 +69,7 @@ import os
 import queue
 import random
 import re
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -98,6 +99,7 @@ from typing import (
 __all__ = [
     "Agent",
     "AgentConfig",
+    "AppContainerSandbox",
     "Block",
     "BubblewrapSandbox",
     "Cache",
@@ -748,10 +750,13 @@ class AgentConfig:
     # neither.
     outside_read: bool | None = None
     outside_write: bool | None = None
-    # Which sandbox confines the shell: ``auto`` (Landlock, else bubblewrap,
-    # on Linux; Seatbelt on macOS), one of those by name (``landlock``,
-    # ``bwrap``, ``seatbelt``), or ``none`` to withhold a confined shell.
+    # A confined shell fails closed when its requested backend is unavailable.
     shell_sandbox: str = "auto"
+    shell_network: bool = False
+    # Comma-separated executable names. Either list switches from shell syntax
+    # to literal argv execution; these admit the initial command, not its children.
+    shell_allow_commands: str = ""
+    shell_deny_commands: str = ""
     # Give the leader the `ask_user` tool, which puts a question to the person
     # and waits for the answer. ``None`` leaves it to the mode: the repl and the
     # web server have someone to answer, an embedded engine and a one shot run
@@ -5234,7 +5239,7 @@ def guess_mime(path: Path | str) -> str:
 SYSTEM_PATHS = {
     "linux": (
         "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc",
-        "/opt", "/nix", "/snap", "/run", "/proc", "/sys", "/dev",
+        "/opt", "/nix", "/snap", "/sys",
     ),
     "darwin": (
         "/usr", "/bin", "/sbin", "/System", "/Library", "/Applications", "/opt",
@@ -5245,7 +5250,6 @@ SYSTEM_PATHS = {
 #: Device files a confined shell may also write to (Linux; Seatbelt has its own).
 DEVICE_PATHS = (
     "/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom",
-    "/dev/tty", "/dev/ptmx", "/dev/pts", "/dev/shm",
 )
 
 #: Applies Landlock to itself, then becomes the shell; the restriction is
@@ -5253,7 +5257,7 @@ DEVICE_PATHS = (
 #: the policy as JSON in ``argv[1]``. Any failure exits 126 before the command
 #: runs: a sandbox that cannot be applied never degrades to no sandbox.
 LANDLOCK_LAUNCHER = r"""
-import ctypes, json, os, sys
+import ctypes, errno, json, os, platform, sys
 policy = json.loads(sys.argv[1])
 libc = ctypes.CDLL(None, use_errno=True)
 libc.syscall.restype = ctypes.c_long
@@ -5276,19 +5280,20 @@ if abi >= 5:
     files |= 1 << 15
 read = (1 << 0) | (1 << 2) | (1 << 3)
 class Ruleset(ctypes.Structure):
-    _fields_ = [("handled_access_fs", ctypes.c_uint64)]
+    _fields_ = [("handled_access_fs", ctypes.c_uint64), ("handled_access_net", ctypes.c_uint64)]
 class Beneath(ctypes.Structure):
     _pack_ = 1
     _fields_ = [("allowed_access", ctypes.c_uint64), ("parent_fd", ctypes.c_int32)]
-attr = Ruleset(handled)
-ruleset = libc.syscall(L(444), ctypes.c_void_p(ctypes.addressof(attr)), L(ctypes.sizeof(attr)), L(0))
+attr = Ruleset(handled, 3 if abi >= 4 and not policy["network"] else 0)
+size = ctypes.sizeof(attr) if abi >= 4 else 8
+ruleset = libc.syscall(L(444), ctypes.c_void_p(ctypes.addressof(attr)), L(size), L(0))
 if ruleset < 0:
     fail("landlock_create_ruleset")
 def allow(path, access):
     try:
         fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
     except OSError:
-        return
+        fail("open %s" % path)
     if not os.path.isdir(path):
         access &= files
     rule = Beneath(access & handled, fd)
@@ -5303,10 +5308,35 @@ for path in policy["full"]:
     allow(path, handled)
 if libc.prctl(ctypes.c_int(38), ctypes.c_ulong(1), ctypes.c_ulong(0), ctypes.c_ulong(0), ctypes.c_ulong(0)):
     fail("prctl")
+if not policy["network"]:
+    # Landlock ABI 4 covers TCP only. Seccomp also closes UDP, local sockets,
+    # compat-ABI and io_uring socket creation, without requiring privileges.
+    machines = {"x86_64": (0xc000003e, (41, 53, 425)),
+                "aarch64": (0xc00000b7, (198, 199, 425))}
+    if platform.machine().lower() not in machines:
+        sys.stderr.write("sandbox: network isolation requires x86_64 or aarch64\n")
+        sys.exit(126)
+    arch, blocked = machines[platform.machine().lower()]
+    class Filter(ctypes.Structure):
+        _fields_ = [("code", ctypes.c_ushort), ("jt", ctypes.c_ubyte),
+                    ("jf", ctypes.c_ubyte), ("k", ctypes.c_uint32)]
+    class Program(ctypes.Structure):
+        _fields_ = [("len", ctypes.c_ushort), ("filter", ctypes.POINTER(Filter))]
+    deny = 0x00050000 | errno.EPERM
+    instructions = [(0x20, 0, 0, 4), (0x15, 1, 0, arch), (0x06, 0, 0, deny),
+                    (0x20, 0, 0, 0), (0x45, 0, 1, 0x40000000), (0x06, 0, 0, deny)]
+    for number in blocked:
+        instructions += [(0x15, 0, 1, number), (0x06, 0, 0, deny)]
+    instructions += [(0x06, 0, 0, 0x7fff0000)]
+    filters = (Filter * len(instructions))(*(Filter(*i) for i in instructions))
+    program = Program(len(filters), filters)
+    if libc.prctl(ctypes.c_int(22), ctypes.c_ulong(2), ctypes.byref(program),
+                  ctypes.c_ulong(0), ctypes.c_ulong(0)):
+        fail("seccomp network filter")
 if libc.syscall(L(446), L(ruleset), L(0)):
     fail("landlock_restrict_self")
 os.close(ruleset)
-os.execv(policy["shell"], [policy["shell"], "-c", policy["command"]])
+os.execvpe(policy["argv"][0], policy["argv"], os.environ)
 """
 
 
@@ -5315,10 +5345,15 @@ def system_paths() -> list[str]:
     interpreter and every absolute ``PATH`` entry but the home directory itself."""
     base = SYSTEM_PATHS.get(sys.platform, SYSTEM_PATHS["linux"])
     extra = {sys.prefix, sys.base_prefix, sys.exec_prefix}
-    home = str(Path.home())
+    home = canonical_path(Path.home())
     for entry in os.environ.get("PATH", "").split(os.pathsep):
-        if entry and os.path.isabs(entry) and entry not in (os.sep, home):
-            extra.add(entry)
+        if entry and os.path.isabs(entry):
+            path = canonical_path(entry)
+            if home.is_relative_to(path) or any(
+                path.is_relative_to(base) for base in ("/proc", "/run", "/dev")
+            ):
+                continue
+            extra.add(str(path))
     return [path for path in (*base, *sorted(extra)) if os.path.exists(path)]
 
 
@@ -5342,6 +5377,15 @@ class Sandbox:
     def argv(self, command: str, ws: "Workspace") -> list[str]:  # pragma: no cover
         raise NotImplementedError
 
+    def supports(self, ws: "Workspace") -> bool:
+        return True
+
+    @contextlib.contextmanager
+    def launch(
+        self, command: str, ws: "Workspace", env: dict[str, str]
+    ) -> Generator[tuple[list[str], dict[str, str]], None, None]:
+        yield self.argv(command, ws), self.environ(env, ws)
+
     @staticmethod
     def paths(ws: "Workspace") -> tuple[list[str], list[str], list[str]]:
         """``(read, write, full)``: paths readable, writable only, and both."""
@@ -5352,22 +5396,36 @@ class Sandbox:
     def environ(self, env: dict[str, str], ws: "Workspace") -> dict[str, str]:
         """Point temp (and, when confined, home and cache) into the workspace."""
         scratch = ws.root / self.SCRATCH
+        # Check each child before mkdir: an existing link must not redirect a
+        # privileged setup write outside the workspace.
+        for path in (scratch, *(scratch / name for name in ("tmp", "home", "cache"))):
+            resolved = canonical_path(path)
+            if not resolved.is_relative_to(ws.root):
+                raise WorkspaceError(
+                    f"sandbox scratch path escapes workspace: {path} -> {resolved} (root {ws.root})"
+                )
         tmp = scratch / "tmp"
         tmp.mkdir(parents=True, exist_ok=True)
         env.update(TMPDIR=str(tmp), TMP=str(tmp), TEMP=str(tmp))
+        cache = scratch / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        env["XDG_CACHE_HOME"] = str(cache)
         if not ws.outside_read:
             home = scratch / "home"
             home.mkdir(parents=True, exist_ok=True)
-            env["HOME"] = str(home)  # dotfiles out of reach would fail tools (git)
-        elif not ws.outside_write:
-            env["XDG_CACHE_HOME"] = str(scratch / "cache")
+            env.update(HOME=str(home), USERPROFILE=str(home),
+                       APPDATA=str(home), LOCALAPPDATA=str(cache))
         return env
 
     def describe(self, ws: "Workspace") -> str:
         """The boundary in words, for the description the model reads."""
         reads = "anywhere" if ws.outside_read else "the workspace and system directories"
         writes = "anywhere" if ws.outside_write else "inside the workspace only"
-        return f" It runs sandboxed: it can read {reads} and write {writes}."
+        network = "allowed" if ws.shell_network else "denied"
+        return (
+            f" It runs sandboxed: it can read {reads} and write {writes}."
+            f" Network access is {network}."
+        )
 
 
 class LandlockSandbox(Sandbox):
@@ -5380,20 +5438,20 @@ class LandlockSandbox(Sandbox):
         return _landlock_abi() > 0
 
     def argv(self, command: str, ws: "Workspace") -> list[str]:
+        python = sandbox_python(ws)
         read, write, full = self.paths(ws)
         policy = {
             "read": read,
             "write": write,
             "full": [*full, *(p for p in DEVICE_PATHS if os.path.exists(p))],
-            "shell": "/bin/sh",
-            "command": command,
+            "argv": ws.command_argv(command) or ["/bin/sh", "-c", command],
+            "network": ws.shell_network,
         }
-        return [sys.executable, "-I", "-S", "-c", LANDLOCK_LAUNCHER, json.dumps(policy)]
+        return [python, "-I", "-S", "-c", LANDLOCK_LAUNCHER, json.dumps(policy)]
 
 
 class BubblewrapSandbox(Sandbox):
-    """Linux without Landlock: a bubblewrap mount namespace. Coarser — a
-    writable root is readable too, so `outside_write` implies reading."""
+    """Linux without Landlock: filesystem and optional network namespaces."""
 
     name = "bwrap"
 
@@ -5401,14 +5459,23 @@ class BubblewrapSandbox(Sandbox):
     def available(cls) -> bool:
         return _bwrap_works()
 
+    def supports(self, ws: "Workspace") -> bool:
+        return not ws.outside_write or ws.outside_read
+
     def argv(self, command: str, ws: "Workspace") -> list[str]:
         read, write, full = self.paths(ws)
-        args = [shutil.which("bwrap") or "bwrap", "--die-with-parent"]
+        executable = shutil.which("bwrap", path=os.pathsep.join(("/usr/bin", "/bin"))) or "/usr/bin/bwrap"
+        if canonical_path(executable).is_relative_to(ws.root):
+            raise WorkspaceError("sandbox executable must be outside the workspace")
+        args = [executable, "--die-with-parent"]
+        if not ws.shell_network:
+            args += ["--unshare-net"]
         for path in read:
             args += ["--ro-bind-try", path, path]
         for path in [*write, *full]:
             args += ["--bind-try", path, path]
-        args += ["--dev", "/dev", "--chdir", str(ws.root), "/bin/sh", "-c", command]
+        args += ["--dev", "/dev", "--chdir", str(ws.root)]
+        args += ws.command_argv(command) or ["/bin/sh", "-c", command]
         return args
 
 
@@ -5431,6 +5498,8 @@ class SeatbeltSandbox(Sandbox):
     def profile(self, ws: "Workspace") -> str:
         read, _write, full = self.paths(ws)
         lines = ["(version 1)", "(allow default)"]
+        if not ws.shell_network:
+            lines.append("(deny network*)")
         if not ws.outside_write:
             allowed = [f"(subpath {self.quote(p)})" for p in full]
             allowed += [f"(literal {self.quote(p)})" for p in self.DEVICES]
@@ -5442,7 +5511,77 @@ class SeatbeltSandbox(Sandbox):
         return "\n".join(lines)
 
     def argv(self, command: str, ws: "Workspace") -> list[str]:
-        return [self.EXE, "-p", self.profile(ws), "/bin/sh", "-c", command]
+        return [self.EXE, "-p", self.profile(ws), *(ws.command_argv(command) or ["/bin/sh", "-c", command])]
+
+
+WINDOWS_NATIVE = None
+WINDOWS_LAUNCHER = ""
+if sys.platform == "win32":
+    if __package__:
+        from . import agentic_sandbox as WINDOWS_NATIVE
+    else:
+        import agentic_sandbox as WINDOWS_NATIVE
+    # Freeze trusted launcher code before tools can edit a source checkout.
+    WINDOWS_LAUNCHER = Path(WINDOWS_NATIVE.__file__).read_text(encoding="utf-8")
+
+
+def windows_sandbox_module() -> Any:
+    if WINDOWS_NATIVE is None:
+        raise WorkspaceError("Windows sandbox APIs are unavailable on this platform")
+    return WINDOWS_NATIVE
+
+
+def canonical_path(path: Path | str) -> Path:
+    """Compare equivalent Windows DOS/extended namespace spellings consistently."""
+    if os.name == "nt":
+        return windows_sandbox_module().canonical_path(path)
+    return Path(path).resolve()
+
+
+def sandbox_python(ws: "Workspace") -> str:
+    """Never execute a privileged launcher from a model-writable runtime."""
+    python = canonical_path(getattr(sys, "_base_executable", sys.executable))
+    if python.is_relative_to(ws.root) or canonical_path(sys.base_prefix).is_relative_to(ws.root):
+        raise WorkspaceError("sandbox launcher runtime must be outside the workspace")
+    return str(python)
+
+
+class AppContainerSandbox(Sandbox):
+    """Windows 8+: per-command AppContainer SID, scoped ACLs and a kill-on-close job."""
+
+    name = "appcontainer"
+
+    @classmethod
+    def available(cls) -> bool:
+        return sys.platform == "win32" and sys.getwindowsversion()[:2] >= (6, 2)
+
+    def supports(self, ws: "Workspace") -> bool:
+        return not ws.outside_read and not ws.outside_write
+
+    @contextlib.contextmanager
+    def launch(
+        self, command: str, ws: "Workspace", env: dict[str, str]
+    ) -> Generator[tuple[list[str], dict[str, str]], None, None]:
+        native = windows_sandbox_module()
+        python = sandbox_python(ws)
+        env = self.environ(env, ws)
+        # Do not grant a workspace-controlled link access to a host directory.
+        if any(
+            path.is_symlink() or path.is_junction()
+            or (path.is_file() and path.stat().st_nlink > 1)
+            for path in ws.root.rglob("*")
+        ):
+            raise WorkspaceError("AppContainer workspace must not contain symlinks, junctions or hardlinks")
+        with native.container(ws.root) as sid:
+            literal = ws.command_argv(command)
+            argv = literal or [
+                str(Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe"),
+                "/d", "/s", "/c",
+            ]
+            policy = dict(sid=sid, argv=argv, cwd=str(ws.root), network=ws.shell_network)
+            if literal is None:
+                policy["command"] = command
+            yield [python, "-I", "-S", "-c", WINDOWS_LAUNCHER, json.dumps(policy)], env
 
 
 #: Sandbox backends by name, in the order ``auto`` tries them.
@@ -5450,6 +5589,7 @@ SANDBOXES: dict[str, type[Sandbox]] = {
     "landlock": LandlockSandbox,
     "bwrap": BubblewrapSandbox,
     "seatbelt": SeatbeltSandbox,
+    "appcontainer": AppContainerSandbox,
 }
 
 
@@ -5486,7 +5626,7 @@ def _landlock_abi() -> int:
 @functools.cache
 def _bwrap_works() -> bool:
     """Whether bubblewrap is installed and allowed to make a namespace here."""
-    exe = shutil.which("bwrap")
+    exe = shutil.which("bwrap", path=os.pathsep.join(("/usr/bin", "/bin")))
     if not exe or not sys.platform.startswith("linux"):
         return False
     import subprocess
@@ -5523,8 +5663,11 @@ class Workspace:
         outside_read: bool = False,
         outside_write: bool = False,
         sandbox: Sandbox | None = None,
+        shell_network: bool = False,
+        shell_allow_commands: str = "",
+        shell_deny_commands: str = "",
     ) -> None:
-        self.root = Path(root).expanduser().resolve()
+        self.root = canonical_path(Path(root).expanduser())
         self.shell_timeout = shell_timeout
         self.shell_output_limit = shell_output_limit
         self.shell_heartbeat = shell_heartbeat
@@ -5533,6 +5676,9 @@ class Workspace:
         self.outside_write = outside_write
         #: Confines `run_shell` while the reach above is not total.
         self.sandbox = sandbox
+        self.shell_network = shell_network
+        self.shell_allow_commands = shell_allow_commands
+        self.shell_deny_commands = shell_deny_commands
 
     @property
     def confined(self) -> bool:
@@ -5544,10 +5690,69 @@ class Workspace:
         """A shell reaches anything the process can, so it is offered only
         when nothing is off limits or a sandbox holds it to the same reach.
 
-        `run_shell` itself does not check: the primitive runs what it is given,
-        and `ToolRegistry` decides whether the model gets it.
+        The primitive checks this too; calling it directly cannot bypass policy.
         """
-        return not self.confined or self.sandbox is not None
+        return not self.confined or (
+            self.sandbox is not None and self.sandbox.supports(self)
+        )
+
+    @staticmethod
+    def shell_environ() -> dict[str, str]:
+        """Copy only runtime settings, never credentials, agents or loader hooks."""
+        keep = {
+            "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+            "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "COLORTERM",
+            "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+        }
+        env = {key: value for key, value in os.environ.items() if key.upper() in keep}
+        env["PYTHONIOENCODING"] = "utf-8"
+        return env
+
+    def command_argv(self, command: str) -> list[str] | None:
+        """Restricted command mode never evaluates shell grammar."""
+        if not (self.shell_allow_commands or self.shell_deny_commands):
+            return None
+        if any(char in command for char in "\x00\r\n"):
+            raise WorkspaceError("commands must be a single literal invocation")
+        try:
+            if os.name == "nt":
+                quoted, slashes = False, 0
+                for char in command:
+                    if char == '"' and slashes % 2 == 0:
+                        quoted = not quoted
+                    elif not quoted and char in ";&|<>`$":
+                        raise WorkspaceError("shell syntax is unavailable with command lists; use literal arguments")
+                    slashes = slashes + 1 if char == "\\" else 0
+                if quoted:
+                    raise ValueError("unclosed command quote")
+                words = windows_sandbox_module().command_words(command)
+            else:
+                grammar = shlex.shlex(command, posix=True, punctuation_chars=";&|<>`$")
+                grammar.whitespace_split, grammar.commenters = True, ""
+                if any(token and all(c in ";&|<>`$" for c in token) for token in grammar):
+                    raise WorkspaceError("shell syntax is unavailable with command lists; use literal arguments")
+                words = shlex.split(command)
+        except ValueError as exc:
+            raise WorkspaceError(f"invalid command: {exc}") from exc
+        if not words:
+            raise WorkspaceError("command must not be empty")
+
+        def name(value: str) -> str:
+            value = Path(value).name
+            return value.lower().removesuffix(".exe") if os.name == "nt" else value
+
+        executable = name(words[0])
+        allow = {name(s.strip()) for s in self.shell_allow_commands.split(",") if s.strip()}
+        deny = {name(s.strip()) for s in self.shell_deny_commands.split(",") if s.strip()}
+        if executable in deny:
+            raise WorkspaceError(f"command denied: {executable}")
+        if allow and executable not in allow:
+            raise WorkspaceError(f"command not allowed: {executable}")
+        if os.name == "nt":
+            resolved = shutil.which(words[0]) or words[0]
+            if Path(resolved).suffix.lower() in (".bat", ".cmd"):
+                raise WorkspaceError("batch scripts are unavailable with command lists")
+        return words
 
     def resolve(self, raw: str, *, read: bool = False) -> Path:
         """Resolve a model supplied path inside the workspace root.
@@ -5563,7 +5768,7 @@ class Workspace:
             path = self.root / path
         try:
             # resolve() also follows symlinks, so links cannot escape the root
-            resolved = path.resolve()
+            resolved = canonical_path(path)
         except OSError as exc:  # pragma: no cover - platform specific
             raise WorkspaceError(str(exc)) from exc
         if self.outside_read if read else self.outside_write:
@@ -5661,6 +5866,31 @@ class Workspace:
     # -- async primitives ---------------------------------------------------
 
     async def run_shell(self, command: str, progress: Progress | None = None) -> str:
+        """Enforce admission and keep backend resources alive until the tree exits."""
+        try:
+            if "\x00" in command:
+                raise WorkspaceError("command must not contain a NUL character")
+            if not self.shell_allowed:
+                raise WorkspaceError("no sandbox can enforce the requested workspace boundary")
+            argv = self.command_argv(command)
+            env = self.shell_environ()
+            if os.name == "nt" and argv is not None:
+                executable = shutil.which(argv[0])
+                if executable is None:
+                    raise WorkspaceError(f"command not found: {argv[0]}")
+                argv = [str(canonical_path(executable)), *argv[1:]]
+            if self.sandbox is not None and self.confined:
+                with self.sandbox.launch(command, self, env) as (argv, env):
+                    return await self._run_shell(command, env, argv, progress)
+            return await self._run_shell(command, env, argv, progress)
+        except (WorkspaceError, OSError) as exc:
+            print(f"[shell] command rejected or failed: {exc}", file=sys.stderr)
+            return f"Error: {exc}"
+
+    async def _run_shell(
+        self, command: str, env: dict[str, str], argv: list[str] | None,
+        progress: Progress | None,
+    ) -> str:
         """Run a shell command in the workspace without blocking the loop.
 
         Output is read as it is produced and handed to `progress`, which also
@@ -5670,25 +5900,18 @@ class Workspace:
         child holding the pipes would otherwise outlive the shell and keep the
         call waiting for it.
         """
-        env = os.environ.copy()
-        env["PYTHONIOENCODING"] = "utf-8"
         options: dict[str, Any] = dict(
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self.root,
             # its own process group, so a kill reaches its children (POSIX)
-            start_new_session=True,
+            start_new_session=os.name != "nt",
         )
-        try:
-            if self.sandbox is not None and self.confined:
-                argv = self.sandbox.argv(command, self)
-                env = self.sandbox.environ(env, self)
-                process = await asyncio.create_subprocess_exec(*argv, env=env, **options)
-            else:
-                process = await asyncio.create_subprocess_shell(command, env=env, **options)
-        except OSError as exc:
-            return f"(command failed: {exc})"
+        if argv is not None:
+            process = await asyncio.create_subprocess_exec(*argv, env=env, **options)
+        else:
+            process = await asyncio.create_subprocess_shell(command, env=env, **options)
         stdout: list[str] = []
         stderr: list[str] = []
 
@@ -5768,7 +5991,8 @@ class Workspace:
         try:
             if os.name == "nt":
                 killer = await asyncio.create_subprocess_exec(
-                    "taskkill", "/F", "/T", "/PID", str(process.pid),
+                    str(Path(os.environ["SystemRoot"]) / "System32" / "taskkill.exe"),
+                    "/F", "/T", "/PID", str(process.pid),
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
                 )
@@ -7002,11 +7226,18 @@ class ToolRegistry:
         tools = [list_directory, read_text_file, write_text_file, image_tool, apply_patch]
 
         if self._shell and not ws.shell_allowed:
-            self.withheld("no sandbox is available to hold it to the workspace")
+            self.withheld("no sandbox supports its requested workspace policy")
         if self._shell and ws.shell_allowed:
             confinement = (
                 ws.sandbox.describe(ws) if ws.sandbox is not None and ws.confined else ""
             )
+            confinement += " The environment contains runtime settings only, not host credentials."
+            if ws.shell_allow_commands or ws.shell_deny_commands:
+                confinement += (
+                    " Literal executable calls only (no shell syntax)."
+                    f" Allowed commands: {ws.shell_allow_commands or 'any except denied'}."
+                    f" Denied commands: {ws.shell_deny_commands or 'none'}."
+                )
 
             @guard
             async def run_shell_command(ctx: Any, command: str) -> str:
@@ -8244,6 +8475,9 @@ class Engine:
             outside_read=outside_read,
             outside_write=outside_write,
             sandbox=None if outside_read and outside_write else self.build_sandbox(config),
+            shell_network=config.shell_network,
+            shell_allow_commands=config.shell_allow_commands,
+            shell_deny_commands=config.shell_deny_commands,
         )
 
     def build_sandbox(self, config: AgentConfig) -> Sandbox | None:

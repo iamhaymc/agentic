@@ -52,7 +52,7 @@ A `.env` file is loaded into the environment before the config file is read
 - the file wins over variables already set in the shell, so editing it always takes effect.
 - Point at another one with `Agent(env_file="path")`, skip it with `Agent(env_file=False)`.
 
-> Reach: `outside_read` / `outside_write` (repl both, web neither); the shell runs sandboxed unless both are on
+> Reach: `outside_read` / `outside_write` (repl both, web neither); confined shells deny network access by default, and every shell receives a scrubbed environment. [DESIGN](DESIGN.md#sandbox) — Boundaries And Command Controls.
 
 ```yaml
 inference: # a group flattens onto inference_*
@@ -158,7 +158,7 @@ Open `http://127.0.0.1:8765/` and give it a coordinated task:
 - The integrator gets `peer_submit`, `peer_prompt`, `peer_status`, `peer_cancel`, `peer_assign` and `peer_integrate`; inbound workers do not get peer tools.
 - The worker validates changed paths before publishing; the integrator independently verifies the exact commit and merges once. Use existing git tools to publish the reviewed combined branch.
 - For another machine: expose only its A2A port, use its LAN URL, TLS and the same bearer; keep the web UI on localhost. [DESIGN](DESIGN.md#26-a2a-peer-coordination) — LAN Setup, Trust Boundaries And Recovery; [OPTIONS](OPTIONS.md#a2a-peers) — Peer Settings.
-- On Windows, the existing confined shell remains unavailable without a sandbox backend; remote file/git work still works, but ask a supported sandbox host or the local user to run shell-based tests.
+- Windows uses AppContainer for fully confined shells; partial outside access remains withheld. [DESIGN](DESIGN.md#sandbox) — Platform Limits And Executable Quoting.
 
 ## ▶️ Run (Data)
 
@@ -300,6 +300,14 @@ python -m test.agentic_eval --model qwen3:8b@http://localhost:11434/v1 --runs 3 
 ```
 
 E2E Test(s):
+
+Native sandbox boundaries (local OS processes and loopback fixtures; no inference):
+
+```bash
+uv run python -S -m unittest test.agentic_sandbox_e2e -v
+```
+
+Browser checks:
 
 ```bash
 uv sync --extra e2e && playwright install chromium

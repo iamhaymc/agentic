@@ -70,16 +70,8 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
       sessions, bound total workspace size, and apply backpressure on the hub
       instead of accepting work that cannot be served.
 
-- [ ] **Stronger tool sandboxing.** The shell is now held to `outside_read` /
-      `outside_write` by Landlock or bubblewrap (Linux) and Seatbelt (macOS),
-      and withheld where none exists. Still open: a Windows backend
-      (AppContainer, or a low integrity token over a labelled workspace) so the
-      shell is not withheld there, network isolation (Landlock ABI 4 net rules,
-      `--unshare-net`, a Seatbelt `network*` deny), a scrubbed environment and
-      an allow/deny list of commands.
-
-- [ ] **Seatbelt on a real Mac.** The macOS profile is asserted as text only;
-      run the sandbox tests on macOS (CI runner) and tune the read allow-list
+- [ ] **Seatbelt on a real Mac.** Native filesystem/network tests and a macOS CI job now exist;
+      confirm their results on a real runner and tune the read allow-list
       (`/private/var/folders`, Homebrew prefixes) against real commands.
 
 - [ ] **Forge portability and a richer git workflow.** Pull requests are GitHub
@@ -130,4 +122,4 @@ and the implementation is documented in [DESIGN.md](DESIGN.md).
   - [ ] Eval on the student's own history (rollout), not the teacher's verbose turns
   - [ ] Rows past `--max-len` 16k tokens are cut; a chunked loss would fit 32k on one GPU
 
-- [ ] **Windows BDD portability (open).** Repair seven baseline cases in `test/agentic_bdd.py`: config candidate paths, SQLite file cleanup, symlink privilege assumptions, Seatbelt path escaping, attachment separators and POSIX-only `pwd`/`sleep`; all seven also failed against unmodified HEAD during A2A validation.
+- [ ] **Windows BDD portability (open).** Repair remaining baseline cases in `test/agentic_bdd.py`: config candidate paths, SQLite file cleanup, symlink privilege assumptions and attachment separators; these also failed against unmodified HEAD during A2A validation.

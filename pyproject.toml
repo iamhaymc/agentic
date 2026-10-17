@@ -35,5 +35,5 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-only-include = ["app/agentic.py", "app/agentic_a2a.py", "app/agentic_ui.html", "app/agentic_ui.css", "app/agentic_ui.js"]
+only-include = ["app/agentic.py", "app/agentic_a2a.py", "app/agentic_sandbox.py", "app/agentic_ui.html", "app/agentic_ui.css", "app/agentic_ui.js"]
 sources = ["app"]

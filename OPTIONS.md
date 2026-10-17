@@ -126,10 +126,39 @@ Let the write tools (`write_text_file`, `apply_patch`) and the shell write outsi
 ### `shell_sandbox`
 OS sandbox that holds the shell to `outside_read` / `outside_write`.
 - Environment variable: `AGENTIC_SHELL_SANDBOX`
-- Expected format `auto`, `landlock`, `bwrap`, `seatbelt` or `none`, default `auto`
-- `auto`: Landlock (Linux 5.13+), else bubblewrap (Linux), Seatbelt (macOS); none on Windows
+- Expected format `auto`, `landlock`, `bwrap`, `seatbelt`, `appcontainer` or `none`, default `auto`
+- `auto`: Landlock (Linux 5.13+), else bubblewrap (Linux), Seatbelt (macOS), AppContainer (Windows 8+)
 - `none` (or no backend available): a confined shell is withheld, never run unconfined
-- Network access is not restricted
+- AppContainer supports both outside flags off; a partially confined Windows shell is withheld
+- Bubblewrap withholds outside-write-only shells because a writable root mount would also grant outside reads
+- Every shell receives a runtime-only environment; host credentials, proxy settings, SSH agents and loader hooks are not inherited
+- Windows shell commands should quote absolute executable paths; command-list mode uses direct execution instead of `cmd.exe` discovery
+- Backend limits and temporary ACL/profile lifecycle: [DESIGN](DESIGN.md#sandbox)
+
+### `shell_network`
+Allow network access from a confined shell.
+- Environment variable: `AGENTIC_SHELL_NETWORK`
+- Expected format `true` or `false`, default `false`
+- Linux: Landlock TCP rules plus a seccomp socket filter, or bubblewrap network namespace; macOS: Seatbelt network deny; Windows: AppContainer without network capabilities
+- `true` relaxes network policy only; filesystem confinement and environment scrubbing remain
+- Windows retains its OS loopback restrictions even with network capabilities
+- Both outside flags `true` explicitly select an unconfined shell, bypassing this network setting
+- Does not restrict trusted inference, repository, A2A or custom-tool networking
+
+### `shell_allow_commands`
+Comma-separated executable names admitted as initial commands; empty allows any command not denied.
+- Environment variable: `AGENTIC_SHELL_ALLOW_COMMANDS`
+- Expected format `git, python` or empty, default empty
+- Either command list enables literal executable calls: quoted arguments supported; shell operators, redirection, expansion and Windows batch scripts unavailable
+- Match executable basename exactly; Windows ignores case and an optional `.exe` suffix
+- Admission applies to the initial executable, not its arguments, scripts or descendants; allowing an interpreter or shell permits it to launch other programs within the OS boundary
+
+### `shell_deny_commands`
+Comma-separated executable names rejected before process creation; deny wins over allow.
+- Environment variable: `AGENTIC_SHELL_DENY_COMMANDS`
+- Expected format `curl, wget` or empty, default empty
+- Uses the same matching and literal execution rules as `shell_allow_commands`
+- Rejections return `Error: …` to the caller and emit a shell diagnostic
 
 ### `state_dir`
 Directory that durable state lives in: `agentic.db` and `workspaces/`.

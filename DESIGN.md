@@ -15,6 +15,7 @@ is what has been built and why, and [`TODO.md`](TODO.md) is what is left.
 | File                  | Contents                                         |
 | --------------------- | ------------------------------------------------ |
 | `app/agentic.py`      | The library: every subsystem and the CLI         |
+| `app/agentic_sandbox.py` | Stdlib-only Windows AppContainer setup and child launcher |
 | `test/agentic_bdd.py` | Unit tests                                       |
 | `test/agentic_e2e.py` | Browser capture of the page, scripted end to end |
 | `test/agentic_eval.py`| Evals of long tasks: success, peak context, time |
@@ -888,19 +889,38 @@ are abandoned with a diagnostic on stderr.
 
 ### Sandbox
 
-**The shell is held to the outside flags: unconfined only when both are on, else sandboxed, else withheld.**
+**Both outside flags on → unconfined shell; otherwise → enforcing sandbox or no shell. Confined networking defaults off; child environments are always scrubbed.**
 
-- `Workspace.confined` — some outside path is off limits; `shell_allowed` — not confined, or a `sandbox` is set
-- `run_shell` on a confined workspace with a sandbox execs `sandbox.argv(command, ws)` with `sandbox.environ(env, ws)`; the primitive itself never refuses, `ToolRegistry` decides
+- `Workspace.confined` — some outside path is off limits; `shell_allowed` also requires `sandbox.supports(ws)` when confined
+- `run_shell` enforces this boundary itself, including direct API calls; unsupported policy and command admission failures return `Error: …` with a stderr diagnostic
+- `Sandbox.launch(command, ws, env)` — context owning launch argv, scratch environment and backend resources until the command tree exits; the default delegates to `argv()` and `environ()`
 - `Sandbox.paths(ws)` — `(read, write, full)`: `system_paths()` or `/`, `/` only with `outside_write`, the workspace
-- `Sandbox.environ()` — `TMPDIR` into `.sandbox/tmp`; `HOME` into `.sandbox/home` when reads are confined, else `XDG_CACHE_HOME` into `.sandbox/cache` when writes are
-- `LandlockSandbox` — `python -I -S -c LANDLOCK_LAUNCHER <policy>`: a ruleset for the ABI the kernel has (refer, truncate, ioctl when present), then `/bin/sh -c`; exits 126 on any failure
-- `BubblewrapSandbox` — `bwrap` read-only binds of the read paths, binds of the write paths, `--dev /dev`; probed once
-- `SeatbeltSandbox` — `sandbox-exec -p` with `(allow default)` and `deny file-write*` / `deny file-read-data` outside the allowed paths
-- `pick_sandbox(name)` — `auto` tries `SANDBOXES` in order; `none`, an unknown name or no backend gives `None`
-- `Engine.build_sandbox(config)` — the hook (`shell_sandbox`); a withheld shell is reported once on stderr
+- `system_paths()` — system/runtime directories and absolute executable search directories; excludes ambient home/ancestor search entries and Linux process/runtime IPC trees (`/proc`, `/run`, `/dev`) that could expose host credentials
+- `Workspace.shell_environ()` — allowlist of executable search path, home, locale, terminal and Windows bootstrap settings; adds UTF-8 Python output; excludes all other ambient variables, including credentials, proxy settings, SSH-agent sockets, Git overrides and loader hooks
+- `Sandbox.environ()` — temp/cache under `.sandbox/tmp` and `.sandbox/cache`; confined home/app-data under `.sandbox/home`; rejects existing scratch symlinks escaping the workspace before creating directories
+- `LandlockSandbox` — isolated stdlib launcher applies filesystem rules for the kernel ABI, TCP bind/connect restrictions on ABI 4+, and a seccomp filter denying socket/socketpair and io_uring creation on Linux x64/arm64 when `shell_network: false`; the filter also covers UDP, Unix sockets, alternate syscall ABIs and pre-ABI-4 kernels; setup failure exits 126 without executing the command
+- `BubblewrapSandbox` — read-only/read-write path binds, private `/dev`, `--unshare-net` unless networking is enabled; namespace availability probed once
+- Bubblewrap withholds outside-write-only policy rather than widening reads through a writable root mount; its executable is resolved from system directories, not a workspace-controlled `PATH` entry
+- `SeatbeltSandbox` — generated filesystem denies plus `(deny network*)` unless networking is enabled
+- `AppContainerSandbox` — Windows 8+ AppContainer with a fresh per-command SID, workspace ACL grant, read/execute access to the running Python runtime, non-propagating ancestor directory access, and no network capabilities by default; a suspended child joins a kill-on-close job before running
+- Windows host owns ACL/profile cleanup outside the confined process, including timeout/cancellation; setup/cleanup errors are explicit, never a reason to run unrestricted
+- Windows ACL read/modify/write operations use named per-path mutexes so concurrent commands preserve each other's independent SID grants
+- Workspace checks and ACL mutex keys normalize equivalent Windows DOS/extended/UNC spellings, including paths resolved while another command creates scratch directories
+- Privileged Python launchers use the base interpreter outside the workspace; Windows helper source is frozen before tools run and passed with `-I -S -c`, never reloaded from a model-writable checkout
+- Windows supports both outside flags off; either partial outside grant withholds the shell rather than silently approximating reach; both flags on retain the existing unconfined shell
+- Windows rejects workspace symlinks, junctions and hardlinks before granting inherited ACLs; user-local dependencies must be inside the workspace or already readable under AppContainer ACLs
+- Windows `cmd.exe` discovery may require inaccessible volume metadata: quote absolute executable paths, even without spaces; configured command lists bypass discovery with direct execution
+- `pick_sandbox(name)` — tries available built-in backends for `auto`; `none`, unknown name or no backend gives `None`; `Engine.build_sandbox(config)` remains the replacement hook
 
-> ❗ Network access is not restricted by any backend; Seatbelt is not exercised by the tests on Linux.
+**Command lists admit the initial executable, not arbitrary shell source or descendant behavior.**
+
+- `shell_allow_commands` / `shell_deny_commands` — comma-separated basenames, empty by default; deny wins; exact case-sensitive names on POSIX, case-insensitive names with optional `.exe` on Windows
+- Either nonempty list selects literal argv execution for all built-in backends and unconfined shells; quoted arguments remain literal, shell operators are rejected, and Windows batch files are refused
+- Lists are admission controls, not code authorization: an allowed interpreter, build tool or script can launch other executables; filesystem/network policies still apply to descendants
+- `shell_network: true` relaxes only confined networking; Windows loopback restrictions may still apply; both outside flags on bypass OS confinement and its network controls
+- Environment scrubbing also applies to unconfined shells; it does not conceal secrets already stored in readable files or limit trusted inference, repository, A2A or injected tools
+
+> ❗ These are shell boundaries, not a sandbox for the entire host application or hostile same-user host processes. Native Windows checks run locally; Linux/macOS checks are selected separately and included in the native sandbox CI matrix.
 
 `ToolRegistry.build(workspace, vision=…, checkout=…, progress=…, ask=…)`
 assembles the list. `progress` is a `ToolReporter`, `(call_id, text) -> None`:
@@ -1549,7 +1569,7 @@ Injectable collaborators: `events`, `renderer`, `prompts`, `tools`, `models`,
 
 Confining the shell differently: subclass `Sandbox` (`available`, `argv`, and
 `environ` if scratch paths differ), add it to `SANDBOXES`, or return it from
-`build_sandbox()` — a container or a VM backend fits the same two methods.
+`build_sandbox()` — a container or VM backend can implement `available()` / `argv()`; override `supports()` for policy limits and `launch()` when resources need teardown.
 
 Adding a model role: add `<role>_model` / `<role>_api_url` / `<role>_api_key`
 fields (or map the role in `ROLE_MODEL_FIELDS`, as vision maps to
@@ -1607,7 +1627,7 @@ number or in words and handed back on Ctrl-C) driven by an injected reader, the
 websocket protocol codec (session resume, answers scoped to their session), the
 modes and the state directory, the shell sandboxes (gating, wiring, Seatbelt
 profiles and bubblewrap argv as text, Landlock for real where the kernel has
-it), the journal (checkpoints from the stream, a crash read back by a second
+it), scrubbed child environments, literal command admission, Landlock ABI/seccomp filter contracts, the journal (checkpoints from the stream, a crash read back by a second
 process over the same database, `/resume`, failed and cancelled runs, the
 replay through the SDK's own Chat Completions converter, journals dying with
 their sessions), learned rules (parsing, persistence, serialized learning,
@@ -1615,6 +1635,8 @@ feedback from the commands and the page, the warning), the web reattach (a run
 outliving its socket, live blocks, open questions, one run per session, resume)
 and the repl resume, and the scripted agent `test/agentic_e2e.py`
 drives. No test needs a network or a model.
+
+`test/agentic_sandbox_e2e.py` explicitly exercises native filesystem boundaries, TCP/UDP loopback isolation, Windows token identity, hardlink rejection, job termination and ACL/profile cleanup without inference or external networking. Run `uv run python -S -m unittest test.agentic_sandbox_e2e -v`; the native sandbox CI matrix selects it on Linux, macOS and Windows without third-party dependencies.
 
 `test/agentic_e2e.py` is the one that needs a browser: it is not part of the unit suite,
 it is run by hand (or in CI) to prove the page still works end to end and to
@@ -2101,7 +2123,7 @@ Limitations and recovery:
 - Query failed/canceled/rejected tasks to release their path reservation; completed work reserves paths until integrated.
 - If a result branch moves or the integrator changes assigned files, resolve deliberately; never reset, force-push or silently accept a different SHA.
 - Remote tokens authorize the entire trusted team, including task access and code execution under workspace policy; no per-person authorization or hostile-agent isolation is claimed.
-- Existing Windows sandbox limitation remains: confined shell tools are withheld there; file/Git work is available, but shell-based tests need a supported sandbox host or manual local execution.
+- Windows fully confined shell tools use AppContainer; partial outside grants remain unsupported. Shells do not inherit the peer bearer or Git credentials, and trusted repository-tool networking remains separate from shell network policy.
 
 ### Run (Lifecycle)
 

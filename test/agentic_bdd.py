@@ -4551,27 +4551,30 @@ class WorkspaceTest(unittest.TestCase):
             self.ws.read_data_url("empty.png")
 
     def test_shell_runs_in_the_workspace(self):
-        output = run(self.ws.run_shell("pwd"))
+        self.ws.outside_read = self.ws.outside_write = True
+        output = run(self.ws.run_shell(python_command("import os; print(os.getcwd())")))
         self.assertIn(str(self.ws.root), output)
 
     def test_shell_reports_failures(self):
+        self.ws.outside_read = self.ws.outside_write = True
         self.assertIn("[exit code 3]", run(self.ws.run_shell("exit 3")))
 
     def test_shell_times_out(self):
-        ws = A.Workspace(self.tmp.name, shell_timeout=1)
-        self.assertIn("timed out", run(ws.run_shell("sleep 5")))
+        ws = A.Workspace(self.tmp.name, shell_timeout=1, outside_read=True, outside_write=True)
+        self.assertIn("timed out", run(ws.run_shell(python_command("import time; time.sleep(5)"))))
 
     def test_shell_timeout_kills_the_whole_process_tree(self):
         # The interpreter is a child of the shell and holds its pipes: killing
         # only the shell used to leave the call waiting for the child to end.
         pid_file = Path(self.tmp.name) / "pid"
-        ws = A.Workspace(self.tmp.name, shell_timeout=2)
+        ws = A.Workspace(self.tmp.name, shell_timeout=2, outside_read=True, outside_write=True)
         start = time.monotonic()
         self.assertIn("timed out", run(ws.run_shell(sleeper_command(pid_file))))
         self.assertLess(time.monotonic() - start, 6)
         self.assertFalse(process_alive(int(pid_file.read_text())))
 
     def test_shell_cancellation_kills_the_command(self):
+        self.ws.outside_read = self.ws.outside_write = True
         pid_file = Path(self.tmp.name) / "pid"
 
         async def cancel_once_started():
@@ -4588,7 +4591,7 @@ class WorkspaceTest(unittest.TestCase):
         self.assertFalse(process_alive(int(pid_file.read_text())))
 
     def test_shell_streams_output_and_heartbeats_while_it_runs(self):
-        ws = A.Workspace(self.tmp.name, shell_heartbeat=0.1)
+        ws = A.Workspace(self.tmp.name, shell_heartbeat=0.1, outside_read=True, outside_write=True)
         seen: list[str] = []
 
         async def progress(text):
@@ -4604,6 +4607,7 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn("bye", output)
 
     def test_a_failing_progress_callback_never_breaks_the_command(self):
+        self.ws.outside_read = self.ws.outside_write = True
         async def progress(text):
             raise RuntimeError("boom")
 
@@ -4614,8 +4618,8 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn("boom", errors.getvalue())
 
     def test_shell_output_is_clipped(self):
-        ws = A.Workspace(self.tmp.name, shell_output_limit=200)
-        output = run(ws.run_shell("python -c \"print('a' * 1000 + 'END')\""))
+        ws = A.Workspace(self.tmp.name, shell_output_limit=200, outside_read=True, outside_write=True)
+        output = run(ws.run_shell(python_command("print('a' * 1000 + 'END')")))
         self.assertLess(len(output), 300)
         self.assertIn("chars omitted", output)
         self.assertTrue(output.startswith("a"))
@@ -6783,6 +6787,78 @@ class ModeTest(unittest.TestCase):
         self.assertIsNone(A.mode_of(A.parse_args(["--input", "x"])))
 
 
+class LandlockLauncherTest(unittest.TestCase):
+    def launch(self, *, network=False, machine="x86_64", abi=4, seccomp=0):
+        libc = unittest.mock.Mock()
+        libc.syscall.side_effect = [abi, 10, 0]
+        libc.prctl.side_effect = [0] if network else [0, seccomp]
+        policy = dict(read=[], write=[], full=[], network=network, argv=["echo", "safe"])
+        scope = {}
+        with (
+            unittest.mock.patch("ctypes.CDLL", return_value=libc),
+            unittest.mock.patch("platform.machine", return_value=machine),
+            unittest.mock.patch.object(sys, "argv", ["launcher", json.dumps(policy)]),
+            unittest.mock.patch.object(os, "close"),
+            unittest.mock.patch.object(os, "execvpe") as execute,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            exec(A.LANDLOCK_LAUNCHER, scope)
+        execute.assert_called_once_with("echo", ["echo", "safe"], os.environ)
+        return scope, libc
+
+    @staticmethod
+    def verdict(filters, arch, number):
+        pc, accumulator = 0, 0
+        while pc < len(filters):
+            item = filters[pc]
+            if item.code == 0x20:
+                accumulator = arch if item.k == 4 else number
+            elif item.code == 0x15:
+                pc += item.jt if accumulator == item.k else item.jf
+            elif item.code == 0x45:
+                pc += item.jt if accumulator & item.k else item.jf
+            elif item.code == 0x06:
+                return item.k
+            else:
+                raise AssertionError(f"unsupported filter instruction: {item.code}")
+            pc += 1
+        raise AssertionError("filter did not return a verdict")
+
+    def test_network_filter_denies_socket_compat_and_io_uring_syscalls(self):
+        for machine, arch, blocked in (
+            ("x86_64", 0xC000003E, (41, 53, 425)),
+            ("aarch64", 0xC00000B7, (198, 199, 425)),
+        ):
+            with self.subTest(machine=machine):
+                scope, libc = self.launch(machine=machine)
+                filters = scope["filters"]
+                for number in (*blocked, 0x40000000 | blocked[0]):
+                    self.assertEqual(self.verdict(filters, arch, number), 0x50001)
+                self.assertEqual(self.verdict(filters, 0x40000003, 102), 0x50001)
+                self.assertEqual(self.verdict(filters, arch, 1), 0x7FFF0000)
+                self.assertEqual(scope["attr"].handled_access_net, 3)
+                self.assertEqual(libc.prctl.call_count, 2)
+
+    def test_old_landlock_abis_still_enforce_network_denial_with_seccomp(self):
+        scope, _ = self.launch(abi=1)
+        self.assertEqual(scope["size"], 8)
+        self.assertEqual(scope["attr"].handled_access_net, 0)
+        self.assertIn("filters", scope)
+
+    def test_network_opt_in_removes_network_restrictions_only(self):
+        scope, libc = self.launch(network=True)
+        self.assertEqual(scope["attr"].handled_access_net, 0)
+        self.assertNotIn("filters", scope)
+        self.assertEqual(libc.prctl.call_count, 1)
+        self.assertEqual(libc.syscall.call_count, 3)
+
+    def test_unsupported_network_filter_or_failed_install_never_executes(self):
+        for args in (dict(machine="unsupported"), dict(seccomp=-1)):
+            with self.subTest(args=args), self.assertRaises(SystemExit) as failure:
+                self.launch(**args)
+            self.assertEqual(failure.exception.code, 126)
+
+
 class SandboxTest(unittest.TestCase):
     class EchoSandbox(A.Sandbox):
         """Marks the command instead of confining it, which proves the wiring."""
@@ -6842,6 +6918,208 @@ class SandboxTest(unittest.TestCase):
         self.assertEqual(env["HOME"], "/home/me")
         self.assertEqual(env["XDG_CACHE_HOME"], str(self.root / ".sandbox" / "cache"))
 
+    def test_the_primitive_refuses_to_run_without_a_required_sandbox(self):
+        ws = A.Workspace(self.root)
+        with unittest.mock.patch.object(A.asyncio, "create_subprocess_shell") as spawn:
+            self.assertIn("Error:", run(ws.run_shell("echo unsafe")))
+        spawn.assert_not_called()
+
+    def test_shell_environment_keeps_runtime_settings_not_credentials_or_hooks(self):
+        source = {
+            "PATH": os.defpath, "HOME": "/home/me", "LANG": "C",
+            "AGENTIC_INFERENCE_KEY": "secret", "AWS_SECRET_ACCESS_KEY": "secret",
+            "SSH_AUTH_SOCK": "/agent.sock", "HTTPS_PROXY": "http://secret",
+            "PYTHONPATH": "/injected", "LD_PRELOAD": "/injected.so",
+            "GIT_CONFIG_COUNT": "1", "UNRECOGNIZED_SECRET": "secret",
+        }
+        with unittest.mock.patch.dict(os.environ, source, clear=True):
+            env = A.Workspace(self.root).shell_environ()
+        self.assertEqual(env, {
+            "PATH": os.defpath, "HOME": "/home/me", "LANG": "C",
+            "PYTHONIOENCODING": "utf-8",
+        })
+        self.assertEqual(source["AGENTIC_INFERENCE_KEY"], "secret")
+
+    def test_confined_scratch_paths_cannot_be_symlinked_outside(self):
+        target = self.root / ".sandbox"
+        try:
+            target.symlink_to(self.base, target_is_directory=True)
+        except OSError:
+            self.skipTest("directory symlinks unavailable")
+        with self.assertRaises(A.WorkspaceError):
+            self.EchoSandbox().environ({}, A.Workspace(self.root))
+        self.assertFalse((self.base / "tmp").exists())
+
+    def test_network_policy_is_wired_to_every_backend(self):
+        ws = A.Workspace(self.root)
+        self.assertIn("--unshare-net", A.BubblewrapSandbox().argv("echo hi", ws))
+        self.assertIn("(deny network*)", A.SeatbeltSandbox().profile(ws))
+        policy = json.loads(A.LandlockSandbox().argv("echo hi", ws)[-1])
+        self.assertFalse(policy["network"])
+        ws.shell_network = True
+        self.assertNotIn("--unshare-net", A.BubblewrapSandbox().argv("echo hi", ws))
+        self.assertNotIn("(deny network*)", A.SeatbeltSandbox().profile(ws))
+        self.assertTrue(json.loads(A.LandlockSandbox().argv("echo hi", ws)[-1])["network"])
+
+    def test_command_lists_use_literal_exec_not_shell_evaluation(self):
+        ws = A.Workspace(
+            self.root, outside_read=True, outside_write=True,
+            shell_allow_commands="echo", shell_deny_commands="python",
+        )
+        self.assertEqual(ws.command_argv('echo "two words"'), ["echo", "two words"])
+        with self.assertRaisesRegex(A.WorkspaceError, "denied"):
+            ws.command_argv("python -c pass")
+        with self.assertRaisesRegex(A.WorkspaceError, "not allowed"):
+            ws.command_argv("unknown")
+        for command in ("echo ok; python bad", "echo $(python bad)", "echo ok | python bad"):
+            with self.subTest(command=command), self.assertRaises(A.WorkspaceError):
+                ws.command_argv(command)
+        ws.shell_allow_commands = "echo, python"
+        with self.assertRaisesRegex(A.WorkspaceError, "denied"):
+            ws.command_argv("python -c pass")
+
+    def test_command_arguments_may_contain_quoted_code_without_shell_evaluation(self):
+        ws = A.Workspace(self.root, shell_allow_commands="python")
+        command = python_command("print('literal'); print('arguments')")
+        self.assertEqual(ws.command_argv(command)[-1], "print('literal'); print('arguments')")
+
+    @unittest.skipUnless(os.name == "nt", "Windows command line quoting")
+    def test_windows_literal_arguments_preserve_paths_and_trailing_backslashes(self):
+        ws = A.Workspace(self.root, shell_allow_commands="git")
+        words = ["git.exe", "-C", "C:\\path with spaces\\", "status"]
+        self.assertEqual(ws.command_argv(subprocess.list2cmdline(words)), words)
+
+    @unittest.skipUnless(os.name == "nt", "Windows namespace spelling")
+    def test_windows_namespace_aliases_share_security_comparisons(self):
+        for raw, expected in (
+            ("\\\\?\\C:\\workspace\\child", "C:\\workspace\\child"),
+            ("\\\\?\\UNC\\server\\share\\child", "\\\\server\\share\\child"),
+        ):
+            with self.subTest(raw=raw), unittest.mock.patch.object(Path, "resolve", return_value=Path(raw)):
+                self.assertEqual(A.canonical_path(raw), Path(expected))
+
+    @unittest.skipUnless(os.name == "nt", "Windows concurrent path resolution")
+    def test_concurrent_directory_creation_cannot_cause_a_false_scratch_escape(self):
+        ws = A.Workspace(self.root)
+        original = Path.resolve
+
+        def extended(path, *args, **kwargs):
+            value = original(path, *args, **kwargs)
+            return Path("\\\\?\\" + str(value)) if path.name in ("tmp", "home", "cache") else value
+
+        with unittest.mock.patch.object(Path, "resolve", extended):
+            env = self.EchoSandbox().environ({}, ws)
+        self.assertEqual(env["TEMP"], str(self.root / ".sandbox" / "tmp"))
+
+    def test_system_path_entries_never_grant_the_home_or_its_parents(self):
+        home = Path.home().resolve()
+        source = os.pathsep.join((str(home) + os.sep, str(home.parent)))
+        with unittest.mock.patch.dict(os.environ, {"PATH": source}):
+            paths = A.system_paths()
+        self.assertNotIn(str(home), paths)
+        self.assertNotIn(str(home.parent), paths)
+
+    def test_privileged_launchers_cannot_use_a_workspace_owned_runtime(self):
+        with unittest.mock.patch.object(sys, "_base_executable", str(self.root / "python"), create=True):
+            with self.assertRaisesRegex(A.WorkspaceError, "outside the workspace"):
+                A.sandbox_python(A.Workspace(self.root))
+
+    def test_backend_resources_are_released_if_process_creation_fails(self):
+        released = []
+
+        class ResourceSandbox(A.Sandbox):
+            @contextlib.contextmanager
+            def launch(self, command, ws, env):
+                try:
+                    yield ["missing"], env
+                finally:
+                    released.append(True)
+
+        ws = A.Workspace(self.root, sandbox=ResourceSandbox())
+        with (
+            unittest.mock.patch.object(A.asyncio, "create_subprocess_exec", side_effect=OSError("unavailable")),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertIn("Error: unavailable", run(ws.run_shell("echo safe")))
+        self.assertEqual(released, [True])
+
+    @unittest.skipUnless(os.name == "nt", "Windows launcher")
+    def test_windows_launcher_uses_frozen_source_not_a_model_writable_file(self):
+        ws = A.Workspace(self.root)
+        native = A.windows_sandbox_module()
+        with (
+            unittest.mock.patch.object(native, "container", return_value=contextlib.nullcontext("test-sid")),
+            unittest.mock.patch.object(Path, "read_text", side_effect=AssertionError("late source read")),
+            A.AppContainerSandbox().launch("echo safe", ws, {}) as (argv, env),
+        ):
+            self.assertEqual(argv[3], "-c")
+            self.assertEqual(argv[4], A.WINDOWS_LAUNCHER)
+            self.assertNotEqual(argv[0], str(self.root / "python"))
+
+    def test_shell_policy_round_trips_config_file_and_environment(self):
+        config = A.AgentConfig().with_data({
+            "shell": {"network": True, "allow_commands": "git, python", "deny_commands": "curl"},
+        })
+        self.assertTrue(config.shell_network)
+        self.assertEqual(config.shell_allow_commands, "git, python")
+        with unittest.mock.patch.dict(os.environ, {
+            "AGENTIC_SHELL_NETWORK": "false", "AGENTIC_SHELL_ALLOW_COMMANDS": "python",
+            "AGENTIC_SHELL_DENY_COMMANDS": "git",
+        }):
+            config = config.with_env()
+        self.assertFalse(config.shell_network)
+        self.assertEqual(config.shell_allow_commands, "python")
+        self.assertEqual(config.shell_deny_commands, "git")
+
+    def test_rejected_commands_are_reported_without_starting_a_process(self):
+        ws = A.Workspace(
+            self.root, outside_read=True, outside_write=True, shell_deny_commands="python",
+        )
+        with unittest.mock.patch.object(A.asyncio, "create_subprocess_shell") as spawn:
+            with contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                self.assertIn("Error:", run(ws.run_shell("python -c pass")))
+        spawn.assert_not_called()
+        self.assertIn("denied", diagnostic.getvalue())
+
+    def test_nul_commands_never_reach_a_shell_even_without_command_lists(self):
+        ws = A.Workspace(self.root, outside_read=True, outside_write=True)
+        with (
+            unittest.mock.patch.object(A.asyncio, "create_subprocess_shell") as spawn,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertIn("Error:", run(ws.run_shell("echo partial\x00ignored")))
+        spawn.assert_not_called()
+
+    def test_engine_wires_the_shell_policy_and_the_tool_describes_it(self):
+        engine = A.Engine(env=False, config_file=False)
+        self.addCleanup(engine.close)
+        config = A.AgentConfig(
+            shell_network=True, shell_allow_commands="git, python", shell_deny_commands="curl",
+        )
+        ws = engine.build_workspace(self.root, config)
+        self.assertTrue(ws.shell_network)
+        self.assertEqual(ws.shell_allow_commands, "git, python")
+        self.assertEqual(ws.shell_deny_commands, "curl")
+        ws.sandbox = self.EchoSandbox()
+        description = self.tools(ws)["run_shell_command"].description
+        self.assertIn("network", description.lower())
+        self.assertIn("git, python", description)
+        self.assertIn("curl", description)
+        self.assertIn("environment", description)
+
+    def test_windows_backend_is_registered_and_does_not_claim_partial_reach(self):
+        self.assertIs(A.SANDBOXES["appcontainer"], A.AppContainerSandbox)
+        backend = A.AppContainerSandbox()
+        self.assertTrue(backend.supports(A.Workspace(self.root)))
+        self.assertFalse(backend.supports(A.Workspace(self.root, outside_read=True)))
+        ws = A.Workspace(self.root, outside_read=True, sandbox=backend)
+        self.assertFalse(ws.shell_allowed)
+
+    def test_bubblewrap_withholds_write_only_outside_access_instead_of_allowing_reads(self):
+        ws = A.Workspace(self.root, outside_write=True, sandbox=A.BubblewrapSandbox())
+        self.assertFalse(ws.shell_allowed)
+        self.assertNotIn("run_shell_command", self.tools(ws))
+
     def test_unknown_and_none_pick_nothing(self):
         self.assertIsNone(A.pick_sandbox("none"))
         self.assertIsNone(A.pick_sandbox("bogus"))
@@ -6862,7 +7140,7 @@ class SandboxTest(unittest.TestCase):
         confined = sandbox.profile(A.Workspace(self.root))
         self.assertIn("(allow default)", confined)
         self.assertIn(
-            f'(deny file-write* (require-not (require-any (subpath "{self.root}")', confined
+            f'(deny file-write* (require-not (require-any (subpath {sandbox.quote(str(self.root))})', confined
         )
         self.assertIn("(deny file-read-data", confined)
         reads = sandbox.profile(A.Workspace(self.root, outside_read=True))

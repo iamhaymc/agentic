@@ -18,6 +18,25 @@ version, with the phase log and the fixes at the end.
 
 ---
 
+## Stronger tool sandboxing
+
+2026-10-16 — completed the stronger tool sandboxing TODO:
+
+- [x] **Minimum Scope** — specified fail-closed primitives, scrubbed environments, network policy and literal command admission; confirmed 2 failures and 6 errors before implementation (plus 5 platform skips).
+- [x] **Complete Scope** — added Windows AppContainer confinement and kill-on-close jobs; enforced default-deny confined networking, runtime-only environments and command admission across built-in backends.
+- [x] **Extended Scope** — verified native Windows boundaries, documented settings and platform limits, added Linux/macOS/Windows native CI selection, and removed the completed TODO.
+- Added Linux ABI 4 TCP rules plus seccomp for UDP/Unix sockets, compat syscalls and io_uring; added bubblewrap network namespaces and Seatbelt network denial; preserved explicit network opt-in and fully unconfined outside-flag behavior.
+- Prevented direct API bypass, scratch-link escapes, Windows inherited-ACL hardlink escapes, late launcher-source substitution and workspace-owned launcher runtimes; serialized shared ACL updates while retaining independent per-command SIDs.
+- Withheld bubblewrap outside-write-only shells instead of widening read access; resolved bubblewrap from system directories rather than workspace-controlled command discovery.
+- Corrected sandbox-adjacent Windows test assumptions: Seatbelt path quoting and shell cwd/timeout commands; left unrelated config, SQLite, attachment and symlink-privilege baseline cases open.
+- Rejected recursive ancestor ACL propagation after a setup scan stalled; stopped validation, removed its exact transient grant/profile, and replaced ancestor updates with non-propagating descriptors. Runtime/workspace inheritance remains scoped.
+- Refuted an error-code-only network assertion: AppContainer returned WSAEWOULDBLOCK (`10035`), not always WSAEACCES (`10013`); reachable local TCP and UDP fixtures verified that no connection or datagram crossed the boundary.
+- Established a Windows shell guardrail: quote absolute executable paths to bypass `cmd.exe` volume-metadata discovery; direct command-list execution does not use this discovery path.
+- Reproduced intermittent `Path.resolve()` namespace spelling during concurrent scratch creation (2 failures in 8 repetitions); normalized DOS/extended/UNC spellings for workspace checks and ACL mutex keys; deterministic regressions and all 8 repeated concurrent runs then passed.
+- Validation: 93 focused offline tests passed (98 selected, 5 platform skips); 9 native Windows tests passed (12 selected, 3 POSIX skips), including token identity, filesystem/credential isolation, reachable-fixture TCP/UDP denial, concurrent grants, exact timeout/tree death and ACL/profile cleanup. Python compilation, workflow YAML parsing, wheel build and packaged import/native-shell smoke passed.
+- Focused workspace selection excluded the already-known Windows symlink-privilege case; initial broader checks also reproduced the unrelated config candidate-name mismatch. Other baseline Windows work remains tracked separately.
+- Linux/macOS native execution was not available locally: WSL reported missing virtualization support; native CI checks are added, not claimed as executed. Linux ABI/filter instruction contracts were verified offline.
+
 ## A2A peers
 
 2026-10-16 — implemented authenticated A2A 1.0 and verified Git coordination instead of the superseded research draft:

@@ -1,0 +1,31 @@
+name: Native sandbox boundaries
+on:
+  push:
+    paths:
+      - "app/agentic.py"
+      - "app/agentic_sandbox.py"
+      - "test/agentic_sandbox_e2e.py"
+      - ".github/workflows/sandbox.yml"
+  pull_request:
+    paths:
+      - "app/agentic.py"
+      - "app/agentic_sandbox.py"
+      - "test/agentic_sandbox_e2e.py"
+      - ".github/workflows/sandbox.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sandbox:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -S -m unittest test.agentic_sandbox_e2e -v
