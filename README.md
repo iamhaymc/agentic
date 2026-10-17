@@ -7,10 +7,7 @@
 </tbody>
 </table>
 
-An embeddable harness packed with features
-and designed to maximize capability of SLMs.
-
-Supports optional features such as:
+Yet another harness packed with features:
 - Python Library
 - Context Monitor
 - Persistent Memory
